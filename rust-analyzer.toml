@@ -1,0 +1,5 @@
+[cargo]
+# allFeatures = true
+
+[check]
+allTargets = true

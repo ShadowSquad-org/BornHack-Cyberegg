@@ -1,0 +1,16 @@
+
+[build]
+# Default to host build (simulator). Override with --target for embedded.
+target = "x86_64-unknown-linux-gnu"
+
+[target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip nRF52840_xxAA --allow-erase-all"
+# rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
+
+[env]
+DEFMT_LOG = "info"
+
+[alias]
+sim = "run --bin simulator --features simulator"
+fw = "build --bin embassy --no-default-features --features embassy --target thumbv7em-none-eabihf"
+fw-flash = "run --bin embassy --no-default-features --features embassy --target thumbv7em-none-eabihf"
