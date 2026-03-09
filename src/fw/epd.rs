@@ -1,5 +1,5 @@
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin, Pull};
+use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::peripherals;
 use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
 use embassy_nrf::{Peri, bind_interrupts};
@@ -79,15 +79,11 @@ pub type EpdGfx<'a> = GraphicDisplay<
 /// # Returns
 /// A mutex wrapped SPI bus that can be shared between divices
 ///
-pub fn init_epd_bus<'a, SCK, MOSI>(
+pub fn init_epd_bus<'a>(
     spi: Peri<'a, peripherals::SPI3>,
-    sck_pin: Peri<'a, SCK>,
-    mosi_pin: Peri<'a, MOSI>,
-) -> EpdBus<'a>
-where
-    SCK: Pin,
-    MOSI: Pin,
-{
+    sck_pin: Peri<'a, AnyPin>,
+    mosi_pin: Peri<'a, AnyPin>,
+) -> EpdBus<'a> {
     let mut cfg = Config::default();
     cfg.frequency = Frequency::M1;
     let spim = Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg);
@@ -96,7 +92,7 @@ where
 
 /// Initialize the EPD display
 /// SSD1680 1.54" 152x152 EPD display
-/// 24-pin connector, SPI interface
+/// 24-pin connector, SPIM3 interface
 ///
 /// # Arguments
 /// * `bus`: The mutex wrapped SPI bus
@@ -111,22 +107,16 @@ where
 /// # Returns
 /// A graphics display object that can be used to draw graphics
 ///
-pub fn init_epd<'a, BUSY, RESET, DC, CS>(
+pub fn init_epd<'a>(
     bus: &'a EpdBus<'a>,
-    busy_pin: Peri<'a, BUSY>,
-    resetn_pin: Peri<'a, RESET>,
-    dc_pin: Peri<'a, DC>,
-    csn_pin: Peri<'a, CS>,
+    busy_pin: Peri<'a, AnyPin>,
+    resetn_pin: Peri<'a, AnyPin>,
+    dc_pin: Peri<'a, AnyPin>,
+    csn_pin: Peri<'a, AnyPin>,
     dimension: Dimensions,
     black_buffer: &'a mut [u8],
     red_buffer: &'a mut [u8],
-) -> Result<EpdGfx<'a>, Infallible>
-where
-    BUSY: Pin,
-    RESET: Pin,
-    DC: Pin,
-    CS: Pin,
-{
+) -> Result<EpdGfx<'a>, Infallible> {
     // Initialize GPIO pins
     let csn_out = Output::new(csn_pin, Level::High, OutputDrive::Standard);
     let resetn_out = Output::new(resetn_pin, Level::Low, OutputDrive::Standard);

@@ -46,15 +46,15 @@ async fn main(_spawner: Spawner) {
     static BUS_CELL: StaticCell<EpdBus> = StaticCell::new();
     let bus = BUS_CELL.init(init_epd_bus(
         board!(p, epd_spi),
-        board!(p, epd_sck),
-        board!(p, epd_mosi),
+        board!(p, epd_sck).into(),
+        board!(p, epd_mosi).into(),
     ));
     let mut display: EpdGfx<'_> = init_epd(
         bus,
-        board!(p, epd_busy),
-        board!(p, epd_reset),
-        board!(p, epd_dc),
-        board!(p, epd_csn),
+        board!(p, epd_busy).into(),
+        board!(p, epd_reset).into(),
+        board!(p, epd_dc).into(),
+        board!(p, epd_csn).into(),
         dimension,
         black_buffer,
         red_buffer,
@@ -180,14 +180,14 @@ async fn main(_spawner: Spawner) {
 
     let run_lora = run_lora_test(
         board!(p, lora_spi),
-        board!(p, lora_sck),
-        board!(p, lora_mosi),
-        board!(p, lora_miso),
-        board!(p, lora_rst),
-        board!(p, lora_nss),
-        board!(p, lora_busy),
-        board!(p, lora_dio1),
-        board!(p, lora_rf_sw),
+        board!(p, lora_sck).into(),
+        board!(p, lora_mosi).into(),
+        board!(p, lora_miso).into(),
+        board!(p, lora_rst).into(),
+        board!(p, lora_nss).into(),
+        board!(p, lora_busy).into(),
+        board!(p, lora_dio1).into(),
+        board!(p, lora_rf_sw).into(),
     );
 
     embassy_futures::join::join4(main_loop, run_nfc, run_lora, buttons).await;

@@ -6,7 +6,7 @@ use panic_probe as _;
 
 use embassy_nrf::{
     Peri, bind_interrupts,
-    gpio::{Input, Level, Output, OutputDrive, Pin, Pull},
+    gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull},
     peripherals,
     spim::{self, Frequency, InterruptHandler, Spim},
 };
@@ -53,28 +53,17 @@ pub struct SimpleLoRa<'a> {
 }
 
 impl<'a> SimpleLoRa<'a> {
-    pub fn new<SCK, MOSI, MISO, NRST, NSS, BUSY, DIO1, ANT>(
-        // &'a mut self,
+    pub fn new(
         spi: Peri<'a, peripherals::SPI2>,
-        sck_pin: Peri<'a, SCK>,
-        mosi_pin: Peri<'a, MOSI>,
-        miso_pin: Peri<'a, MISO>,
-        nrst_pin: Peri<'a, NRST>,
-        nss_pin: Peri<'a, NSS>,
-        busy_pin: Peri<'a, BUSY>,
-        dio1_pin: Peri<'a, DIO1>,
-        ant_pin: Peri<'a, ANT>,
-    ) -> SimpleLoRa<'a>
-    where
-        SCK: Pin,
-        MOSI: Pin,
-        MISO: Pin,
-        NRST: Pin,
-        NSS: Pin,
-        BUSY: Pin,
-        DIO1: Pin,
-        ANT: Pin,
-    {
+        sck_pin: Peri<'a, AnyPin>,
+        mosi_pin: Peri<'a, AnyPin>,
+        miso_pin: Peri<'a, AnyPin>,
+        nrst_pin: Peri<'a, AnyPin>,
+        nss_pin: Peri<'a, AnyPin>,
+        busy_pin: Peri<'a, AnyPin>,
+        dio1_pin: Peri<'a, AnyPin>,
+        ant_pin: Peri<'a, AnyPin>,
+    ) -> SimpleLoRa<'a> {
         // SPI master configuration
         let mut spi_cfg = spim::Config::default();
         spi_cfg.frequency = Frequency::M1;
@@ -181,27 +170,17 @@ impl<'a> SimpleLoRa<'a> {
     }
 }
 
-pub async fn run_lora_test<'a, SCK, MOSI, MISO, NRST, NSS, BUSY, DIO1, ANT>(
+pub async fn run_lora_test<'a>(
     spi: Peri<'a, peripherals::SPI2>,
-    sck_pin: Peri<'a, SCK>,
-    mosi_pin: Peri<'a, MOSI>,
-    miso_pin: Peri<'a, MISO>,
-    nrst_pin: Peri<'a, NRST>,
-    nss_pin: Peri<'a, NSS>,
-    busy_pin: Peri<'a, BUSY>,
-    dio1_pin: Peri<'a, DIO1>,
-    ant_pin: Peri<'a, ANT>,
-) -> Result<(), LoraError>
-where
-    SCK: Pin,
-    MOSI: Pin,
-    MISO: Pin,
-    NRST: Pin,
-    NSS: Pin,
-    BUSY: Pin,
-    DIO1: Pin,
-    ANT: Pin,
-{
+    sck_pin: Peri<'a, AnyPin>,
+    mosi_pin: Peri<'a, AnyPin>,
+    miso_pin: Peri<'a, AnyPin>,
+    nrst_pin: Peri<'a, AnyPin>,
+    nss_pin: Peri<'a, AnyPin>,
+    busy_pin: Peri<'a, AnyPin>,
+    dio1_pin: Peri<'a, AnyPin>,
+    ant_pin: Peri<'a, AnyPin>,
+) -> Result<(), LoraError> {
     let mut lora = SimpleLoRa::new(
         spi, sck_pin, mosi_pin, miso_pin, nss_pin, nrst_pin, busy_pin, dio1_pin, ant_pin,
     );
