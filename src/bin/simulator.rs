@@ -2,20 +2,46 @@
 extern crate embedded_graphics as eg;
 extern crate embedded_graphics_simulator as simulator;
 
-use hello_graphics::{DISPLAY_STATE, DisplayState, draw_graphics, with_display_state_mut};
+use hello_graphics::{DISPLAY_STATE, DisplayState, TriColor, draw_graphics, with_display_state_mut};
 
-use eg::{pixelcolor::BinaryColor, prelude::*};
+use eg::pixelcolor::Rgb888;
+use eg::prelude::*;
 use embedded_graphics_simulator::{
     OutputSettings, SimulatorDisplay, SimulatorEvent, Window, sdl2::Keycode,
 };
 
+/// Adapter that translates TriColor draw calls to an Rgb888 SimulatorDisplay
+struct TriColorDisplay<'a>(&'a mut SimulatorDisplay<Rgb888>);
+
+impl DrawTarget for TriColorDisplay<'_> {
+    type Color = TriColor;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<TriColor>>,
+    {
+        self.0
+            .draw_iter(pixels.into_iter().map(|Pixel(p, c)| Pixel(p, Rgb888::from(c))))
+            .unwrap();
+        Ok(())
+    }
+}
+
+impl OriginDimensions for TriColorDisplay<'_> {
+    fn size(&self) -> Size {
+        self.0.size()
+    }
+}
+
 fn main() -> Result<(), core::convert::Infallible> {
     println!("Hello, world!");
 
-    let mut display: SimulatorDisplay<BinaryColor> = SimulatorDisplay::new(Size::new(152, 152));
+    let mut display: SimulatorDisplay<Rgb888> = SimulatorDisplay::new(Size::new(152, 152));
     let mut window = Window::new("Hello Graphics", &OutputSettings::default());
 
-    draw_graphics(&mut display, "test123\ntest").unwrap();
+    display.clear(Rgb888::new(255, 255, 255)).unwrap();
+    draw_graphics(&mut TriColorDisplay(&mut display), "test123\ntest").unwrap();
 
     with_display_state_mut!(|state: &mut DisplayState<3>| {
         state.set_menu_pos(0);
@@ -51,10 +77,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                                 state.set_fire_button(true);
                             });
                         }
-                        _ => {
-                            // Handle other key presses
-                            // e.g., change menu position, execute button, etc.
-                        }
+                        _ => {}
                     }
                 }
                 SimulatorEvent::KeyUp { keycode, .. } => match keycode {
@@ -69,11 +92,11 @@ fn main() -> Result<(), core::convert::Infallible> {
             }
         }
         if need_redraw {
-            draw_graphics(&mut display, "test123\ntest")?;
+            display.clear(Rgb888::new(255, 255, 255)).unwrap();
+            draw_graphics(&mut TriColorDisplay(&mut display), "test123\ntest")?;
             need_redraw = false;
         }
     }
 
-    // All done nothing to see.
     Ok(())
 }

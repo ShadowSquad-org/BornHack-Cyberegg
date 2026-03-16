@@ -29,28 +29,6 @@ impl<const ROWS: u16, const COLS: u8> EpdConfig<ROWS, COLS> {
 // Type aliases for common display sizes
 pub type EpdConfig152x152 = EpdConfig<152, 152>;
 
-// LUTs used to configure the display
-#[rustfmt::skip]
-const LUT: [u8; 70] = [
-    // Phase 0     Phase 1     Phase 2     Phase 3     Phase 4     Phase 5     Phase 6
-    // A B C D     A B C D     A B C D     A B C D     A B C D     A B C D     A B C D
-    0b01001000, 0b10100000, 0b00010000, 0b00010000, 0b00010011, 0b00000000, 0b00000000,  // LUT0 - Black
-    0b01001000, 0b10100000, 0b10000000, 0b00000000, 0b00000011, 0b00000000, 0b00000000,  // LUTT1 - White
-    0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000,  // IGNORE
-    0b01001000, 0b10100101, 0b00000000, 0b10111011, 0b00000000, 0b00000000, 0b00000000,  // LUT3 - Red
-    0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000,  // LUT4 - VCOM
-
-    // Duration            |  Repeat
-    // A   B     C     D   |
-    64,   12,   32,   12,    6,   // 0 Flash
-    16,   8,    4,    4,     6,   // 1 clear
-    4,    8,    8,    16,    16,  // 2 bring in the black
-    2,    2,    2,    64,    32,  // 3 time for red
-    2,    2,    2,    2,     2,   // 4 final black sharpen phase
-    0,    0,    0,    0,     0,   // 5
-    0,    0,    0,    0,     0    // 6
-];
-
 bind_interrupts!(struct Irqs {
     SPIM3 => InterruptHandler<peripherals::SPI3>;
 });
@@ -103,6 +81,7 @@ pub fn init_epd_bus<'a>(
 /// * `dimension`: The display dimensions
 /// * `black_buffer`: The buffer for the black image
 /// * `red_buffer`: The buffer for the red image
+/// * `work_buffer`: The buffer for intermediate calculations
 ///
 /// # Returns
 /// A graphics display object that can be used to draw graphics
@@ -116,6 +95,7 @@ pub fn init_epd<'a>(
     dimension: Dimensions,
     black_buffer: &'a mut [u8],
     red_buffer: &'a mut [u8],
+    work_buffer: &'a mut [u8],
 ) -> Result<EpdGfx<'a>, Infallible> {
     // Initialize GPIO pins
     let csn_out = Output::new(csn_pin, Level::High, OutputDrive::Standard);
@@ -131,11 +111,10 @@ pub fn init_epd<'a>(
     let config = Builder::new()
         .dimensions(dimension)
         .rotation(Rotation::Rotate0)
-        .lut(&LUT)
         .build()
         .unwrap();
     let display = Display::new(controller, config);
-    let gfx = GraphicDisplay::new(display, black_buffer, red_buffer);
+    let gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
 
     Ok(gfx)
 }

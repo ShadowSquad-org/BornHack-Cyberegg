@@ -6,7 +6,7 @@ UF2     = embassy.uf2
 FLASH_BASE  = 0x00027000
 UF2_FAMILY  = 0xADA52840
 
-.PHONY: uf2 fw sim flash
+.PHONY: uf2 fw sim flash monitor
 
 uf2: $(UF2)
 
@@ -27,3 +27,6 @@ sim:
 
 flash:
 	cargo fw-flash
+
+monitor:
+	probe-rs attach --chip nRF52840_xxAA target/thumbv7em-none-eabihf/debug/embassy

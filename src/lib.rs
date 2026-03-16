@@ -7,13 +7,51 @@ pub mod fw;
 use core::cell::{Ref, RefCell};
 
 use core::result::{Result, Result::Ok};
+use core::sync::atomic::{AtomicU32, Ordering};
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
-    pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
+// Embassy: re-export TriColor from ssd1680 hardware driver
+#[cfg(feature = "embassy")]
+pub use ssd1680::graphics::{BLACK, RED, TriColor, WHITE};
+
+// Simulator: define TriColor locally
+#[cfg(feature = "simulator")]
+mod tricolor {
+    use embedded_graphics::pixelcolor::{Rgb888, raw::RawU2};
+    use embedded_graphics::prelude::PixelColor;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum TriColor {
+        Black,
+        White,
+        Chromatic,
+    }
+
+    impl PixelColor for TriColor {
+        type Raw = RawU2;
+    }
+
+    pub const WHITE: TriColor = TriColor::White;
+    pub const BLACK: TriColor = TriColor::Black;
+    pub const RED: TriColor = TriColor::Chromatic;
+
+    impl From<TriColor> for Rgb888 {
+        fn from(c: TriColor) -> Self {
+            match c {
+                TriColor::White => Rgb888::new(255, 255, 255),
+                TriColor::Black => Rgb888::new(0, 0, 0),
+                TriColor::Chromatic => Rgb888::new(255, 0, 0),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "simulator")]
+pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 // Conditional imports based on feature
 #[cfg(feature = "embassy")]
@@ -21,9 +59,6 @@ use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
-
-pub const FOREGROUND_COLOR: BinaryColor = BinaryColor::Off;
-pub const BACKGROUND_COLOR: BinaryColor = BinaryColor::On;
 
 // Have a struct here that tracks the state of the display
 // this struct needs to be async safe
@@ -132,34 +167,44 @@ macro_rules! with_display_state_mut {
     }};
 }
 
+// Position of the animated circle
+static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
+
 /// Draw your graphics to any display that implements DrawTarget
 pub fn draw_graphics<D>(display: &mut D, health_str: &str) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = BinaryColor>,
+    D: DrawTarget<Color = TriColor>,
 {
-    // Clear the display, all white
-    let _ = display.clear(BinaryColor::On);
+    let circle_post = CIRCLE_POS.load(Ordering::Relaxed);
+    CIRCLE_POS.store(circle_post.wrapping_add(1) % 4, Ordering::Relaxed);
+
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
 
+    // Animated red dot
+    let dot_pos = Point::new(((circle_post * 40) + 15) as i32, 10);
+    Circle::with_center(dot_pos, 10)
+        .into_styled(PrimitiveStyle::with_fill(RED))
+        .draw(display)?;
+
     let position = Point::new(76, 76);
     Circle::with_center(position, 125)
-        .into_styled(PrimitiveStyle::with_fill(FOREGROUND_COLOR))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
-    // Bottom 20 pixels of the screen white using rectangle
+    // Bottom banner
     Rectangle::new(Point::new(0, 108), Size::new(152, 44))
-        .into_styled(PrimitiveStyle::with_fill(BACKGROUND_COLOR))
+        .into_styled(PrimitiveStyle::with_fill(WHITE))
         .draw(display)?;
     Rectangle::new(Point::new(0, 108), Size::new(152, 44))
-        .into_styled(PrimitiveStyle::with_stroke(FOREGROUND_COLOR, 2))
+        .into_styled(PrimitiveStyle::with_stroke(RED, 2))
         .draw(display)?;
 
-    // Put text "HELLO GRAPHICS" on the display, centered in white
-    let text_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-    let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
+    // Text: menu item centered, health status bottom-left
+    let text_style = MonoTextStyle::new(&FONT_10X20, WHITE);
+    let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
     let item_text =
         // DISPLAY_STATE.lock(|f| -> &'static str { f.borrow().get_current_menu_item().unwrap() });
         with_display_state!(| state: &Ref<'_, DisplayState<3>> | state.get_current_menu_item().unwrap());

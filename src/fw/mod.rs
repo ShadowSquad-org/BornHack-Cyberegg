@@ -1,4 +1,6 @@
 pub mod board;
+pub mod button;
+pub mod buzzer;
 pub mod epd;
 pub mod health;
 pub mod iso14443;

@@ -1,3 +1,5 @@
+use crate::update_health;
+
 use super::iso14443::iso14443_3;
 use super::iso14443::iso14443_4::{Card, IsoDep};
 use defmt::{todo, *};
@@ -10,6 +12,28 @@ use {defmt_rtt as _, embassy_nrf as _, panic_probe as _};
 bind_interrupts!(struct Irqs {
     NFCT => nfct::InterruptHandler;
 });
+
+const NDEF_URL: &[u8] = b"badge.team";
+const NDEF_URL_PREFIX: u8 = 0x04; // https://
+const NDEF_LEN: usize = 7 + NDEF_URL.len();
+
+static NDEF: [u8; NDEF_LEN] = {
+    let mut buf = [0u8; NDEF_LEN];
+    let msg_len = NDEF_LEN - 2;
+    buf[0] = (msg_len >> 8) as u8;
+    buf[1] = msg_len as u8;
+    buf[2] = 0xd1; // NDEF record header (MB, ME, SR, TNF=Well-known)
+    buf[3] = 0x01; // type length = 1
+    buf[4] = (1 + NDEF_URL.len()) as u8; // payload length = prefix + url
+    buf[5] = 0x55; // type = 'U' (URI)
+    buf[6] = NDEF_URL_PREFIX;
+    let mut i = 0;
+    while i < NDEF_URL.len() {
+        buf[7 + i] = NDEF_URL[i];
+        i += 1;
+    }
+    buf
+};
 
 pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
     dbg!("Setting up...");
@@ -33,10 +57,7 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
         0x04, 0x06, 0xe1, 0x04, 0x00, 0x7f, 0x00, 0x00,
     ];
 
-    let ndef = &[
-        0x00, 0x10, 0xd1, 0x1, 0xc, 0x55, 0x4, 0x65, 0x6d, 0x62, 0x61, 0x73, 0x73, 0x79, 0x2e,
-        0x64, 0x65, 0x76,
-    ];
+    let ndef: &[u8] = &NDEF;
     let mut selected: &[u8] = cc;
 
     loop {
@@ -105,9 +126,12 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
             info!("iso-dep tx {:02x}", resp);
 
             match nfc.transmit(resp).await {
-                Ok(()) => {}
+                Ok(()) => {
+                    update_health!(|h| h.nfc.set_ok("NFC transmit okay!"));
+                }
                 Err(e) => {
                     error!("tx error {}", e);
+                    update_health!(|h| h.nfc.set_err("NFC transmit failed"));
                     break;
                 }
             }

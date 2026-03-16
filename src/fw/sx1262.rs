@@ -10,8 +10,8 @@ use embassy_nrf::{
     peripherals,
     spim::{self, Frequency, InterruptHandler, Spim},
 };
-use embassy_time::Timer;
 use embassy_time::Delay;
+use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 
 use sx126x::SX126x;
@@ -20,7 +20,10 @@ use sx126x::op::PacketType::LoRa;
 use sx126x::op::irq::IrqMaskBit::*;
 use sx126x::op::rxtx::DeviceSel::SX1261;
 // use sx126x::op::status::CommandStatus::{CommandTimeout, CommandTxDone, DataAvailable};
+use super::health::SYSTEM_HEALTH;
 use sx126x::op::*;
+
+use crate::{health_err, update_health};
 
 const RF_FREQUENCY: u32 = 869_400_000; // 868MHz (EU)
 const F_XTAL: u32 = 32_000_000; // 32MHz
@@ -64,7 +67,7 @@ impl<'a> SimpleLoRa<'a> {
         busy_pin: Peri<'a, AnyPin>,
         dio1_pin: Peri<'a, AnyPin>,
         ant_pin: Peri<'a, AnyPin>,
-    ) -> SimpleLoRa<'a> {
+    ) -> Result<SimpleLoRa<'a>, LoraError> {
         // SPI master configuration
         let mut spi_cfg = spim::Config::default();
         spi_cfg.frequency = Frequency::M1;
@@ -84,24 +87,25 @@ impl<'a> SimpleLoRa<'a> {
 
         let conf = build_config();
         let mut lora = SX126x::new(spi_dev, (nreset, busy, ant, AlwaysHigh));
-        lora.init(conf).unwrap();
+        lora.init(conf)
+            .map_err(|_| LoraError::Spi("lora init failed"))?;
 
         let tx_timeout = 0.into();
         let rx_timeout = RxTxTimeout::from_ms(3000);
         let crc_type = LoRaCrcType::CrcOn;
 
-        lora.set_rx(rx_timeout).unwrap();
+        lora.set_rx(rx_timeout)
+            .map_err(|_| LoraError::Spi("lora set_rx failed"))?;
 
-        // // Start with the radio in receiving mode
-        // self.lora.set_ant_enabled(false).unwrap();
+        lora.set_ant_enabled(false).unwrap();
 
-        SimpleLoRa {
+        Ok(SimpleLoRa {
             lora,
             tx_timeout,
             // rx_timeout,
             crc_type,
             dio1,
-        }
+        })
     }
 
     // Wait for event
@@ -182,16 +186,29 @@ pub async fn run_lora_test<'a>(
     dio1_pin: Peri<'a, AnyPin>,
     ant_pin: Peri<'a, AnyPin>,
 ) -> Result<(), LoraError> {
-    let mut lora = SimpleLoRa::new(
+    // Assume health status ok until proven bad
+    update_health!(|h| h.lora.set_ok("Ok when started."));
+
+    let mut lora = match SimpleLoRa::new(
         spi, sck_pin, mosi_pin, miso_pin, nss_pin, nrst_pin, busy_pin, dio1_pin, ant_pin,
-    );
+    ) {
+        Ok(l) => l,
+        Err(e) => {
+            // Update Health register and return error
+            health_err!(lora, "LoRa test failed");
+            return Err(e);
+        }
+    };
 
     let message = "Hello, LoRa!";
     loop {
-        lora.send_message(message)
-            .await
-            .map_err(|_| LoraError::Spi("Send message failed"))?;
-        defmt::info!("Sent: {}", message);
+        match lora.send_message(message).await {
+            Ok(_) => defmt::info!("Sent: {}", message),
+            Err(e) => {
+                defmt::error!("LoRa send failed: {:?}", e);
+                health_err!(lora, "LoRa send in test failed");
+            }
+        }
         Timer::after_millis(1000).await;
     }
 }
