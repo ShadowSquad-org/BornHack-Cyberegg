@@ -1,3 +1,4 @@
 [submodule "vendor/ssd1680"]
 	path = vendor/ssd1680
-	url = https://github.com/Radiator-Labs/ssd1680.git
+	url = ssh://git@codeberg.org/Ranzbak/ssd1680.git
+	branch = master
