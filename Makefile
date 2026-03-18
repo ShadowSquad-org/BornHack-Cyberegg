@@ -24,7 +24,7 @@ monitor:
 	probe-rs attach --chip nRF52840_xxAA target/thumbv7em-none-eabihf/debug/embassy
 
 # Monitor RTT output (bootloader)
-monitor-bl:
+bl-monitor:
 	probe-rs attach --chip nRF52840_xxAA bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
 # Build the bootloader
