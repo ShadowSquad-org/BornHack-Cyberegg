@@ -6,7 +6,7 @@ use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
-use embassy_time::Timer;
+use embassy_time::{Duration, Ticker, Timer};
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::sx1262::run_lora_test;
 use hello_graphics::{
@@ -24,6 +24,15 @@ use {defmt_rtt as _, panic_probe as _};
 // Example to port: https://github.com/mbv/esp32-ssd1680/blob/main/src/main.rs
 
 // Pin assignments SSD1680 EDP
+
+// Feed the watchdog started by the bootloader (channel 0, 5s timeout).
+async fn feed_watchdog() -> ! {
+    let mut ticker = Ticker::every(Duration::from_secs(1));
+    loop {
+        embassy_nrf::pac::WDT.rr(0).write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
+        ticker.next().await;
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -176,5 +185,5 @@ async fn main(_spawner: Spawner) {
         board!(p, lora_rf_sw).into(),
     );
 
-    embassy_futures::join::join4(main_loop, run_nfc, buttons, run_lora).await;
+    embassy_futures::join::join5(main_loop, run_nfc, buttons, run_lora, feed_watchdog()).await;
 }

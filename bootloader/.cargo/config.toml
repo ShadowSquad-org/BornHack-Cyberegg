@@ -1,0 +1,19 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+# Flash the bootloader at address 0x0 (not after an existing bootloader).
+# --allow-erase-all is needed to erase the entire flash including any
+# previously installed bootloader.
+runner = "probe-rs run --chip nRF52840_xxAA --allow-erase-all"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+DEFMT_LOG = "info"
+
+[alias]
+bl       = "build --release --features defmt"
+bl-flash = "run --release --features defmt"
