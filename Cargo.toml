@@ -48,6 +48,14 @@ sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.2", optional = true }
 heapless = { version = "0.9.2", optional = true }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840"], optional = true }
+nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = ["nrf52840", "peripheral"], optional = true }
+# dev-disable-csprng-seed-requirement: skips the panic if the SM PRNG hasn't been seeded.
+# The nrf-sdc 0.4 API borrows `rng` for the SDC's lifetime, making it unavailable for
+# seeding trouble-host. This is safe for now because we do not initiate pairing.
+# TODO: seed the SM properly before enabling bonding in production.
+trouble-host = { version = "0.6", features = ["defmt", "security", "dev-disable-csprng-seed-requirement"], optional = true }
+tickv = { version = "2.0", optional = true }
 
 
 [package.metadata.tools]
@@ -88,6 +96,10 @@ embassy = [
     "ssd1680",
     "static_cell",
     "sx126x",
+    "nrf-mpsl",
+    "nrf-sdc",
+    "trouble-host",
+    "tickv",
 ]
 
 # [workspace]

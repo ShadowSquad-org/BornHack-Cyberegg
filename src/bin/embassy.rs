@@ -11,7 +11,9 @@ use embassy_nrf::nvmc::Nvmc;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
+use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
 use hello_graphics::fw::button::BTN_WATCH;
+use hello_graphics::fw::flash::{QspiIrqs, flash_task, init_qspi};
 use hello_graphics::fw::sx1262::run_lora_test;
 use hello_graphics::{
     board, draw_graphics,
@@ -25,10 +27,6 @@ use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-// Example to port: https://github.com/mbv/esp32-ssd1680/blob/main/src/main.rs
-
-// Pin assignments SSD1680 EDP
-
 // Feed the watchdog started by the bootloader (channel 0, 5s timeout).
 async fn feed_watchdog() -> ! {
     let mut ticker = Ticker::every(Duration::from_secs(1));
@@ -41,9 +39,9 @@ async fn feed_watchdog() -> ! {
 }
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let mut config = embassy_nrf::config::Config::default();
-    // We paid for the XTAL on the BOM, se let's use it.
+    // We paid for the XTAL on the BOM, so let's use it.
     config.hfclk_source = HfclkSource::ExternalXtal;
     let p = embassy_nrf::init(config);
 
@@ -55,7 +53,64 @@ async fn main(_spawner: Spawner) {
     // Power supply pin
     let _ps_sync = Output::new(board!(p, ps_sync), Level::High, OutputDrive::Standard);
 
-    // EPD display buffers
+    // -----------------------------------------------------------------------
+    // QSPI flash — must come before BLE so bonds are loaded before advertising.
+    // -----------------------------------------------------------------------
+    let qspi = match init_qspi(
+        p.QSPI,
+        QspiIrqs,
+        board!(p, flash_sck),
+        board!(p, flash_csn),
+        board!(p, flash_io0),
+        board!(p, flash_io1),
+        board!(p, flash_io2),
+        board!(p, flash_io3),
+    ) {
+        Ok(q) => q,
+        Err(id) => defmt::panic!("QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})", id[0], id[1], id[2]),
+    };
+    // flash_task takes ownership; it needs 'static so we use a StaticCell.
+    static QSPI_STORAGE: StaticCell<embassy_nrf::qspi::Qspi<'static>> = StaticCell::new();
+    // Safety: main never returns, so 'static is valid here.
+    let qspi_static: embassy_nrf::qspi::Qspi<'static> = unsafe { core::mem::transmute(qspi) };
+    spawner.must_spawn(flash_task(qspi_static));
+
+    // -----------------------------------------------------------------------
+    // BLE (MPSL + SDC + TrouBLE peripheral task)
+    // -----------------------------------------------------------------------
+    static SDC_MEM: StaticCell<nrf_sdc::Mem<4096>> = StaticCell::new();
+    // init_ble returns SoftdeviceController<'static> directly.
+    // PPI channels are reserved hardware crossbar slots used by MPSL (CH19,30,31) and
+    // the SoftDevice Controller (CH17-29 minus the MPSL ones) for timing-critical BLE
+    // radio events.  They must not be used elsewhere in the application.
+    let sdc = init_ble(
+        &spawner,
+        p.RTC0,
+        p.TIMER0,
+        p.TEMP,
+        p.PPI_CH19,
+        p.PPI_CH30,
+        p.PPI_CH31,
+        p.PPI_CH17,
+        p.PPI_CH18,
+        p.PPI_CH20,
+        p.PPI_CH21,
+        p.PPI_CH22,
+        p.PPI_CH23,
+        p.PPI_CH24,
+        p.PPI_CH25,
+        p.PPI_CH26,
+        p.PPI_CH27,
+        p.PPI_CH28,
+        p.PPI_CH29,
+        p.RNG,
+        SDC_MEM.init(nrf_sdc::Mem::new()),
+    );
+    spawner.must_spawn(run_ble_peripheral(sdc));
+
+    // -----------------------------------------------------------------------
+    // EPD display
+    // -----------------------------------------------------------------------
     let dimension = EpdConfig::to_dimensions();
     static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
@@ -64,7 +119,6 @@ async fn main(_spawner: Spawner) {
     let red_buffer = RED_BUF.init([0; EpdConfig::BUF_SIZE]);
     let work_buffer = WORK_BUF.init([0; EpdConfig::BUF_SIZE]);
 
-    // LED (Low active)
     let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
     let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
     let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
@@ -91,19 +145,9 @@ async fn main(_spawner: Spawner) {
     )
     .unwrap();
 
-    // Wait for EPD power-on reset to complete before sending commands.
-    // On cold boot the display's internal power rails need time to stabilise.
-    // With a debugger the flash programming delay provides this naturally;
-    // without one the firmware starts almost immediately after power-on.
-    // Timer::after_millis(10).await;
-    // let _ = display.reset().await;
-    // display.clear(WHITE);
-
     defmt::info!("EPD initialized");
-
     defmt::info!("Configure button GPIO");
 
-    // Configure button input channels
     let btn_can = Input::new(board!(p, btn_can), Pull::Up);
     let btn_exe = Input::new(board!(p, btn_exe), Pull::Up);
     let joy_up = Input::new(board!(p, joy_up), Pull::Up);
@@ -118,18 +162,20 @@ async fn main(_spawner: Spawner) {
     );
     defmt::info!("Button GPIO configured");
 
-    // Run NFC tag emulation
+    defmt::info!("Initializing NFC");
     let run_nfc = run_nfct(p.NFCT);
+    defmt::info!("NFC initialized");
 
+    defmt::info!("Initializing buzzer");
     let mut buzzer = Buzzer::new(Output::new(
         board!(p, buzzer),
         Level::Low,
         OutputDrive::Standard,
     ));
-    // buzzer.play_melody(melodies::IMPERIAL_MARCH).await;
     buzzer.play_melody(melodies::STARTUP).await;
+    defmt::info!("Buzzer initialized, startup melody played");
 
-    // Blink all three LEDs once to signal firmware has started
+    // White light blink indicating we can enter the main loop
     led_red.set_low();
     led_green.set_low();
     led_blue.set_low();
@@ -139,11 +185,9 @@ async fn main(_spawner: Spawner) {
     led_blue.set_high();
     Timer::after_millis(200).await;
 
-    // Number of fast B&W updates before a full tricolor refresh.
     const FAST_UPDATES_PER_FULL: u32 = 60;
 
-    // All peripherals initialised successfully — commit this firmware so the
-    // bootloader doesn't roll it back on the next reset.
+    // All peripherals initialised — commit this firmware so the bootloader won't roll back.
     {
         let flash = Mutex::<NoopRawMutex, _>::new(core::cell::RefCell::new(Nvmc::new(p.NVMC)));
         let fw_config = FirmwareUpdaterConfig::from_linkerfile_blocking(&flash, &flash);
@@ -154,13 +198,10 @@ async fn main(_spawner: Spawner) {
     }
 
     defmt::info!("Entering main loop...");
-    // Blink and EPD test
     let main_loop = async {
         let mut loop_count: u32 = 0;
         loop {
-            // Red blink = loop heartbeat
             let _ = display.clear(WHITE);
-
             let health_str = with_health!(|f| f.to_string());
             match draw_graphics(&mut display, &health_str) {
                 Ok(_) => {}
@@ -179,13 +220,12 @@ async fn main(_spawner: Spawner) {
                 let _ = display.update_ghost().await;
             }
             loop_count = loop_count.wrapping_add(1);
-
             let _ = display.deep_sleep().await;
 
             led_red.set_low();
             Timer::after_millis(50).await;
             led_red.set_high();
-            // Timer::after_millis(950).await;
+            // Wait for button event to update EPD display
             button_rcvr.changed().await;
         }
     };

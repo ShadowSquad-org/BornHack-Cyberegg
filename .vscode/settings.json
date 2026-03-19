@@ -10,5 +10,15 @@
     "rust-analyzer.check.extraArgs": [
         "--bin",
         "embassy"
+    ],
+    "cSpell.words": [
+        "addrs",
+        "defmt",
+        "heapless",
+        "Initialise",
+        "Irqs",
+        "jedec",
+        "QSPI",
+        "tickv"
     ]
 }

@@ -1,4 +1,6 @@
+pub mod ble;
 pub mod board;
+pub mod flash;
 pub mod button;
 pub mod buzzer;
 pub mod epd;

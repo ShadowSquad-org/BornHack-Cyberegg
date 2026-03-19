@@ -23,9 +23,9 @@ pub async fn run_buttons(
     mut joy_right: Input<'_>,
     mut joy_fire: Input<'_>,
 ) {
-    let mut btn_sender: Sender<CriticalSectionRawMutex, u8, 2> = BTN_WATCH.sender();
+    let btn_sender: Sender<CriticalSectionRawMutex, u8, 2> = BTN_WATCH.sender();
     loop {
-        let (btn, index) = embassy_futures::select::select_array([
+        let (_btn, index) = embassy_futures::select::select_array([
             btn_can.wait_for_any_edge(),
             btn_exe.wait_for_any_edge(),
             joy_up.wait_for_any_edge(),
