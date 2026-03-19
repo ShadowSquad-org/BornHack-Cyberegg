@@ -12,6 +12,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
 use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
+use hello_graphics::fw::device_id;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::flash::{QspiIrqs, flash_task, init_qspi};
 use hello_graphics::fw::sx1262::run_lora_test;
@@ -50,8 +51,13 @@ async fn main(spawner: Spawner) {
     // sleep, matching the behaviour seen when a debugger is connected.
     embassy_nrf::pac::POWER.tasks_constlat().write_value(1);
 
+    device_id::init();
+    let [id0, id1] = device_id::get();
+    defmt::info!("Device ID: {:02X}{:02X}", id0, id1);
+
     // Power supply pin
-    let _ps_sync = Output::new(board!(p, ps_sync), Level::High, OutputDrive::Standard);
+    // Pulling this pin low, puts the buck-boost converter in low power mode (3mA instead of 30mA idle current).
+    let _ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
 
     // -----------------------------------------------------------------------
     // QSPI flash — must come before BLE so bonds are loaded before advertising.
@@ -67,7 +73,12 @@ async fn main(spawner: Spawner) {
         board!(p, flash_io3),
     ) {
         Ok(q) => q,
-        Err(id) => defmt::panic!("QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})", id[0], id[1], id[2]),
+        Err(id) => defmt::panic!(
+            "QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})",
+            id[0],
+            id[1],
+            id[2]
+        ),
     };
     // flash_task takes ownership; it needs 'static so we use a StaticCell.
     static QSPI_STORAGE: StaticCell<embassy_nrf::qspi::Qspi<'static>> = StaticCell::new();

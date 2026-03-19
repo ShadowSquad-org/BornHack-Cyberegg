@@ -1,4 +1,5 @@
 pub mod ble;
+pub mod device_id;
 pub mod board;
 pub mod flash;
 pub mod button;
