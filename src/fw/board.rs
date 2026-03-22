@@ -51,9 +51,9 @@ macro_rules! board {
     ($p:expr, lora_busy)  => { $p.P0_28 };
     ($p:expr, lora_rf_sw) => { $p.P0_04 };
     ($p:expr, lora_rst)   => { $p.P0_30 };
-    // LoRa SX1262 SPI pi ns
-    ($p:expr, lora_miso)  => { $p.P0_03 };
-    ($p:expr, lora_mosi)  => { $p.P1_14 };
+    // LoRa SX1262 SPI pins
+    ($p:expr, lora_miso)  => { $p.P1_14 };
+    ($p:expr, lora_mosi)  => { $p.P0_03 };
     ($p:expr, lora_sck)   => { $p.P1_13 };
     ($p:expr, lora_nss)   => { $p.P1_12 };
     ($p:expr, lora_spi)   => { $p.SPI2 };
