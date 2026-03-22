@@ -1,4 +1,7 @@
 [submodule "vendor/ssd1680"]
 	path = vendor/ssd1680
-	url = ssh://git@codeberg.org/Ranzbak/ssd1680.git
+	url = https://codeberg.org/Ranzbak/ssd1680.git
 	branch = master
+[submodule "meshcore"]
+	path = vendor/meshcore
+	url = https://codeberg.org/Ranzbak/meshcore-aegg-rust.git
