@@ -19,12 +19,12 @@ use super::{Note, Tone};
 // P = inter-note pause inserted between consecutive same-pitch notes.
 // The note before is shortened by P to keep bar length correct.
 
-const Q:  u32 = 600;
+const Q: u32 = 600;
 const D8: u32 = 450;
-const E:  u32 = 300;
-const S:  u32 = 150;
-const H:  u32 = 1200;
-const P:  u32 = 50;
+const E: u32 = 300;
+const S: u32 = 150;
+const H: u32 = 1200;
+const P: u32 = 50;
 
 pub const STARTUP: &[Tone] = &[
     Tone::new(Note::A3, 120),
@@ -33,118 +33,103 @@ pub const STARTUP: &[Tone] = &[
     Tone::new(Note::A4, 300),
 ];
 
-// "Never Gonna Give You Up" – Rick Astley (1987)
-// Chorus melody, transposed to G major to fit C3-B4 buzzer range.
-// BPM ~113: RQ=530ms RE=265ms RD8=400ms RS=133ms RH=1060ms
-// RP=30ms inter-note pause (tighter than Imperial March to preserve dotted rhythm)
-const RQ:  u32 = 530;
-const RE:  u32 = 265;
-const RD8: u32 = 400;
-const RS:  u32 = 133;
-const RH:  u32 = 1060;
-const RP:  u32 = 30;
+// "Never Gonna Give You Up" chorus – from rick.mid
+// Tempo 508474 µs/beat (~118 BPM), 128 ppq → 3.97 ms/tick
+// Key: Ab major (MIDI 56=Ab3, 58=Bb3, 61=Db4, 63=Eb4, 65=F4)
+// Note durations = slot size (next_on − this_on × 3.97 ms).
+// RP separates consecutive same-pitch notes.
+const RI16: u32 = 127; // sixteenth  (32 ticks)
+const RI8: u32 = 254; // eighth     (64 ticks)
+const RIQ: u32 = 508; // quarter   (128 ticks)
+const RID8: u32 = 381; // dotted-eighth (96 ticks)
+const RIDQ: u32 = 763; // dotted-quarter (192 ticks)
+const RIP: u32 = 20; // inter-same-note pause
 
-pub const RICK_ROLL: &[Tone] = &[
-    // "Never gonna give you up"
-    // D4(D8) D4(S) E4(D8) C4(S) G3(E) A3(E) G3(Q)
-    Tone::new(Note::D4,  RD8 - RP), Tone::new(Note::Rest, RP),
-    Tone::new(Note::D4,  RS),
-    Tone::new(Note::E4,  RD8),
-    Tone::new(Note::C4,  RS),
-    Tone::new(Note::G3,  RE),
-    Tone::new(Note::A3,  RE),
-    Tone::new(Note::G3,  RQ),
-
-    // "Never gonna let you down"
-    // D4(D8) D4(S) E4(D8) C4(S) G3(E) A3(H)
-    Tone::new(Note::D4,  RD8 - RP), Tone::new(Note::Rest, RP),
-    Tone::new(Note::D4,  RS),
-    Tone::new(Note::E4,  RD8),
-    Tone::new(Note::C4,  RS),
-    Tone::new(Note::G3,  RE),
-    Tone::new(Note::A3,  RH),
-
-    // "Never gonna run around and desert you"
-    // D4(D8) D4(S) C4(D8) A3(S) G3(E) A3(E) B3(E) G3(Q)
-    Tone::new(Note::D4,  RD8 - RP), Tone::new(Note::Rest, RP),
-    Tone::new(Note::D4,  RS),
-    Tone::new(Note::C4,  RD8),
-    Tone::new(Note::A3,  RS),
-    Tone::new(Note::G3,  RE),
-    Tone::new(Note::A3,  RE),
-    Tone::new(Note::B3,  RE),
-    Tone::new(Note::G3,  RQ),
-
-    // "Never gonna say goodbye"
-    // D4(D8) D4(S) C4(D8) A3(S) G3(E) A3(H)
-    Tone::new(Note::D4,  RD8 - RP), Tone::new(Note::Rest, RP),
-    Tone::new(Note::D4,  RS),
-    Tone::new(Note::C4,  RD8),
-    Tone::new(Note::A3,  RS),
-    Tone::new(Note::G3,  RE),
-    Tone::new(Note::A3,  RH),
+pub const RICK_INTRO: &[Tone] = &[
+    // "Ne-ver-gon-na" pickup (4× sixteenth): Ab3 Bb3 Db4 Bb3
+    Tone::new(Note::Gs3, RI16),
+    Tone::new(Note::As3, RI16),
+    Tone::new(Note::Cs4, RI16),
+    Tone::new(Note::As3, RI16),
+    // "give you up": F4(Q) F4(E) Eb4(D.)
+    Tone::new(Note::F4, RIQ - RIP),
+    Tone::new(Note::Rest, RIP),
+    Tone::new(Note::F4, RI8),
+    Tone::new(Note::Ds4, RIDQ),
+    // "Ne-ver-gon-na" pickup (4× sixteenth): Ab3 Bb3 Db4 Bb3
+    Tone::new(Note::Gs3, RI16),
+    Tone::new(Note::As3, RI16),
+    Tone::new(Note::Cs4, RI16),
+    Tone::new(Note::As3, RI16),
+    // "let you down": Eb4(Q) Eb4(E) Db4(D8) C4(S) Bb3(Q)
+    Tone::new(Note::Ds4, RIQ - RIP),
+    Tone::new(Note::Rest, RIP),
+    Tone::new(Note::Ds4, RI8),
+    Tone::new(Note::Cs4, RID8),
+    Tone::new(Note::C4, RI16),
+    Tone::new(Note::As3, RIQ),
 ];
 
 pub const IMPERIAL_MARCH: &[Tone] = &[
     // ── Phrase 1 ────────────────────────────────────────────────────
     // G(Q) G(Q) G(Q) Eb(D8) Bb(S) | G(Q) Eb(D8) Bb(S) G(H)
-    Tone::new(Note::G3,  Q  - P), Tone::new(Note::Rest, P), // G  quarter
-    Tone::new(Note::G3,  Q  - P), Tone::new(Note::Rest, P), // G  quarter
-    Tone::new(Note::G3,  Q),                                 // G  quarter
-    Tone::new(Note::Ds3, D8),                                // Eb dotted-eighth
-    Tone::new(Note::As3, S),                                 // Bb sixteenth
-    Tone::new(Note::G3,  Q),                                 // G  quarter
-    Tone::new(Note::Ds3, D8),                                // Eb dotted-eighth
-    Tone::new(Note::As3, S),                                 // Bb sixteenth
-    Tone::new(Note::G3,  H),                                 // G  half
-
+    Tone::new(Note::G3, Q - P),
+    Tone::new(Note::Rest, P), // G  quarter
+    Tone::new(Note::G3, Q - P),
+    Tone::new(Note::Rest, P), // G  quarter
+    Tone::new(Note::G3, Q),   // G  quarter
+    Tone::new(Note::Ds3, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::G3, Q),   // G  quarter
+    Tone::new(Note::Ds3, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::G3, H),   // G  half
     // ── Phrase 2 (a fifth higher) ────────────────────────────────────
     // D(Q) D(Q) D(Q) Eb(D8) Bb(S) | Gb(Q) Eb(D8) Bb(S) G(H)
-    Tone::new(Note::D4,  Q  - P), Tone::new(Note::Rest, P), // D  quarter
-    Tone::new(Note::D4,  Q  - P), Tone::new(Note::Rest, P), // D  quarter
-    Tone::new(Note::D4,  Q),                                 // D  quarter
-    Tone::new(Note::Ds4, D8),                                // Eb dotted-eighth
-    Tone::new(Note::As3, S),                                 // Bb sixteenth
-    Tone::new(Note::Fs3, Q),                                 // Gb quarter
-    Tone::new(Note::Ds3, D8),                                // Eb dotted-eighth
-    Tone::new(Note::As3, S),                                 // Bb sixteenth
-    Tone::new(Note::G3,  H),                                 // G  half
-
+    Tone::new(Note::D4, Q - P),
+    Tone::new(Note::Rest, P), // D  quarter
+    Tone::new(Note::D4, Q - P),
+    Tone::new(Note::Rest, P), // D  quarter
+    Tone::new(Note::D4, Q),   // D  quarter
+    Tone::new(Note::Ds4, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::Fs3, Q),  // Gb quarter
+    Tone::new(Note::Ds3, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::G3, H),   // G  half
     // ── Section B – part 1 ───────────────────────────────────────────
     // G4(Q) G3(D8) G3(S) G4(Q) F#4(D8) F4(S)
-    Tone::new(Note::G4,  Q),                                 // G4 quarter
-    Tone::new(Note::G3,  D8 - P), Tone::new(Note::Rest, P), // G3 dotted-eighth
-    Tone::new(Note::G3,  S),                                 // G3 sixteenth
-    Tone::new(Note::G4,  Q),                                 // G4 quarter
-    Tone::new(Note::Fs4, D8),                                // F# dotted-eighth
-    Tone::new(Note::F4,  S),                                 // F  sixteenth
-
+    Tone::new(Note::G4, Q), // G4 quarter
+    Tone::new(Note::G3, D8 - P),
+    Tone::new(Note::Rest, P), // G3 dotted-eighth
+    Tone::new(Note::G3, S),   // G3 sixteenth
+    Tone::new(Note::G4, Q),   // G4 quarter
+    Tone::new(Note::Fs4, D8), // F# dotted-eighth
+    Tone::new(Note::F4, S),   // F  sixteenth
     // ── Section B – part 2 ───────────────────────────────────────────
     // E(S) Eb(S) E(E) rest(E) Ab(E) Db(Q) C(D8) B(S)
-    Tone::new(Note::E4,   S),                                // E  sixteenth
-    Tone::new(Note::Ds4,  S),                                // Eb sixteenth
-    Tone::new(Note::E4,   E),                                // E  eighth
-    Tone::new(Note::Rest, E),                                // -  eighth rest
-    Tone::new(Note::Gs3,  E),                                // Ab eighth
-    Tone::new(Note::Cs4,  Q),                                // Db quarter
-    Tone::new(Note::C4,   D8),                               // C  dotted-eighth
-    Tone::new(Note::B3,   S),                                // B  sixteenth
-
+    Tone::new(Note::E4, S),   // E  sixteenth
+    Tone::new(Note::Ds4, S),  // Eb sixteenth
+    Tone::new(Note::E4, E),   // E  eighth
+    Tone::new(Note::Rest, E), // -  eighth rest
+    Tone::new(Note::Gs3, E),  // Ab eighth
+    Tone::new(Note::Cs4, Q),  // Db quarter
+    Tone::new(Note::C4, D8),  // C  dotted-eighth
+    Tone::new(Note::B3, S),   // B  sixteenth
     // ── Section B – part 3 ───────────────────────────────────────────
     // Bb(S) A(S) Bb(E) rest(E) Eb(E) Gb(Q) Eb(D8) Bb(S)
-    Tone::new(Note::As3,  S),                                // Bb sixteenth
-    Tone::new(Note::A3,   S),                                // A  sixteenth
-    Tone::new(Note::As3,  E),                                // Bb eighth
-    Tone::new(Note::Rest, E),                                // -  eighth rest
-    Tone::new(Note::Ds3,  E),                                // Eb eighth
-    Tone::new(Note::Fs3,  Q),                                // Gb quarter
-    Tone::new(Note::Ds3,  D8),                               // Eb dotted-eighth
-    Tone::new(Note::As3,  S),                                // Bb sixteenth
-
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::A3, S),   // A  sixteenth
+    Tone::new(Note::As3, E),  // Bb eighth
+    Tone::new(Note::Rest, E), // -  eighth rest
+    Tone::new(Note::Ds3, E),  // Eb eighth
+    Tone::new(Note::Fs3, Q),  // Gb quarter
+    Tone::new(Note::Ds3, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
     // ── Phrase 1 reprise ─────────────────────────────────────────────
     // G(Q) Eb(D8) Bb(S) G(H)
-    Tone::new(Note::G3,  Q),                                 // G  quarter
-    Tone::new(Note::Ds3, D8),                                // Eb dotted-eighth
-    Tone::new(Note::As3, S),                                 // Bb sixteenth
-    Tone::new(Note::G3,  H),                                 // G  half
+    Tone::new(Note::G3, Q),   // G  quarter
+    Tone::new(Note::Ds3, D8), // Eb dotted-eighth
+    Tone::new(Note::As3, S),  // Bb sixteenth
+    Tone::new(Note::G3, H),   // G  half
 ];
