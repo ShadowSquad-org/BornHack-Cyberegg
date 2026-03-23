@@ -1,7 +1,47 @@
 pub mod melodies;
 
-use embassy_nrf::gpio::Output;
+use embassy_nrf::pwm::{DutyCycle, SimplePwm};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::Timer;
+
+/// All available melodies, addressable by index.
+pub const MELODIES: &[&[Tone]] = &[
+    melodies::STARTUP,        // 0
+    melodies::RICK_INTRO,     // 1
+    melodies::IMPERIAL_MARCH, // 2
+];
+
+/// Signal a melody index to the buzzer task.
+/// If a melody is already playing it will be interrupted at the next note boundary.
+static MELODY_SIGNAL: Signal<CriticalSectionRawMutex, usize> = Signal::new();
+
+/// Trigger melody `index` (see [`MELODIES`]) without blocking the caller.
+/// Out-of-range indices are silently ignored.
+pub fn play(index: usize) {
+    if index < MELODIES.len() {
+        MELODY_SIGNAL.signal(index);
+    }
+}
+
+/// Embassy task that owns the buzzer and plays melodies on demand.
+/// Spawn once from `main`; use [`play`] to trigger melodies from anywhere.
+#[embassy_executor::task]
+pub async fn buzzer_task(mut buzzer: Buzzer<'static>) {
+    loop {
+        let index = MELODY_SIGNAL.wait().await;
+        if let Some(melody) = MELODIES.get(index) {
+            for &tone in *melody {
+                // A new melody arrived — finish this tone then switch.
+                buzzer.play(tone).await;
+                if MELODY_SIGNAL.signaled() {
+                    break;
+                }
+            }
+            buzzer.pwm.disable();
+        }
+    }
+}
 
 /// Musical note (equal temperament, A4 = 440 Hz)
 #[derive(Clone, Copy, PartialEq)]
@@ -51,37 +91,55 @@ macro_rules! tone {
     };
 }
 
-pub struct Buzzer<'a> {
-    pin: Output<'a>,
+/// PWM-driven passive buzzer.
+///
+/// The PWM peripheral generates the tone waveform autonomously — no
+/// per-half-period timer wakes needed. For each note `set_period` loads the
+/// correct COUNTERTOP, a 50% `DutyCycle` is set, and `enable()`/`disable()`
+/// bookend the `Timer::after_millis` wait. The idle pin level is LOW
+/// (configured via [`SimpleConfig`]), so silence and rests keep the pin low.
+pub struct Buzzer<'d> {
+    pwm: SimplePwm<'d>,
 }
 
-impl<'a> Buzzer<'a> {
-    pub fn new(pin: Output<'a>) -> Self {
-        Self { pin }
+impl<'d> Buzzer<'d> {
+    /// Take ownership of a [`SimplePwm`] configured for buzzer use.
+    pub fn new(pwm: SimplePwm<'d>) -> Self {
+        // PWM starts disabled; idle level is LOW (SimpleConfig default).
+        Self { pwm }
     }
 
-    /// Play a raw frequency (Hz) for a duration (ms). freq_hz = 0 is silence.
+    /// Play `freq_hz` for `duration_ms` milliseconds. `freq_hz = 0` is silence.
     pub async fn play_freq(&mut self, freq_hz: u32, duration_ms: u32) {
-        if freq_hz == 0 || duration_ms == 0 {
+        if freq_hz == 0 {
+            // Rest: pin stays LOW (PWM disabled), just wait.
             Timer::after_millis(duration_ms as u64).await;
             return;
         }
-        let half_period_us = 500_000u32 / freq_hz;
-        let cycles = (freq_hz as u64 * duration_ms as u64) / 1000;
-        for _ in 0..cycles {
-            self.pin.set_high();
-            Timer::after_micros(half_period_us as u64).await;
-            self.pin.set_low();
-            Timer::after_micros(half_period_us as u64).await;
-        }
+
+        // set_period computes COUNTERTOP = PWM_CLK / freq (default Div16 → 1 MHz base).
+        self.pwm.set_period(freq_hz);
+        // Enable before set_duty so that sync_duty_cyles_to_peripheral fires SEQSTART
+        // while the peripheral is enabled — it then waits for SEQEND, guaranteeing the
+        // waveform is loaded before the timer starts.  (new_inner already enables, but
+        // disable() in a previous note turns it off.)
+        self.pwm.enable();
+        // 50% square wave: duty = COUNTERTOP / 2.
+        // DutyCycle::normal(v): output HIGH when counter >= v.
+        let duty = DutyCycle::normal(self.pwm.max_duty() / 2);
+        self.pwm.set_duty(0, duty);
+
+        Timer::after_millis(duration_ms as u64).await;
+
+        self.pwm.disable(); // pin returns to idle LOW
     }
 
-    /// Play a single Tone. Use `Note::Rest` for explicit pauses between notes.
+    /// Play a single [`Tone`].
     pub async fn play(&mut self, tone: Tone) {
         self.play_freq(tone.note.freq_hz(), tone.duration_ms).await;
     }
 
-    /// Play a sequence of Tones in order.
+    /// Play a slice of [`Tone`]s in order.
     pub async fn play_melody(&mut self, melody: &[Tone]) {
         for &tone in melody {
             self.play(tone).await;

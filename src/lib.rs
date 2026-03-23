@@ -1,15 +1,25 @@
 #![cfg_attr(feature = "embassy", no_std)]
 #![cfg_attr(feature = "embassy", no_main)]
 
+#[derive(Debug, defmt::Format, PartialEq)]
+pub enum ScreenError {
+    NotFound,
+    OutOfBounds,
+    InvalidScreen,
+}
+
 #[cfg(feature = "embassy")]
 pub mod fw;
 
 use core::cell::{Ref, RefCell};
 
 use core::result::{Result, Result::Ok};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_10X20},
+    mono_font::{
+        MonoTextStyle,
+        ascii::{FONT_6X9, FONT_7X13, FONT_7X13_BOLD, FONT_10X20},
+    },
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -63,33 +73,45 @@ pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
 // Conditional imports based on feature
 #[cfg(feature = "embassy")]
-use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
-// #[cfg(feature = "embassy")]
-// use trouble_host::prelude::ad_types::DEVICE_ID;
+use embassy_sync::blocking_mutex::{
+    Mutex,
+    raw::{CriticalSectionRawMutex, ThreadModeRawMutex},
+};
+#[cfg(feature = "embassy")]
+use embassy_sync::signal::Signal;
 
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
-// Have a struct here that tracks the state of the display
-// this struct needs to be async safe
-#[derive()]
-pub struct DisplayState<const N: usize> {
-    // Add fields here to track the state of the display
-    // e.g., button states, current screen, etc.
-    menu_items: [&'static str; N],
-    menu_pos: u8,
-    fire_button: bool,
+pub struct MenuItem {
+    pub label: fn() -> &'static str,
+    pub action: fn(),
 }
 
-// Dead code allowed in this block
-#[allow(dead_code)]
-impl<const N: usize> DisplayState<N> {
-    pub fn set_menu_pos(&mut self, pos: u8) {
-        self.menu_pos = pos;
-    }
+/// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
+pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
-    pub fn get_menu_pos(&self) -> u8 {
-        self.menu_pos
+fn label_boost_rx() -> &'static str {
+    if BOOSTED_RX_GAIN.load(Ordering::Relaxed) {
+        "Boost RX: ON"
+    } else {
+        "Boost RX: OFF"
+    }
+}
+
+fn action_boost_rx() {
+    let current = BOOSTED_RX_GAIN.load(Ordering::Relaxed);
+    BOOSTED_RX_GAIN.store(!current, Ordering::Relaxed);
+}
+
+pub struct ScreenState {
+    pub items: &'static [MenuItem],
+    pub menu_pos: u8,
+}
+
+impl ScreenState {
+    pub const fn new(items: &'static [MenuItem]) -> Self {
+        Self { items, menu_pos: 0 }
     }
 
     pub fn menu_up(&mut self) {
@@ -99,45 +121,184 @@ impl<const N: usize> DisplayState<N> {
     }
 
     pub fn menu_down(&mut self) {
-        if self.menu_pos + 1 < N as u8 {
+        if (self.menu_pos as usize) + 1 < self.items.len() {
             self.menu_pos += 1;
         }
     }
 
-    pub fn set_fire_button(&mut self, fire: bool) {
-        self.fire_button = fire;
+    pub fn current_item(&self) -> &MenuItem {
+        &self.items[self.menu_pos as usize]
+    }
+}
+
+/// Top-level display state: M screens each with their own item list and cursor position.
+///
+/// Up/down navigates items within the active screen.
+/// Left/right switches between screens, preserving each screen's cursor position.
+pub struct DisplayState<const M: usize> {
+    active_screen: u8,
+    screens: [ScreenState; M],
+}
+
+#[allow(dead_code)]
+impl<const M: usize> DisplayState<M> {
+    pub const fn new(screens: [ScreenState; M]) -> Self {
+        Self {
+            active_screen: 0,
+            screens,
+        }
     }
 
-    pub fn get_fire_button(&self) -> bool {
-        self.fire_button
+    pub fn screen_left(&mut self) {
+        if self.active_screen > 0 {
+            self.active_screen -= 1;
+        }
+    }
+
+    pub fn screen_right(&mut self) {
+        if (self.active_screen as usize) + 1 < M {
+            self.active_screen += 1;
+        }
+    }
+
+    pub fn active_screen(&self) -> u8 {
+        self.active_screen
+    }
+
+    pub fn current_screen(&self) -> &ScreenState {
+        &self.screens[self.active_screen as usize]
+    }
+
+    pub fn current_screen_mut(&mut self) -> &mut ScreenState {
+        &mut self.screens[self.active_screen as usize]
+    }
+
+    pub fn menu_up(&mut self) {
+        self.current_screen_mut().menu_up();
+    }
+
+    pub fn menu_down(&mut self) {
+        self.current_screen_mut().menu_down();
+    }
+
+    pub fn fire(&self) {
+        (self.current_screen().current_item().action)();
     }
 
     pub fn get_current_menu_item(&self) -> Option<&'static str> {
-        self.menu_items.get(self.menu_pos as usize).map(|&s| s)
+        Some((self.current_screen().current_item().label)())
     }
 
     pub fn get_menu_item(&self, index: usize) -> Option<&'static str> {
-        self.menu_items.get(index).map(|&s| s)
+        self.current_screen().items.get(index).map(|i| (i.label)())
     }
 }
+
+static MAIN_ITEMS: [MenuItem; 3] = [
+    MenuItem {
+        label: || "Item 1",
+        action: || {},
+    },
+    MenuItem {
+        label: || "Item 2",
+        action: || {},
+    },
+    MenuItem {
+        label: label_boost_rx,
+        action: action_boost_rx,
+    },
+];
+
+static LORA_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "LoRa",
+    action: || {},
+}];
+
+static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Adverts",
+    action: || {},
+}];
 
 // Embassy version with ThreadModeRawMutex
 #[cfg(feature = "embassy")]
 pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<3>>> =
-    Mutex::new(RefCell::new(DisplayState {
-        menu_items: ["Item 1", "Item 2", "Item 3"],
-        menu_pos: 0,
-        fire_button: false,
-    }));
+    Mutex::new(RefCell::new(DisplayState::new([
+        ScreenState::new(&MAIN_ITEMS),
+        ScreenState::new(&LORA_ITEMS),
+        ScreenState::new(&ADVERT_ITEMS),
+    ])));
 
 // Simulator version with std::sync::Mutex
 #[cfg(feature = "simulator")]
 pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<3>>> =
-    Mutex::new(RefCell::new(DisplayState {
-        menu_items: ["Item 1", "Item 2", "Item 3"],
-        menu_pos: 0,
-        fire_button: false,
-    }));
+    Mutex::new(RefCell::new(DisplayState::new([
+        ScreenState::new(&MAIN_ITEMS),
+        ScreenState::new(&LORA_ITEMS),
+        ScreenState::new(&ADVERT_ITEMS),
+    ])));
+
+/// Last decoded LoRa group-text message, updated by the meshcore listener task.
+#[cfg(feature = "embassy")]
+pub struct LoraMessage {
+    pub channel: &'static str,
+    pub sender: heapless::String<32>,
+    pub text: heapless::String<128>,
+    pub timestamp: u32,
+    pub rssi: i16,
+}
+
+#[cfg(feature = "embassy")]
+pub static LAST_LORA_MSG: Mutex<CriticalSectionRawMutex, RefCell<Option<LoraMessage>>> =
+    Mutex::new(RefCell::new(None));
+
+/// Fired by the meshcore listener task whenever a new message is stored in LAST_LORA_MSG.
+#[cfg(feature = "embassy")]
+pub static LORA_MSG_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Last received MeshCore advert, updated by the meshcore listener task.
+#[cfg(feature = "embassy")]
+pub struct LastAdvert {
+    /// Device name, or empty string if the advert carried no name.
+    pub name: heapless::String<32>,
+    /// First 8 bytes of the public key as lowercase hex (16 chars).
+    pub pub_key_hex: heapless::String<16>,
+    pub role: u8,
+    pub sig_ok: bool,
+    pub rssi: i16,
+}
+
+#[cfg(feature = "embassy")]
+pub static LAST_ADVERT: Mutex<CriticalSectionRawMutex, RefCell<Option<LastAdvert>>> =
+    Mutex::new(RefCell::new(None));
+
+/// Fired by the meshcore listener task whenever a new advert is stored in LAST_ADVERT.
+#[cfg(feature = "embassy")]
+pub static ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Last received private message (TxtMsg), updated by the meshcore listener task.
+#[cfg(feature = "embassy")]
+pub struct LastPm {
+    /// Sender's name from the contacts list, or hex pub-key prefix if unknown.
+    pub sender_name: heapless::String<32>,
+    pub text: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }>,
+    pub timestamp: u32,
+    pub rssi: i16,
+}
+
+#[cfg(feature = "embassy")]
+pub static LAST_PM: Mutex<CriticalSectionRawMutex, RefCell<Option<LastPm>>> =
+    Mutex::new(RefCell::new(None));
+
+/// Fired by the meshcore listener task whenever a new PM is stored in LAST_PM.
+#[cfg(feature = "embassy")]
+pub static PM_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Active BLE pairing passkey (6-digit, 0–999999). `u32::MAX` means no pairing in progress.
+pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
+#[cfg(feature = "embassy")]
+pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Macro for embassy - immutable access
 #[cfg(feature = "embassy")]
@@ -180,8 +341,23 @@ macro_rules! with_display_state_mut {
 // Position of the animated circle
 static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
-/// Draw your graphics to any display that implements DrawTarget
+/// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let active = with_display_state!(|state: &Ref<'_, DisplayState<3>>| state.active_screen());
+    match active {
+        0 => draw_screen_main(display, health_str, bat_prc),
+        #[cfg(feature = "embassy")]
+        1 => draw_screen_lora(display, bat_prc),
+        #[cfg(feature = "embassy")]
+        2 => draw_screen_advert(display, bat_prc),
+        _ => draw_screen_main(display, health_str, bat_prc),
+    }
+}
+
+fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -212,18 +388,18 @@ where
         .into_styled(PrimitiveStyle::with_stroke(RED, 2))
         .draw(display)?;
 
-    // Text: menu item centered, health status bottom-left
-    let text_style = MonoTextStyle::new(&FONT_10X20, WHITE);
+    let text_style = MonoTextStyle::new(&FONT_7X13, WHITE);
     let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
-    let item_text =
-        // DISPLAY_STATE.lock(|f| -> &'static str { f.borrow().get_current_menu_item().unwrap() });
-        with_display_state!(| state: &Ref<'_, DisplayState<3>> | state.get_current_menu_item().unwrap());
+    let bat_style = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let item_text = with_display_state!(|state: &Ref<'_, DisplayState<3>>| state
+        .get_current_menu_item()
+        .unwrap());
 
     let bat_text = format!(4; "{}%", bat_prc).unwrap();
     Text::with_text_style(
         &bat_text,
         Point::new(110, 16),
-        text_style_inverted,
+        bat_style,
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )
     .draw(display)?;
@@ -235,21 +411,230 @@ where
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )
     .draw(display)?;
-    let text = Text::with_text_style(
-        item_text,
-        display.bounding_box().center(),
-        text_style,
-        centered,
-    );
-    text.draw(display)?;
-    // Print health status string and print it in the bottom left corner
-    let health = Text::with_text_style(
+    let passkey_val = BLE_PASSKEY.load(Ordering::Relaxed);
+    if passkey_val != u32::MAX {
+        let pin_label_style = MonoTextStyle::new(&FONT_7X13, WHITE);
+        let pin_code_style = MonoTextStyle::new(&FONT_10X20, WHITE);
+        let center = display.bounding_box().center();
+        let code_str = format!(8; "{:06}", passkey_val).unwrap();
+        Text::with_text_style(
+            "BT PIN:",
+            Point::new(center.x, center.y - 14),
+            pin_label_style,
+            centered,
+        )
+        .draw(display)?;
+        Text::with_text_style(
+            &code_str,
+            center,
+            pin_code_style,
+            centered,
+        )
+        .draw(display)?;
+    } else {
+        Text::with_text_style(
+            item_text,
+            display.bounding_box().center(),
+            text_style,
+            centered,
+        )
+        .draw(display)?;
+    }
+    Text::with_text_style(
         health_str,
         Point::new(10, 128),
         text_style_inverted,
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-    );
-    health.draw(display)?;
+    )
+    .draw(display)?;
 
     Ok(())
+}
+
+/// Draw `text` line by line, wrapping at `chars_per_line` characters.
+fn draw_wrapped<D>(
+    display: &mut D,
+    text: &str,
+    x: i32,
+    y_start: i32,
+    line_height: i32,
+    chars_per_line: usize,
+    style: MonoTextStyle<'_, TriColor>,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+    let mut remaining = text;
+    let mut y = y_start;
+    while !remaining.is_empty() {
+        let split = remaining
+            .char_indices()
+            .nth(chars_per_line)
+            .map(|(i, _)| i)
+            .unwrap_or(remaining.len());
+        let (line, rest) = remaining.split_at(split);
+        Text::with_text_style(line, Point::new(x, y), style, bottom).draw(display)?;
+        y += line_height;
+        remaining = rest;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embassy")]
+fn draw_screen_lora<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_rssi = MonoTextStyle::new(&FONT_6X9, BLACK);
+    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+
+    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    Text::with_text_style(
+        &bat_text,
+        Point::new(148, 14),
+        style_msg,
+        TextStyleBuilder::new()
+            .baseline(Baseline::Bottom)
+            .alignment(Alignment::Right)
+            .build(),
+    )
+    .draw(display)?;
+
+    LAST_LORA_MSG.lock(|cell| -> Result<(), D::Error> {
+        match *cell.borrow() {
+            None => {
+                Text::with_text_style(
+                    "No messages",
+                    display.bounding_box().center(),
+                    style_msg,
+                    TextStyleBuilder::new()
+                        .baseline(Baseline::Middle)
+                        .alignment(Alignment::Center)
+                        .build(),
+                )
+                .draw(display)?;
+            }
+            Some(ref msg) => {
+                // Row 1: channel name (bold)
+                Text::with_text_style(msg.channel, Point::new(4, 14), style_bold, bottom)
+                    .draw(display)?;
+
+                // Row 2: sender nickname (bold)
+                Text::with_text_style(msg.sender.as_str(), Point::new(4, 28), style_bold, bottom)
+                    .draw(display)?;
+
+                // Divider
+                Rectangle::new(Point::new(0, 30), Size::new(152, 1))
+                    .into_styled(PrimitiveStyle::with_fill(BLACK))
+                    .draw(display)?;
+
+                // Rows 3+: message text wrapped at 21 chars, 14px per line
+                draw_wrapped(display, msg.text.as_str(), 4, 44, 14, 21, style_msg)?;
+
+                // RSSI at bottom
+                let rssi_text = format!(12; "{} dBm", msg.rssi).unwrap();
+                Text::with_text_style(&rssi_text, Point::new(4, 152), style_rssi, bottom)
+                    .draw(display)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(feature = "embassy")]
+fn draw_screen_advert<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_small = MonoTextStyle::new(&FONT_6X9, BLACK);
+    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+
+    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    Text::with_text_style(
+        &bat_text,
+        Point::new(148, 14),
+        style_msg,
+        TextStyleBuilder::new()
+            .baseline(Baseline::Bottom)
+            .alignment(Alignment::Right)
+            .build(),
+    )
+    .draw(display)?;
+
+    LAST_ADVERT.lock(|cell| -> Result<(), D::Error> {
+        match *cell.borrow() {
+            None => {
+                Text::with_text_style(
+                    "No adverts",
+                    display.bounding_box().center(),
+                    style_msg,
+                    TextStyleBuilder::new()
+                        .baseline(Baseline::Middle)
+                        .alignment(Alignment::Center)
+                        .build(),
+                )
+                .draw(display)?;
+            }
+            Some(ref adv) => {
+                // Row 1: device name (bold) or "Unknown"
+                let name = if adv.name.is_empty() {
+                    "Unknown"
+                } else {
+                    adv.name.as_str()
+                };
+                Text::with_text_style(name, Point::new(4, 14), style_bold, bottom).draw(display)?;
+
+                // Row 2: role
+                let role = match adv.role {
+                    1 => "Chat Node",
+                    2 => "Repeater",
+                    3 => "Room Server",
+                    4 => "Sensor",
+                    _ => "Unknown role",
+                };
+                Text::with_text_style(role, Point::new(4, 28), style_msg, bottom).draw(display)?;
+
+                // Divider
+                Rectangle::new(Point::new(0, 30), Size::new(152, 1))
+                    .into_styled(PrimitiveStyle::with_fill(BLACK))
+                    .draw(display)?;
+
+                // Key prefix (16 hex chars = 8 bytes)
+                Text::with_text_style("Key:", Point::new(4, 44), style_small, bottom)
+                    .draw(display)?;
+                Text::with_text_style(
+                    adv.pub_key_hex.as_str(),
+                    Point::new(4, 54),
+                    style_small,
+                    bottom,
+                )
+                .draw(display)?;
+
+                // Signature validity
+                let sig_text = if adv.sig_ok {
+                    "Sig: OK"
+                } else {
+                    "Sig: INVALID"
+                };
+                let sig_style = if adv.sig_ok {
+                    MonoTextStyle::new(&FONT_6X9, BLACK)
+                } else {
+                    MonoTextStyle::new(&FONT_6X9, RED)
+                };
+                Text::with_text_style(sig_text, Point::new(4, 68), sig_style, bottom)
+                    .draw(display)?;
+
+                // RSSI at bottom
+                let rssi_text = format!(12; "{} dBm", adv.rssi).unwrap();
+                Text::with_text_style(&rssi_text, Point::new(4, 152), style_small, bottom)
+                    .draw(display)?;
+            }
+        }
+        Ok(())
+    })
 }

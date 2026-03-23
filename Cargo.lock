@@ -445,6 +445,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ed25519-compact"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ce99a9e19c84beb4cc35ece85374335ccc398240712114c85038319ed709bd"
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1134,6 +1140,7 @@ name = "meshcore"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "ed25519-compact",
  "heapless 0.9.2",
  "hmac",
  "sha2",

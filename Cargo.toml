@@ -64,7 +64,7 @@ uf2conv = "0.1"
 
 [profile.dev]
 debug = 2
-opt-level = 1
+opt-level = "s"
 lto = false
 
 [profile.release]

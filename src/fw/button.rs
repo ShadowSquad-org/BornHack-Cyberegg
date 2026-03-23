@@ -69,15 +69,27 @@ pub async fn run_buttons(
                 update_button_health!(joy_down, down);
             }
             4 => {
+                if joy_left.is_low() {
+                    btn_sender.send(index as u8);
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left());
+                }
                 defmt::info!("Joystick left");
                 update_button_health!(joy_left, left);
             }
             5 => {
+                if joy_right.is_low() {
+                    btn_sender.send(index as u8);
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
+                }
                 defmt::info!("Joystick right");
                 update_button_health!(joy_right, right);
             }
             6 => {
-                DISPLAY_STATE.lock(|f| f.borrow_mut().set_fire_button(joy_fire.is_low()));
+                if joy_fire.is_low() {
+                    let action = DISPLAY_STATE.lock(|f| f.borrow().current_screen().current_item().action);
+                    action();
+                    btn_sender.send(index as u8);
+                }
                 defmt::info!("Joystick fire: {}", joy_fire.is_low());
                 update_button_health!(joy_fire, fire);
             }

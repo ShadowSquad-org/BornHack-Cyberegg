@@ -1,5 +1,6 @@
 use core::convert::Infallible;
 use core::fmt::Debug;
+use core::sync::atomic::Ordering;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -14,10 +15,10 @@ use embassy_time::Delay;
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 
-use super::health::SYSTEM_HEALTH;
 use embassy_futures::select::{Either, select};
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
+use sx126x::reg::Register;
 use sx126x::op::PacketType::LoRa;
 use sx126x::op::irq::IrqMaskBit::{
     CrcErr, HeaderError, HeaderValid, PreambleDetected, RxDone, SyncwordValid, Timeout, TxDone,
@@ -26,9 +27,6 @@ use sx126x::op::rxtx::DeviceSel::SX1262;
 use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
 use sx126x::op::*;
-
-use crate::{health_err, update_health};
-use meshcore::channel;
 
 // ---------------------------------------------------------------------------
 // MeshCore LoRa configuration
@@ -87,17 +85,17 @@ pub enum LoraError {
 }
 
 pub struct SimpleLoRa<'a> {
-    lora: SX126x<
+    pub(super) lora: SX126x<
         ExclusiveDevice<Spim<'a>, Output<'a>, Delay>,
         Output<'a>,
         Input<'a>,
         Output<'a>,
         AlwaysHigh,
     >,
-    tx_timeout: RxTxTimeout,
-    crc_type: LoRaCrcType,
-    preamble_len: u16,
-    dio1: Input<'a>,
+    pub(super) tx_timeout: RxTxTimeout,
+    pub(super) crc_type: LoRaCrcType,
+    pub(super) preamble_len: u16,
+    pub(super) dio1: Input<'a>,
 }
 
 impl<'a> SimpleLoRa<'a> {
@@ -120,7 +118,7 @@ impl<'a> SimpleLoRa<'a> {
         let nss = Output::new(nss_pin, Level::High, OutputDrive::Standard);
         let nreset = Output::new(nrst_pin, Level::High, OutputDrive::Standard);
         let busy = Input::new(busy_pin, Pull::None);
-        let ant = Output::new(ant_pin, Level::High, OutputDrive::Standard);
+        let ant = Output::new(ant_pin, Level::Low, OutputDrive::Standard);
         let dio1 = Input::new(dio1_pin, Pull::None);
 
         // AlwaysHigh is a dummy DIO1 for the sx126x struct; real async DIO1 waiting
@@ -134,15 +132,33 @@ impl<'a> SimpleLoRa<'a> {
 
         lora.set_rx(RxTxTimeout::continuous_rx())
             .map_err(|_| LoraError::Spi("lora set_rx failed"))?;
-        lora.set_ant_enabled(true).unwrap();
+        lora.set_ant_enabled(false).ok(); // RF switch → RX path (LOW)
 
-        Ok(SimpleLoRa {
+        let mut radio = SimpleLoRa {
             lora,
             tx_timeout: 0.into(),
             crc_type: LoRaCrcType::CrcOn,
             preamble_len: config.preamble_len,
             dio1,
-        })
+        };
+        radio.apply_rx_gain();
+        Ok(radio)
+    }
+
+    /// Write the RxGain register according to the BOOSTED_RX_GAIN flag.
+    fn apply_rx_gain(&mut self) {
+        let value = if crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed) { 0x96u8 } else { 0x94u8 };
+        self.lora.write_register(Register::RxGain, &[value]).ok();
+    }
+
+    /// Route the RF switch to the RX path (pin LOW).
+    fn rf_switch_rx(&mut self) {
+        self.lora.set_ant_enabled(false).ok();
+    }
+
+    /// Route the RF switch to the TX path (pin HIGH).
+    fn rf_switch_tx(&mut self) {
+        self.lora.set_ant_enabled(true).ok();
     }
 
     /// Wait for the chip to enter RX mode (0x05), polling every 50 ms for up to 500 ms.
@@ -152,7 +168,8 @@ impl<'a> SimpleLoRa<'a> {
         // check, so sending the command while BUSY is asserted would silently drop it.
         self.lora.wait_on_busy().ok();
         self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
-        self.lora.set_ant_enabled(true).ok();
+        self.apply_rx_gain();
+        self.rf_switch_rx();
 
         for i in 0..10u8 {
             Timer::after_millis(50).await;
@@ -207,7 +224,8 @@ impl<'a> SimpleLoRa<'a> {
                 self.lora
                     .set_rx(RxTxTimeout::continuous_rx())
                     .map_err(|_| LoraError::Timeout)?;
-                self.lora.set_ant_enabled(true).unwrap();
+                self.apply_rx_gain();
+                self.rf_switch_rx();
                 return Ok(None);
             }
         }
@@ -284,15 +302,16 @@ impl<'a> SimpleLoRa<'a> {
         self.lora
             .set_rx(RxTxTimeout::continuous_rx())
             .map_err(|_| LoraError::Timeout)?;
-        self.lora.set_ant_enabled(true).unwrap();
+        self.apply_rx_gain();
+        self.rf_switch_rx();
 
         Ok(result)
     }
 
-    pub async fn send_message(&mut self, message: &str) -> Result<(), LoraError> {
-        self.lora.set_ant_enabled(true).unwrap();
+    pub async fn send_message(&mut self, message: &[u8]) -> Result<(), LoraError> {
+        self.rf_switch_tx();
 
-        self.lora.write_buffer(0x00, message.as_bytes()).unwrap();
+        self.lora.write_buffer(0x00, message).unwrap();
         let packet_params = LoRaPacketParams::default()
             .set_preamble_len(self.preamble_len)
             .set_payload_len(message.len() as u8)
@@ -305,240 +324,9 @@ impl<'a> SimpleLoRa<'a> {
 
         self.dio1.wait_for_rising_edge().await;
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
-        self.lora.set_ant_enabled(false).unwrap();
+        self.rf_switch_rx();
 
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MeshCore listener task
-// ---------------------------------------------------------------------------
-
-/// Listen for MeshCore packets and log `public` channel messages to defmt.
-///
-/// Configures the SX1262 using [`MeshCoreConfig::UK_NARROW_BAND`] and enters
-/// a continuous receive loop.  Every received packet is parsed with the
-/// `meshcore` vendor crate.  Group-text messages (`GrpTxt`) are logged with
-/// their channel hash and text; node advertisements are logged with device
-/// name and role; all other types are logged as raw hex.
-///
-/// **Channel key**: MeshCore encrypts group text with AES-128-ECB.  Set
-/// `PUBLIC_CHANNEL_KEY` to the correct 16-byte key for your network.
-/// The MeshCore app encodes the key in base64 under *Settings → Channels*.
-/// Until the key is configured, the raw ciphertext bytes are logged instead.
-pub async fn run_meshcore_listener<'a>(
-    spi: Peri<'a, peripherals::SPI2>,
-    sck_pin: Peri<'a, AnyPin>,
-    mosi_pin: Peri<'a, AnyPin>,
-    miso_pin: Peri<'a, AnyPin>,
-    nrst_pin: Peri<'a, AnyPin>,
-    nss_pin: Peri<'a, AnyPin>,
-    busy_pin: Peri<'a, AnyPin>,
-    dio1_pin: Peri<'a, AnyPin>,
-    ant_pin: Peri<'a, AnyPin>,
-) -> ! {
-    update_health!(|h| h.lora.set_ok("Ok when started."));
-
-    // Adjust MeshCoreConfig::UK_NARROW_BAND or replace with your own config.
-    let config = &MeshCoreConfig::UK_NARROW_BAND;
-
-    let mut lora = match SimpleLoRa::new(
-        spi, sck_pin, mosi_pin, miso_pin, nrst_pin, nss_pin, busy_pin, dio1_pin, ant_pin, config,
-    ) {
-        Ok(l) => {
-            // Hardware test: SX1262 responded correctly to init sequence.
-            SYSTEM_HEALTH.lock(|cell| {
-                cell.borrow_mut().lora.set_ok("SX1262 init OK");
-            });
-            l
-        }
-        Err(e) => {
-            health_err!(lora, "LoRa init failed");
-            defmt::error!("LoRa init failed: {:?}", e);
-            loop {
-                Timer::after_millis(60_000).await;
-            }
-        }
-    };
-
-    // Poll chip_mode every 50ms for up to 500ms to confirm the chip entered RX.
-    // set_rx() in sx126x 0.3.0 has no wait_on_busy(), so the command may be
-    // dropped if the chip is still busy after init. ensure_rx() re-issues it.
-    if !lora.ensure_rx().await {
-        defmt::error!(
-            "SX1262 failed to enter RX mode after 500ms — check crystal/wiring"
-        );
-    }
-
-    defmt::info!(
-        "MeshCore listener ready — freq={=u32}Hz BW=62.5kHz SF=8 CR=4/5 sync={=u16:#06x} preamble={=u16}",
-        config.frequency_hz,
-        config.sync_word,
-        config.preamble_len,
-    );
-
-    // Build the channel list from names — no keys are hardcoded here.
-    // Add or remove entries to match the channels you want to monitor.
-    let channels = [
-        KnownChannel::from_public(),
-        KnownChannel::from_hashtag("#test"),
-        KnownChannel::from_hashtag("#prut"),
-        KnownChannel::from_hashtag("#gezellig"),
-        KnownChannel::from_hashtag("#leiden"),
-    ];
-
-    let mut raw = [0u8; 255];
-
-    loop {
-        match lora.receive_packet(&mut raw).await {
-            Ok(None) => { /* timeout or CRC error — already re-armed */ }
-
-            Ok(Some((len, rssi))) => {
-                let frame = &raw[..len];
-
-                match meshcore::packet::deserialize(frame) {
-                    Err(_) => {
-                        defmt::info!(
-                            "MeshCore [raw {=usize}B {=i16}dBm]: {=[u8]}",
-                            len,
-                            rssi,
-                            frame
-                        );
-                    }
-
-                    Ok(msg) => {
-                        update_health!(|h| h.lora.set_ok("Packet received."));
-                        use meshcore::packet::PayloadType;
-                        match msg.payload_type {
-                            PayloadType::GrpTxt  => log_grp_txt(&msg.payload, rssi, &channels),
-                            PayloadType::TxtMsg  => log_grp_txt(&msg.payload, rssi, &channels),
-                            PayloadType::Advert  => log_advert(&msg.payload, rssi),
-                            PayloadType::Ack     => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
-                            other => {
-                                defmt::info!(
-                                    "MeshCore type={=u8} [{=usize}B {=i16}dBm]: {=[u8]:x}",
-                                    other.to_u8(),
-                                    len,
-                                    rssi,
-                                    frame
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            Err(e) => {
-                defmt::error!("LoRa RX error: {:?}", e);
-                health_err!(lora, "LoRa RX error");
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Per-type log helpers
-// ---------------------------------------------------------------------------
-
-/// A MeshCore channel with its derived key and hash.
-struct KnownChannel {
-    /// Human-readable label used in log output (e.g. "public" or "#test").
-    name: &'static str,
-    key:  [u8; meshcore::CIPHER_KEY_SIZE],
-    /// SHA-256(key)[0] — matches the channel_hash byte in GrpTxt packets.
-    hash: u8,
-}
-
-impl KnownChannel {
-    /// The default public channel (spec-defined fixed PSK).
-    fn from_public() -> Self {
-        let key = channel::PUBLIC_CHANNEL_KEY;
-        Self { name: "public", key, hash: channel::hash_from_key(&key) }
-    }
-
-    /// A hashtag channel derived from its name (e.g. `"#test"`).
-    fn from_hashtag(name: &'static str) -> Self {
-        let key = channel::key_from_hashtag(name);
-        Self { name, key, hash: channel::hash_from_key(&key) }
-    }
-}
-
-fn log_grp_txt(payload: &[u8], rssi: i16, channels: &[KnownChannel]) {
-    use meshcore::payload::grp_txt;
-
-    let grp = match grp_txt::deserialize(payload) {
-        Ok(g) => g,
-        Err(_) => {
-            defmt::warn!("GrpTxt: failed to parse payload");
-            return;
-        }
-    };
-
-    // Find the first channel whose hash matches the packet.
-    let ch = match channels.iter().find(|c| c.hash == grp.channel_hash) {
-        Some(c) => c,
-        None => {
-            defmt::info!(
-                "MeshCore GrpTxt [channel={=u8} {=i16}dBm] (unknown channel): {=[u8]}",
-                grp.channel_hash,
-                rssi,
-                &grp.data[..]
-            );
-            return;
-        }
-    };
-
-    if grp_txt::verify_mac(&ch.key, &grp).is_err() {
-        defmt::warn!(
-            "MeshCore GrpTxt [channel={=u8}] MAC mismatch on channel {=str}",
-            grp.channel_hash,
-            ch.name
-        );
-        return;
-    }
-
-    match grp_txt::decrypt(&ch.key, &grp) {
-        Ok(dec) => {
-            let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
-            defmt::info!(
-                "MeshCore GrpTxt [{=str} ts={=u32} {=i16}dBm]: {=str}",
-                ch.name,
-                dec.timestamp,
-                rssi,
-                text
-            );
-        }
-        Err(_) => {
-            defmt::warn!("GrpTxt: decryption failed on channel {=str}", ch.name);
-        }
-    }
-}
-
-fn log_advert(payload: &[u8], rssi: i16) {
-    use meshcore::payload::advert;
-
-    match advert::deserialize(payload) {
-        Ok(a) => {
-            if let Some(ref name) = a.name {
-                defmt::info!(
-                    "MeshCore advert [{=i16}dBm] role={=u8} name={=[u8]}",
-                    rssi,
-                    a.role.to_u8(),
-                    &name[..]
-                );
-            } else {
-                defmt::info!(
-                    "MeshCore advert [{=i16}dBm] role={=u8} key={=[u8]}",
-                    rssi,
-                    a.role.to_u8(),
-                    &a.pub_key[..8]
-                );
-            }
-        }
-        Err(_) => {
-            defmt::warn!("Advert: failed to parse payload");
-        }
     }
 }
 
@@ -546,7 +334,7 @@ fn log_advert(payload: &[u8], rssi: i16) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn build_lora_config(config: &MeshCoreConfig) -> LoRaConfig {
+pub(super) fn build_lora_config(config: &MeshCoreConfig) -> LoRaConfig {
     let mod_params = LoraModParams::default()
         .set_spread_factor(config.spread_factor)
         .set_bandwidth(config.bandwidth)
@@ -597,7 +385,7 @@ fn build_lora_config(config: &MeshCoreConfig) -> LoRaConfig {
 /// Dummy DIO1 pin passed to SX126x.  Reports "always high" so that the
 /// library's internal wait_on_dio1 spin-loop exits immediately.
 /// Real interrupt waiting is done externally with `wait_for_rising_edge()`.
-struct AlwaysHigh;
+pub(super) struct AlwaysHigh;
 
 impl embedded_hal::digital::ErrorType for AlwaysHigh {
     type Error = Infallible;

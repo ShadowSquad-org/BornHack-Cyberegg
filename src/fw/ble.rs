@@ -3,6 +3,8 @@
 //! Exposes a Nordic UART Service (NUS) for MeshCore companion app connectivity.
 //! Bonding keys are persisted to QSPI flash via `flash_task`; see flash.rs.
 
+use core::sync::atomic::Ordering;
+
 use embassy_executor::Spawner;
 use embassy_nrf::{Peri, bind_interrupts, mode::Blocking, peripherals, rng};
 use nrf_mpsl::MultiprotocolServiceLayer;
@@ -153,7 +155,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>) {
     let stack = trouble_host::new(sdc, resources)
         .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()));
 
-    stack.set_io_capabilities(IoCapabilities::NoInputNoOutput);
+    stack.set_io_capabilities(IoCapabilities::DisplayOnly);
 
     // Restore bonds loaded from flash by flash_task.
     // Spin briefly if flash_task hasn't populated INITIAL_BONDS yet.
@@ -262,14 +264,25 @@ async fn nus_peripheral_loop<C>(
             match gatt_conn.next().await {
                 GattConnectionEvent::Disconnected { reason } => {
                     defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
+                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                    crate::BLE_PAIRING_SIGNAL.signal(());
                     break;
+                }
+                GattConnectionEvent::PassKeyDisplay(key) => {
+                    defmt::info!("BLE: pairing passkey: {:06}", key.value());
+                    crate::BLE_PASSKEY.store(key.value(), Ordering::Relaxed);
+                    crate::BLE_PAIRING_SIGNAL.signal(());
                 }
                 GattConnectionEvent::PairingComplete { bond: Some(info), .. } => {
                     defmt::info!("BLE: pairing complete — persisting bond");
+                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                    crate::BLE_PAIRING_SIGNAL.signal(());
                     let _ = bond_tx.try_send(BondCmd::Save(info));
                 }
                 GattConnectionEvent::PairingFailed(e) => {
                     defmt::warn!("BLE: pairing failed: {:?}", defmt::Debug2Format(&e));
+                    crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                    crate::BLE_PAIRING_SIGNAL.signal(());
                 }
                 GattConnectionEvent::Gatt { event: GattEvent::Write(write) } => {
                     if write.handle() == server.nus.rx.handle {

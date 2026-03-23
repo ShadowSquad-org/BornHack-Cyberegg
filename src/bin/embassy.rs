@@ -16,16 +16,18 @@ use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
+use hello_graphics::fw::device_identity;
 use hello_graphics::fw::kv;
-use hello_graphics::fw::sx1262::run_meshcore_listener;
+use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
-    fw::buzzer::{Buzzer, melodies},
+    fw::buzzer::{Buzzer, buzzer_task, play as play_melody},
     fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
     fw::nfct::run_nfct,
 };
-use hello_graphics::{health_err, with_health};
+use embassy_nrf::pwm::SimplePwm;
+use hello_graphics::{ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, health_err, with_health};
 use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -84,6 +86,12 @@ async fn main(spawner: Spawner) {
         ),
     }
     spawner.must_spawn(bond_task());
+
+    // -----------------------------------------------------------------------
+    // MeshCore device identity (load from KV or generate via TRNG)
+    // Must happen before BLE init, which consumes p.RNG.
+    // -----------------------------------------------------------------------
+    let identity = device_identity::load_or_create(kv::namespace("meshcore")).await;
 
     // -----------------------------------------------------------------------
     // BLE (MPSL + SDC + TrouBLE peripheral task)
@@ -176,14 +184,10 @@ async fn main(spawner: Spawner) {
     defmt::info!("NFC initialized");
 
     defmt::info!("Initializing buzzer");
-    let mut buzzer = Buzzer::new(Output::new(
-        board!(p, buzzer),
-        Level::Low,
-        OutputDrive::Standard,
-    ));
-    buzzer.play_melody(melodies::STARTUP).await;
-    // buzzer.play_melody(melodies::IMPERIAL_MARCH).await;
-    defmt::info!("Buzzer initialized, startup melody played");
+    let buzzer = Buzzer::new(SimplePwm::new_1ch(p.PWM0, board!(p, buzzer), &Default::default()));
+    spawner.must_spawn(buzzer_task(buzzer));
+    play_melody(0); // 0 = STARTUP
+    defmt::info!("Buzzer task spawned, startup melody queued");
 
     defmt::info!("Initializing battery monitor");
     let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
@@ -249,8 +253,31 @@ async fn main(spawner: Spawner) {
             led_red.set_low();
             Timer::after_millis(50).await;
             led_red.set_high();
-            // Wait for button event to update EPD display
-            button_rcvr.changed().await;
+
+            // Wait for a button event, a new LoRa message, a new advert, or a BLE pairing event.
+            // Signal-driven redraws only fire when the relevant screen is active.
+            loop {
+                use embassy_futures::select::{select4, Either4};
+                match select4(
+                    button_rcvr.changed(),
+                    LORA_MSG_SIGNAL.wait(),
+                    ADVERT_SIGNAL.wait(),
+                    BLE_PAIRING_SIGNAL.wait(),
+                ).await {
+                    Either4::First(_) => break,
+                    Either4::Second(_) => {
+                        if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 1) {
+                            break;
+                        }
+                    }
+                    Either4::Third(_) => {
+                        if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 2) {
+                            break;
+                        }
+                    }
+                    Either4::Fourth(_) => break, // passkey displayed on any screen
+                }
+            }
         }
     };
 
@@ -264,6 +291,7 @@ async fn main(spawner: Spawner) {
         board!(p, lora_busy).into(),
         board!(p, lora_dio1).into(),
         board!(p, lora_rf_sw).into(),
+        &identity,
     );
 
     embassy_futures::join::join5(main_loop, run_nfc, buttons, run_lora, feed_watchdog()).await;

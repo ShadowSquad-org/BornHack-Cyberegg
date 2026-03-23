@@ -86,21 +86,25 @@ impl BatteryMonitor {
         self.vbat_rd.set_low();
         Timer::after_millis(5).await;
 
-        let ch_cfg = saadc::ChannelConfig::single_ended(self.vbat.reborrow());
-        let mut saadc = Saadc::new(
-            self.saadc.reborrow(),
-            BatteryIrqs,
-            Config::default(),
-            [ch_cfg],
-        );
-
-        let mut buf = [0i16; 1];
-        saadc.sample(&mut buf).await;
+        // Take 3 samples and average to reduce noise.
+        let mut sum: u32 = 0;
+        for _ in 0..3 {
+            let ch_cfg = saadc::ChannelConfig::single_ended(self.vbat.reborrow());
+            let mut saadc = Saadc::new(
+                self.saadc.reborrow(),
+                BatteryIrqs,
+                Config::default(),
+                [ch_cfg],
+            );
+            let mut buf = [0i16; 1];
+            saadc.sample(&mut buf).await;
+            sum += buf[0].max(0) as u32;
+        }
 
         // Disable the divider to save power.
         self.vbat_rd.set_high();
 
-        let raw = buf[0].max(0) as u32;
+        let raw = sum / 3;
         ((raw * 10800) / 4096) as u16
     }
 }
