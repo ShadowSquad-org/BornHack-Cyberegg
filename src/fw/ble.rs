@@ -5,6 +5,11 @@
 
 use core::sync::atomic::Ordering;
 
+use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::SeedableRng;
+
+use meshcore_companion as companion;
+
 use embassy_executor::Spawner;
 use embassy_nrf::{Peri, bind_interrupts, mode::Blocking, peripherals, rng};
 use nrf_mpsl::MultiprotocolServiceLayer;
@@ -139,32 +144,89 @@ pub struct NusServer {
 }
 
 // ---------------------------------------------------------------------------
+// Companion protocol context + helpers
+// ---------------------------------------------------------------------------
+
+/// Device information snapshot passed to the companion protocol handler.
+/// Filled in by `embassy.rs` at startup from the identity and radio config.
+pub struct CompanionContext {
+    /// Ed25519 public key (32 bytes).
+    pub pub_key: [u8; 32],
+    /// LoRa radio frequency in Hz (e.g. 869_618_000).
+    pub frequency_hz: u32,
+    /// LoRa radio bandwidth in Hz (e.g. 62_500).
+    pub bandwidth_hz: u32,
+    /// LoRa spreading factor value (e.g. 8 for SF8).
+    pub spreading_factor: u8,
+    /// LoRa coding rate: 1 = 4/5.
+    pub coding_rate: u8,
+    /// TX power in dBm.
+    pub tx_power: i8,
+}
+
+/// Send `data` as one or more 20-byte NUS TX notifications, zero-padding the
+/// last chunk.  The companion app reassembles multi-notification responses.
+async fn notify_chunked<P: PacketPool>(
+    server: &NusServer<'_>,
+    conn: &GattConnection<'_, '_, P>,
+    data: &[u8],
+) {
+    let mut offset = 0;
+    let total_chunks = (data.len() + companion::CHUNK_SIZE - 1) / companion::CHUNK_SIZE;
+    let mut chunk_idx = 0usize;
+    while offset < data.len() {
+        let end = (offset + companion::CHUNK_SIZE).min(data.len());
+        let mut chunk = [0u8; companion::CHUNK_SIZE];
+        chunk[..end - offset].copy_from_slice(&data[offset..end]);
+        if let Err(e) = server.nus.tx.notify(conn, &chunk).await {
+            defmt::warn!("companion: notify chunk {}/{} failed: {:?}", chunk_idx + 1, total_chunks, defmt::Debug2Format(&e));
+        }
+        offset += companion::CHUNK_SIZE;
+        chunk_idx += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BLE peripheral runner
 // ---------------------------------------------------------------------------
 
 type BleResources = HostResources<DefaultPacketPool, 1, 2>;
 
 #[embassy_executor::task]
-pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>) {
+pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>, ctx: CompanionContext, prng_seed: [u8; 32]) {
     static RESOURCES: StaticCell<BleResources> = StaticCell::new();
     let resources = RESOURCES.init(BleResources::new());
 
-    // TODO: seed the security manager PRNG properly before enabling bonding.
-    // The nrf-sdc 0.4 API borrows `rng` for the SDC lifetime, making it unavailable here.
-    // See Cargo.toml comment on dev-disable-csprng-seed-requirement for context.
-    let stack = trouble_host::new(sdc, resources)
-        .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()));
+    // Seed the security manager PRNG from TRNG entropy collected at startup
+    // (before the RNG peripheral was consumed by the SDC).
+    let mut prng = ChaCha20Rng::from_seed(prng_seed);
 
+    let stack = trouble_host::new(sdc, resources)
+        .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()))
+        .set_random_generator_seed(&mut prng);
+
+    // DisplayOnly: badge shows a 6-digit passkey on screen; the phone user enters it.
+    // This matches MeshCore's setIOCaps(true, false, false) and enables MITM protection.
     stack.set_io_capabilities(IoCapabilities::DisplayOnly);
 
     // Restore bonds loaded from flash by flash_task.
     // Spin briefly if flash_task hasn't populated INITIAL_BONDS yet.
     loop {
         if let Some(bonds) = INITIAL_BONDS.try_get() {
-            for bond in bonds.iter() {
-                let _ = stack.add_bond_information(bond.clone());
+            for (i, bond) in bonds.iter().enumerate() {
+                let addr = bond.identity.bd_addr.into_inner();
+                match stack.add_bond_information(bond.clone()) {
+                    Ok(()) => defmt::info!(
+                        "BLE: restored bond[{}] addr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        i, addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
+                    ),
+                    Err(e) => defmt::warn!(
+                        "BLE: failed to restore bond[{}]: {:?}",
+                        i, defmt::Debug2Format(&e)
+                    ),
+                }
             }
-            defmt::info!("BLE: restored {} bond(s)", bonds.len());
+            defmt::info!("BLE: restored {} bond(s) from flash", bonds.len());
             break;
         }
         embassy_time::Timer::after_millis(1).await;
@@ -177,7 +239,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>) {
     // Run the HCI runner in parallel with the advertising loop.
     embassy_futures::join::join(
         async { loop { if runner.run().await.is_err() {} } },
-        nus_peripheral_loop(&mut peripheral, bond_tx),
+        nus_peripheral_loop(&mut peripheral, bond_tx, &ctx),
     )
     .await;
 }
@@ -185,6 +247,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>) {
 async fn nus_peripheral_loop<C>(
     peripheral: &mut Peripheral<'_, C, DefaultPacketPool>,
     bond_tx: embassy_sync::channel::Sender<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, BondCmd, 4>,
+    ctx: &CompanionContext,
 ) where
     C: Controller,
 {
@@ -260,6 +323,10 @@ async fn nus_peripheral_loop<C>(
             }
         };
 
+        // Gate: only process companion commands after pairing/encryption is confirmed.
+        // Set when PairingComplete fires (new pairing or bonded reconnect).
+        let mut authenticated = false;
+
         loop {
             match gatt_conn.next().await {
                 GattConnectionEvent::Disconnected { reason } => {
@@ -273,29 +340,138 @@ async fn nus_peripheral_loop<C>(
                     crate::BLE_PASSKEY.store(key.value(), Ordering::Relaxed);
                     crate::BLE_PAIRING_SIGNAL.signal(());
                 }
-                GattConnectionEvent::PairingComplete { bond: Some(info), .. } => {
-                    defmt::info!("BLE: pairing complete — persisting bond");
+                GattConnectionEvent::PairingComplete { bond, security_level } => {
+                    defmt::info!("BLE: pairing complete (level {:?})", defmt::Debug2Format(&security_level));
                     crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
                     crate::BLE_PAIRING_SIGNAL.signal(());
-                    let _ = bond_tx.try_send(BondCmd::Save(info));
+                    authenticated = true;
+                    if let Some(info) = bond {
+                        defmt::info!("BLE: new bond — persisting");
+                        let _ = bond_tx.try_send(BondCmd::Save(info));
+                    } else {
+                        defmt::info!("BLE: bonded reconnect — using stored LTK");
+                    }
                 }
                 GattConnectionEvent::PairingFailed(e) => {
                     defmt::warn!("BLE: pairing failed: {:?}", defmt::Debug2Format(&e));
                     crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
                     crate::BLE_PAIRING_SIGNAL.signal(());
+                    // authenticated stays false — GATT writes will be rejected.
                 }
                 GattConnectionEvent::Gatt { event: GattEvent::Write(write) } => {
                     if write.handle() == server.nus.rx.handle {
-                        // Hand the received frame to the application layer.
-                        // TODO: forward to MeshCore companion protocol handler.
-                        defmt::debug!("NUS RX: {} bytes", write.data().len());
-                    }
-                    if let Ok(reply) = write.accept() {
+                        if !authenticated {
+                            defmt::warn!("companion: write before auth — rejecting");
+                            if let Ok(reply) = write.accept() { reply.send().await; }
+                            continue;
+                        }
+                        let data = write.data();
+                        defmt::info!("companion RX {} bytes: {:02x}", data.len(), data);
+
+                        // Declare before the match so its lifetime covers `response`.
+                        let device_name = crate::fw::device_id::get_bytes();
+                        let response = match companion::cmd::parse(data) {
+                            Err(_) => {
+                                defmt::warn!("companion: empty write");
+                                companion::Response::Error
+                            }
+
+                            Ok(companion::cmd::Command::AppStart) => {
+                                defmt::info!("companion: APP_START → SELF_INFO");
+                                companion::Response::SelfInfo(companion::SelfInfo {
+                                    adv_type: 1,       // ChatNode
+                                    tx_power: ctx.tx_power,
+                                    max_tx_power: 22,
+                                    pub_key: &ctx.pub_key,
+                                    lat: 0,
+                                    lon: 0,
+                                    multi_acks: 0,
+                                    adv_location_policy: 0,
+                                    telemetry_mode: 0,
+                                    manual_add_contacts: 0,
+                                    frequency_hz: ctx.frequency_hz,
+                                    bandwidth_hz: ctx.bandwidth_hz,
+                                    spreading_factor: ctx.spreading_factor,
+                                    coding_rate: ctx.coding_rate,
+                                    name: &device_name,
+                                })
+                            }
+
+                            Ok(companion::cmd::Command::DeviceQuery) => {
+                                defmt::info!("companion: DEVICE_QUERY → DEVICE_INFO");
+                                companion::Response::DeviceInfo(companion::DeviceInfo {
+                                    fw_version: 3,
+                                    max_contacts_raw: 10,  // 20 contacts
+                                    max_channels: 8,
+                                    ble_pin: {
+                                        let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
+                                        if v == u32::MAX { 0 } else { v }
+                                    },
+                                    fw_build: b"dev",
+                                    model: b"BornHack Cyber\xC3\x86gg",
+                                    version: b"0.1.0",
+                                    client_repeat: false,
+                                    path_hash_mode: 0,
+                                })
+                            }
+
+                            Ok(companion::cmd::Command::GetBattery) => {
+                                defmt::info!("companion: GET_BATT → BATTERY");
+                                let pct = crate::fw::battery::read_pct() as u16;
+                                companion::Response::Battery {
+                                    mv: 3000 + pct * 12,
+                                    used_kb: 0,
+                                    total_kb: 8192,
+                                }
+                            }
+
+                            Ok(companion::cmd::Command::SyncNextMessage)
+                            | Ok(companion::cmd::Command::GetContacts)
+                            | Ok(companion::cmd::Command::GetChannel(_)) => {
+                                defmt::info!("companion: msg/contact/channel query → NO_MORE_MSGS");
+                                companion::Response::NoMoreMsgs
+                            }
+
+                            Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
+                                defmt::info!("companion: SET_DEVICE_TIME ts={=u32} → OK", ts);
+                                companion::Response::Ok
+                            }
+
+                            Ok(companion::cmd::Command::SetChannel { .. }) => {
+                                defmt::info!("companion: SET_CHANNEL → OK (not stored)");
+                                companion::Response::Ok
+                            }
+
+                            Ok(companion::cmd::Command::Unknown(b)) => {
+                                defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
+                                companion::Response::Error
+                            }
+                        };
+
+                        let mut resp_buf = [0u8; companion::MAX_RESPONSE_LEN];
+                        let resp_len = companion::encode(&response, &mut resp_buf);
+                        defmt::info!("companion TX {} bytes: {:02x}", resp_len, &resp_buf[..resp_len]);
+
+                        // Acknowledge the write BEFORE sending notifications.
+                        // The phone waits for the ATT Write Response before it
+                        // will process any incoming notifications; reversing the
+                        // order causes the "Connecting…" stall.
+                        if let Ok(reply) = write.accept() {
+                            reply.send().await;
+                        }
+                        notify_chunked(&server, &gatt_conn, &resp_buf[..resp_len]).await;
+                    } else if let Ok(reply) = write.accept() {
                         reply.send().await;
                     }
                 }
                 _ => {}
             }
         }
+
+        // Give the HCI runner time to fully process the disconnection before
+        // the outer loop tries to start advertising again.  Without this
+        // delay the advertiser immediately gets "Connection Rejected due to
+        // Limited Resources" because the controller slot isn't freed yet.
+        embassy_time::Timer::after_millis(200).await;
     }
 }

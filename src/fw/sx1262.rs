@@ -176,7 +176,7 @@ impl<'a> SimpleLoRa<'a> {
             if let Ok(s) = self.lora.get_status() {
                 let mode = s.chip_mode().map(|m| m as u8).unwrap_or(0xFF);
                 let cmd = s.command_status().map(|c| c as u8).unwrap_or(0xFF);
-                defmt::info!(
+                defmt::debug!(
                     "ensure_rx poll {=u8}: chip_mode={=u8:#04x} cmd={=u8:#04x}",
                     i,
                     mode,
@@ -203,7 +203,7 @@ impl<'a> SimpleLoRa<'a> {
         // Expected: 0x05 (RX). If 0x02 (StbyRC), set_rx() hasn't taken effect yet.
         if let Ok(s) = self.lora.get_status() {
             let mode = s.chip_mode().map(|m| m as u8).unwrap_or(0xFF);
-            defmt::info!("RX wait: chip_mode={=u8:#04x} (0x05=RX, 0x02=StbyRC)", mode);
+            defmt::debug!("RX wait: chip_mode={=u8:#04x} (0x05=RX, 0x02=StbyRC)", mode);
         }
 
         // Clear any stale IRQ so DIO1 is deasserted before we arm the rising-edge wait.
@@ -219,7 +219,7 @@ impl<'a> SimpleLoRa<'a> {
         match select(self.dio1.wait_for_rising_edge(), Timer::after_secs(15)).await {
             Either::First(_) => {} // DIO1 fired — read IRQ below
             Either::Second(_) => {
-                defmt::info!("LoRa: no DIO1 in 15s — re-arming RX (continuous mode)");
+                defmt::debug!("LoRa: no DIO1 in 15s — re-arming RX (continuous mode)");
                 self.lora.wait_on_busy().ok();
                 self.lora
                     .set_rx(RxTxTimeout::continuous_rx())
@@ -247,7 +247,7 @@ impl<'a> SimpleLoRa<'a> {
         //   sync_word, header_err   → SF/BW/CR mismatch
         //   rx_done + crc_err      → modem settings OK, payload error
         //   rx_done, no crc_err    → full receive
-        defmt::info!(
+        defmt::debug!(
             "DIO1: rx={} crc_err={} timeout={} | preamble={} syncword={} header_ok={} header_err={}",
             irq.rx_done(),
             irq.crc_err(),

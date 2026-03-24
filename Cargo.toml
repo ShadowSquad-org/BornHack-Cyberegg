@@ -53,9 +53,11 @@ nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363
 # The nrf-sdc 0.4 API borrows `rng` for the SDC's lifetime, making it unavailable for
 # seeding trouble-host. This is safe for now because we do not initiate pairing.
 # TODO: seed the SM properly before enabling bonding in production.
-trouble-host = { version = "0.6", features = ["defmt", "security", "dev-disable-csprng-seed-requirement"], optional = true }
+trouble-host = { version = "0.6", features = ["defmt", "security"], optional = true }
+rand_chacha = { version = "0.3", default-features = false, optional = true }
 tickv    = { version = "2.0", optional = true }
 meshcore = { path = "./vendor/meshcore", optional = true }
+meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
 
 
 [package.metadata.tools]
@@ -100,8 +102,10 @@ embassy = [
     "nrf-mpsl",
     "nrf-sdc",
     "trouble-host",
+    "rand_chacha",
     "tickv",
     "meshcore",
+    "meshcore-companion",
 ]
 
 # [workspace]

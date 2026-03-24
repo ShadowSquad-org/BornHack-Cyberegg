@@ -106,7 +106,10 @@ async fn persist_seed(kv: &KvNamespace, seed: &[u8; 32]) {
 /// Uses blocking PAC register access — only called during startup so
 /// blocking is acceptable.  The bias-correction filter (DERCEN) is enabled
 /// for better statistical quality at ~85 µA extra current during generation.
-fn trng_seed() -> [u8; 32] {
+///
+/// Safe to call before embassy-nrf takes ownership of the RNG peripheral,
+/// because it accesses registers directly without the embassy wrapper.
+pub fn trng_seed() -> [u8; 32] {
     // nRF52840 RNG register offsets (Product Spec §6.19)
     const RNG_BASE:      u32 = 0x4000_D000;
     const TASKS_START:   u32 = RNG_BASE + 0x000;

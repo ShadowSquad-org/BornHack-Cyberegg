@@ -12,7 +12,7 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
-use hello_graphics::fw::ble::{init_ble, run_ble_peripheral};
+use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
@@ -96,6 +96,11 @@ async fn main(spawner: Spawner) {
     // -----------------------------------------------------------------------
     // BLE (MPSL + SDC + TrouBLE peripheral task)
     // -----------------------------------------------------------------------
+
+    // Collect entropy for the BLE security manager PRNG *before* init_ble
+    // consumes p.RNG — the SDC holds the peripheral for its lifetime.
+    let ble_prng_seed = hello_graphics::fw::device_identity::trng_seed();
+
     static SDC_MEM: StaticCell<nrf_sdc::Mem<4096>> = StaticCell::new();
     // init_ble returns SoftdeviceController<'static> directly.
     // PPI channels are reserved hardware crossbar slots used by MPSL (CH19,30,31) and
@@ -124,7 +129,15 @@ async fn main(spawner: Spawner) {
         p.RNG,
         SDC_MEM.init(nrf_sdc::Mem::new()),
     );
-    spawner.must_spawn(run_ble_peripheral(sdc));
+    let companion_ctx = CompanionContext {
+        pub_key: identity.pub_key,
+        frequency_hz: 869_618_000,
+        bandwidth_hz: 62_500,
+        spreading_factor: 8,
+        coding_rate: 1,
+        tx_power: 14,
+    };
+    spawner.must_spawn(run_ble_peripheral(sdc, companion_ctx, ble_prng_seed));
 
     // -----------------------------------------------------------------------
     // EPD display

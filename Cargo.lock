@@ -1011,9 +1011,11 @@ dependencies = [
  "fixed",
  "heapless 0.9.2",
  "meshcore",
+ "meshcore-companion",
  "nrf-mpsl",
  "nrf-sdc",
  "panic-probe",
+ "rand_chacha",
  "ssd1680",
  "static_cell",
  "sx126x",
@@ -1144,6 +1146,13 @@ dependencies = [
  "heapless 0.9.2",
  "hmac",
  "sha2",
+]
+
+[[package]]
+name = "meshcore-companion"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.2",
 ]
 
 [[package]]
