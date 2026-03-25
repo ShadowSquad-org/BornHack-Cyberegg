@@ -8,6 +8,7 @@ use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Pull};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::nvmc::Nvmc;
+use embassy_nrf::pwm::SimplePwm;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Ticker, Timer};
@@ -20,14 +21,15 @@ use hello_graphics::fw::device_identity;
 use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::{
+    ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, health_err, with_health,
+};
+use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, buzzer_task, play as play_melody},
     fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd, init_epd_bus},
     fw::nfct::run_nfct,
 };
-use embassy_nrf::pwm::SimplePwm;
-use hello_graphics::{ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, health_err, with_health};
 use ssd1680::graphics::WHITE;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
@@ -101,7 +103,7 @@ async fn main(spawner: Spawner) {
     // consumes p.RNG — the SDC holds the peripheral for its lifetime.
     let ble_prng_seed = hello_graphics::fw::device_identity::trng_seed();
 
-    static SDC_MEM: StaticCell<nrf_sdc::Mem<4096>> = StaticCell::new();
+    static SDC_MEM: StaticCell<nrf_sdc::Mem<{ hello_graphics::fw::ble::SDC_MEM_SIZE }>> = StaticCell::new();
     // init_ble returns SoftdeviceController<'static> directly.
     // PPI channels are reserved hardware crossbar slots used by MPSL (CH19,30,31) and
     // the SoftDevice Controller (CH17-29 minus the MPSL ones) for timing-critical BLE
@@ -197,7 +199,11 @@ async fn main(spawner: Spawner) {
     defmt::info!("NFC initialized");
 
     defmt::info!("Initializing buzzer");
-    let buzzer = Buzzer::new(SimplePwm::new_1ch(p.PWM0, board!(p, buzzer), &Default::default()));
+    let buzzer = Buzzer::new(SimplePwm::new_1ch(
+        p.PWM0,
+        board!(p, buzzer),
+        &Default::default(),
+    ));
     spawner.must_spawn(buzzer_task(buzzer));
     play_melody(0); // 0 = STARTUP
     defmt::info!("Buzzer task spawned, startup melody queued");
@@ -225,8 +231,6 @@ async fn main(spawner: Spawner) {
     led_blue.set_high();
     Timer::after_millis(200).await;
 
-    const FAST_UPDATES_PER_FULL: u32 = 60;
-
     // All peripherals initialised — commit this firmware so the bootloader won't roll back.
     {
         let flash = Mutex::<NoopRawMutex, _>::new(core::cell::RefCell::new(Nvmc::new(p.NVMC)));
@@ -239,7 +243,7 @@ async fn main(spawner: Spawner) {
 
     defmt::info!("Entering main loop...");
     let main_loop = async {
-        let mut loop_count: u32 = 0;
+        // let mut loop_count: u32 = 0;
         loop {
             let _ = display.clear(WHITE);
             let health_str = with_health!(|f| f.to_string());
@@ -253,14 +257,14 @@ async fn main(spawner: Spawner) {
             defmt::info!("Health: {}", health_str.as_str());
 
             let _ = display.reset().await;
-            if loop_count % (FAST_UPDATES_PER_FULL + 1) == FAST_UPDATES_PER_FULL {
-                defmt::info!("Full tricolor refresh");
-                let _ = display.update().await;
-            } else {
-                defmt::info!("Fast B&W refresh");
+            defmt::info!("Fast B&W refresh");
+            if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 0) {
+                // First screen with menu structure, fast updates
                 let _ = display.update_ghost().await;
+            } else {
+                // Other screens with small text, slower updates
+                let _ = display.update_bw().await;
             }
-            loop_count = loop_count.wrapping_add(1);
             let _ = display.deep_sleep().await;
 
             led_red.set_low();
@@ -270,13 +274,15 @@ async fn main(spawner: Spawner) {
             // Wait for a button event, a new LoRa message, a new advert, or a BLE pairing event.
             // Signal-driven redraws only fire when the relevant screen is active.
             loop {
-                use embassy_futures::select::{select4, Either4};
+                use embassy_futures::select::{Either4, select4};
                 match select4(
                     button_rcvr.changed(),
                     LORA_MSG_SIGNAL.wait(),
                     ADVERT_SIGNAL.wait(),
                     BLE_PAIRING_SIGNAL.wait(),
-                ).await {
+                )
+                .await
+                {
                     Either4::First(_) => break,
                     Either4::Second(_) => {
                         if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 1) {

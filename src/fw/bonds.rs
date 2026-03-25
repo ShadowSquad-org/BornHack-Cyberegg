@@ -1,15 +1,12 @@
 //! BLE bond persistence via the shared KV store.
 //!
-//! All bond data lives under the `"bonds"` namespace in the KV store.
-//! Keys:
-//!   - `"index"`           — raw concatenation of bonded peer addresses (6 B each)
-//!   - `"<AABBCCDDEEFF>"` — serialised `BondInformation` for each peer
+//! All bond data is stored under a single key `"bonds:all"` (namespace `"bonds"`,
+//! key `"all"`) as a flat array of fixed-size 42-byte records — one per bonded peer.
+//! No separate index is needed; loading reads the whole array, saving rewrites it.
 //!
 //! `bond_task` owns a `BondStore` and services [`BondCmd`] messages from the
 //! BLE task.  The KV store must be initialised with `kv::init()` before this
 //! task is spawned.
-
-use core::fmt::Write as _;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -85,17 +82,8 @@ fn deserialize_bond(buf: &[u8; BOND_SIZE]) -> BondInformation {
     BondInformation::new(identity, ltk, security_level_from_u8(buf[40]), buf[39] != 0)
 }
 
-/// Convert a 6-byte BLE address to a 12-character uppercase hex key string.
-fn addr_key(addr: &[u8; 6]) -> heapless::String<12> {
-    let mut s = heapless::String::new();
-    for b in addr {
-        write!(s, "{:02X}", b).ok();
-    }
-    s
-}
-
 // ---------------------------------------------------------------------------
-// BondStore — KvNamespace wrapper with an address index for enumeration
+// BondStore
 // ---------------------------------------------------------------------------
 
 struct BondStore {
@@ -107,65 +95,52 @@ impl BondStore {
         Self { kv: kv::namespace("bonds") }
     }
 
+    /// Read all bonds from `"bonds:all"`.
     async fn load_all(&self) -> Vec<BondInformation, MAX_BONDS> {
-        let mut out = Vec::new();
-        let mut index_buf = [0u8; MAX_BONDS * 6];
-        let n = match self.kv.get("index", &mut index_buf).await {
+        let mut buf = [0u8; MAX_BONDS * BOND_SIZE];
+        let n = match self.kv.get("all", &mut buf).await {
             Ok(n) => n,
-            Err(KvError::NotFound) => return out,
+            Err(KvError::NotFound) => return Vec::new(),
             Err(e) => {
-                defmt::warn!("BondStore: index read: {:?}", e);
-                return out;
+                defmt::warn!("BondStore: load: {:?}", e);
+                return Vec::new();
             }
         };
-        for chunk in index_buf[..n].chunks_exact(6) {
-            let mut addr = [0u8; 6];
-            addr.copy_from_slice(chunk);
-            let mut buf = [0u8; BOND_SIZE];
-            match self.kv.get(&addr_key(&addr), &mut buf).await {
-                Ok(_) => { let _ = out.push(deserialize_bond(&buf)); }
-                Err(e) => defmt::warn!("BondStore: bond read: {:?}", e),
-            }
+        let mut out = Vec::new();
+        for chunk in buf[..n].chunks_exact(BOND_SIZE) {
+            let arr: &[u8; BOND_SIZE] = chunk.try_into().unwrap();
+            let _ = out.push(deserialize_bond(arr));
         }
         out
     }
 
+    /// Write `bonds` back to `"bonds:all"` as a flat array.
+    async fn store_all(&self, bonds: &Vec<BondInformation, MAX_BONDS>) {
+        let mut buf = [0u8; MAX_BONDS * BOND_SIZE];
+        for (i, bond) in bonds.iter().enumerate() {
+            buf[i * BOND_SIZE..(i + 1) * BOND_SIZE].copy_from_slice(&serialize_bond(bond));
+        }
+        if let Err(e) = self.kv.set("all", &buf[..bonds.len() * BOND_SIZE], true).await {
+            defmt::warn!("BondStore: store: {:?}", e);
+        }
+    }
+
+    /// Add or replace the bond for this peer, then persist the full list.
     async fn save(&self, info: &BondInformation) {
+        let mut bonds = self.load_all().await;
         let addr = info.identity.bd_addr.into_inner();
-        let data = serialize_bond(info);
-        if let Err(e) = self.kv.set(&addr_key(&addr), &data, true).await {
-            defmt::warn!("BondStore::save: {:?}", e);
-            return;
+        match bonds.iter().position(|b| b.identity.bd_addr.into_inner() == addr) {
+            Some(i) => bonds[i] = info.clone(),
+            None    => { let _ = bonds.push(info.clone()); }
         }
-        self.update_index().await;
+        self.store_all(&bonds).await;
     }
 
+    /// Remove the bond for `addr` and persist.
     async fn remove(&self, addr: &[u8; 6]) {
-        let _ = self.kv.delete(&addr_key(addr)).await;
-        self.update_index().await;
-    }
-
-    /// Rebuild the index from the addresses that still have a valid bond entry.
-    async fn update_index(&self) {
-        let mut addrs: Vec<[u8; 6], MAX_BONDS> = Vec::new();
-        let mut index_buf = [0u8; MAX_BONDS * 6];
-        if let Ok(n) = self.kv.get("index", &mut index_buf).await {
-            for chunk in index_buf[..n].chunks_exact(6) {
-                let mut addr = [0u8; 6];
-                addr.copy_from_slice(chunk);
-                let mut tmp = [0u8; BOND_SIZE];
-                if self.kv.get(&addr_key(&addr), &mut tmp).await.is_ok() {
-                    let _ = addrs.push(addr);
-                }
-            }
-        }
-        let mut flat = [0u8; MAX_BONDS * 6];
-        for (i, addr) in addrs.iter().enumerate() {
-            flat[i * 6..(i + 1) * 6].copy_from_slice(addr);
-        }
-        if let Err(e) = self.kv.set("index", &flat[..addrs.len() * 6], true).await {
-            defmt::warn!("BondStore: index write: {:?}", e);
-        }
+        let mut bonds = self.load_all().await;
+        bonds.retain(|b| b.identity.bd_addr.into_inner() != *addr);
+        self.store_all(&bonds).await;
     }
 }
 
@@ -195,6 +170,8 @@ pub static INITIAL_BONDS: OnceLock<Vec<BondInformation, MAX_BONDS>> = OnceLock::
 /// **Requires** `kv::init()` to have been called before this task is spawned.
 #[embassy_executor::task]
 pub async fn bond_task() {
+    kv::smoke_test().await;
+
     let store = BondStore::new();
 
     let bonds = store.load_all().await;

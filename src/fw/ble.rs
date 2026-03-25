@@ -33,6 +33,22 @@ bind_interrupts!(pub struct BleIrqs {
 });
 
 // ---------------------------------------------------------------------------
+// SDC configuration constants
+// ---------------------------------------------------------------------------
+
+/// L2CAP TX/RX queue depth per link.
+/// Must match the value passed to `sdc::Builder::buffer_cfg`.
+const L2CAP_TXQ: u8 = 3;
+const L2CAP_RXQ: u8 = 3;
+
+/// SDC heap size in bytes.
+///
+/// Sized for one peripheral link with `buffer_cfg(MTU=251, MTU=251, TXQ=3, RXQ=3)`.
+/// Matches the official embassy-rs/trouble nrf52 examples (`Mem::<4720>`).
+/// All callers must use this constant so the value stays in sync with `buffer_cfg`.
+pub const SDC_MEM_SIZE: usize = 4720;
+
+// ---------------------------------------------------------------------------
 // MPSL task
 // ---------------------------------------------------------------------------
 
@@ -76,7 +92,7 @@ pub fn init_ble(
     ppi_ch29: Peri<'static, peripherals::PPI_CH29>,
     // RNG
     rng_periph: Peri<'static, peripherals::RNG>,
-    sdc_mem: &'static mut sdc::Mem<4096>,
+    sdc_mem: &'static mut sdc::Mem<SDC_MEM_SIZE>,
 ) -> SoftdeviceController<'static> {
     // 32 kHz crystal fitted on the board.
     let lfclk_cfg = nrf_mpsl::raw::mpsl_clock_lfclk_cfg_t {
@@ -104,12 +120,25 @@ pub fn init_ble(
     static RNG_STORAGE: StaticCell<rng::Rng<'static, Blocking>> = StaticCell::new();
     let rng_ref = RNG_STORAGE.init(rng::Rng::new_blocking(rng_periph));
 
-    // In nrf-sdc 0.4, support_adv/support_peripheral return Self directly (not Result).
+    // buffer_cfg tells the controller how large each L2CAP PDU buffer should be
+    // and how many TX/RX slots to allocate per link.  Without this call the
+    // controller defaults to 27-byte (bare PDU) buffers, which forces the host
+    // to fragment every packet into tiny pieces and reliably drops connections.
+    // Values must match DefaultPacketPool::MTU (251) used by trouble-host so
+    // the host packet pool and the controller slots agree on the max frame size.
+    // L2CAP_TXQ / L2CAP_RXQ = 3 matches the official nrf52 trouble examples.
     let sdc = sdc::Builder::new()
         .unwrap()
         .support_adv()
         .support_peripheral()
         .peripheral_count(1)
+        .unwrap()
+        .buffer_cfg(
+            DefaultPacketPool::MTU as u16,
+            DefaultPacketPool::MTU as u16,
+            L2CAP_TXQ,
+            L2CAP_RXQ,
+        )
         .unwrap()
         .build(sdc_p, rng_ref, mpsl, sdc_mem)
         .unwrap();
@@ -126,16 +155,19 @@ pub fn init_ble(
 #[gatt_service(uuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e")]
 pub struct NusService {
     /// RX characteristic — phone writes frames to the badge.
+    /// Max size 244 B = ATT MTU 247 − 3 overhead.  SetChannel alone needs
+    /// 1 (index) + 32 (name) + 16 (key) = 49 B, so 20 B is too small.
     #[characteristic(
         uuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
         write,
         write_without_response
     )]
-    pub rx: [u8; 20],
+    pub rx: heapless::Vec<u8, 244>,
 
     /// TX characteristic — badge notifies frames to the phone.
+    /// Up to 244 bytes (ATT MTU 247 − 3 overhead) in a single notification.
     #[characteristic(uuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e", notify)]
-    pub tx: [u8; 20],
+    pub tx: heapless::Vec<u8, 244>,
 }
 
 #[gatt_server]
@@ -164,25 +196,32 @@ pub struct CompanionContext {
     pub tx_power: i8,
 }
 
-/// Send `data` as one or more 20-byte NUS TX notifications, zero-padding the
-/// last chunk.  The companion app reassembles multi-notification responses.
-async fn notify_chunked<P: PacketPool>(
+/// Send `data` as a single BLE notification.
+///
+/// With ATT MTU 247 (negotiated after connection) up to 244 bytes fit in one
+/// notification — larger than any response we produce (max 128 B).  Sending
+/// as one frame matches the MeshCore reference firmware which does a single
+/// `bleuart.write(buf, len)` and lets the BLE stack handle fragmentation.
+///
+/// A 2-second timeout prevents a dropped connection from causing a permanent
+/// hang inside the GATT write handler.
+async fn notify_once<P: PacketPool>(
     server: &NusServer<'_>,
     conn: &GattConnection<'_, '_, P>,
     data: &[u8],
 ) {
-    let mut offset = 0;
-    let total_chunks = (data.len() + companion::CHUNK_SIZE - 1) / companion::CHUNK_SIZE;
-    let mut chunk_idx = 0usize;
-    while offset < data.len() {
-        let end = (offset + companion::CHUNK_SIZE).min(data.len());
-        let mut chunk = [0u8; companion::CHUNK_SIZE];
-        chunk[..end - offset].copy_from_slice(&data[offset..end]);
-        if let Err(e) = server.nus.tx.notify(conn, &chunk).await {
-            defmt::warn!("companion: notify chunk {}/{} failed: {:?}", chunk_idx + 1, total_chunks, defmt::Debug2Format(&e));
-        }
-        offset += companion::CHUNK_SIZE;
-        chunk_idx += 1;
+    let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
+    if vec.extend_from_slice(data).is_err() {
+        defmt::warn!("companion: notify data too large ({} B), truncating", data.len());
+        let _ = vec.extend_from_slice(&data[..244]);
+    }
+    match embassy_time::with_timeout(
+        embassy_time::Duration::from_millis(2000),
+        server.nus.tx.notify(conn, &vec),
+    ).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => defmt::warn!("companion: notify failed: {:?}", defmt::Debug2Format(&e)),
+        Err(_) => defmt::warn!("companion: notify timed out (connection lost?)"),
     }
 }
 
@@ -315,6 +354,14 @@ async fn nus_peripheral_loop<C>(
 
         defmt::info!("BLE: connected");
 
+        // Enable bonding so the security manager hands us the LTK after pairing
+        // and sets the bonding bit in the local AuthReq.  Without this,
+        // storage.bondable stays false (the connection-manager default) and
+        // PairingComplete always returns bond: None.
+        if let Err(e) = conn.set_bondable(true) {
+            defmt::warn!("BLE: set_bondable failed: {:?}", defmt::Debug2Format(&e));
+        }
+
         let gatt_conn = match conn.with_attribute_server(&server.server) {
             Ok(c) => c,
             Err(e) => {
@@ -322,10 +369,6 @@ async fn nus_peripheral_loop<C>(
                 continue;
             }
         };
-
-        // Gate: only process companion commands after pairing/encryption is confirmed.
-        // Set when PairingComplete fires (new pairing or bonded reconnect).
-        let mut authenticated = false;
 
         loop {
             match gatt_conn.next().await {
@@ -344,36 +387,40 @@ async fn nus_peripheral_loop<C>(
                     defmt::info!("BLE: pairing complete (level {:?})", defmt::Debug2Format(&security_level));
                     crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
                     crate::BLE_PAIRING_SIGNAL.signal(());
-                    authenticated = true;
                     if let Some(info) = bond {
                         defmt::info!("BLE: new bond — persisting");
                         let _ = bond_tx.try_send(BondCmd::Save(info));
-                    } else {
-                        defmt::info!("BLE: bonded reconnect — using stored LTK");
                     }
                 }
                 GattConnectionEvent::PairingFailed(e) => {
                     defmt::warn!("BLE: pairing failed: {:?}", defmt::Debug2Format(&e));
                     crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
                     crate::BLE_PAIRING_SIGNAL.signal(());
-                    // authenticated stays false — GATT writes will be rejected.
                 }
                 GattConnectionEvent::Gatt { event: GattEvent::Write(write) } => {
                     if write.handle() == server.nus.rx.handle {
-                        if !authenticated {
-                            defmt::warn!("companion: write before auth — rejecting");
-                            if let Ok(reply) = write.accept() { reply.send().await; }
+                        // Require authenticated encryption before processing companion commands.
+                        // security_level() covers both SMP pairing AND LTK-based bonded
+                        // reconnections — it is updated on EncryptionChangeV1 by the SM.
+                        let sec = gatt_conn.raw().security_level().unwrap_or(SecurityLevel::NoEncryption);
+                        if !sec.authenticated() {
+                            defmt::warn!("companion: write without authenticated encryption (level {:?}) — sending INSUFFICIENT_AUTHENTICATION",
+                                defmt::Debug2Format(&sec));
+                            // Reject with ATT error 0x05 so the phone's BLE stack knows
+                            // to initiate pairing, then automatically retries the write.
+                            if let Ok(reply) = write.reject(AttErrorCode::INSUFFICIENT_AUTHENTICATION) {
+                                reply.send().await;
+                            }
                             continue;
                         }
                         let data = write.data();
-                        defmt::info!("companion RX {} bytes: {:02x}", data.len(), data);
 
                         // Declare before the match so its lifetime covers `response`.
                         let device_name = crate::fw::device_id::get_bytes();
                         let response = match companion::cmd::parse(data) {
                             Err(_) => {
                                 defmt::warn!("companion: empty write");
-                                companion::Response::Error
+                                companion::Response::Error(companion::ErrorCode::Generic)
                             }
 
                             Ok(companion::cmd::Command::AppStart) => {
@@ -416,10 +463,11 @@ async fn nus_peripheral_loop<C>(
                             }
 
                             Ok(companion::cmd::Command::GetBattery) => {
-                                defmt::info!("companion: GET_BATT → BATTERY");
-                                let pct = crate::fw::battery::read_pct() as u16;
+                                let mv = crate::fw::battery::read_mv();
+                                let pct = crate::fw::battery::read_pct();
+                                defmt::info!("companion: GET_BATT → BATTERY {} mV {}%", mv, pct);
                                 companion::Response::Battery {
-                                    mv: 3000 + pct * 12,
+                                    mv,
                                     used_kb: 0,
                                     total_kb: 8192,
                                 }
@@ -432,6 +480,12 @@ async fn nus_peripheral_loop<C>(
                                 companion::Response::NoMoreMsgs
                             }
 
+                            Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
+                                defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → OK", mode);
+                                // TODO: queue LoRa advert transmission
+                                companion::Response::Ok
+                            }
+
                             Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                 defmt::info!("companion: SET_DEVICE_TIME ts={=u32} → OK", ts);
                                 companion::Response::Ok
@@ -442,24 +496,30 @@ async fn nus_peripheral_loop<C>(
                                 companion::Response::Ok
                             }
 
+                            Ok(companion::cmd::Command::SendChannelMessage { channel, .. }) => {
+                                defmt::info!("companion: SEND_CHANNEL_MSG ch={=u8} → OK (not transmitted)", channel);
+                                // TODO: queue LoRa channel message transmission
+                                companion::Response::MsgSent
+                            }
+
                             Ok(companion::cmd::Command::Unknown(b)) => {
                                 defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
-                                companion::Response::Error
+                                companion::Response::Error(companion::ErrorCode::InvalidCommand)
                             }
                         };
 
                         let mut resp_buf = [0u8; companion::MAX_RESPONSE_LEN];
                         let resp_len = companion::encode(&response, &mut resp_buf);
-                        defmt::info!("companion TX {} bytes: {:02x}", resp_len, &resp_buf[..resp_len]);
 
                         // Acknowledge the write BEFORE sending notifications.
                         // The phone waits for the ATT Write Response before it
                         // will process any incoming notifications; reversing the
                         // order causes the "Connecting…" stall.
-                        if let Ok(reply) = write.accept() {
-                            reply.send().await;
+                        match write.accept() {
+                            Ok(reply) => reply.send().await,
+                            Err(e) => defmt::warn!("companion: write.accept() failed: {:?}", defmt::Debug2Format(&e)),
                         }
-                        notify_chunked(&server, &gatt_conn, &resp_buf[..resp_len]).await;
+                        notify_once(&server, &gatt_conn, &resp_buf[..resp_len]).await;
                     } else if let Ok(reply) = write.accept() {
                         reply.send().await;
                     }

@@ -272,3 +272,30 @@ impl KvNamespace {
 pub fn namespace(prefix: &'static str) -> KvNamespace {
     KvNamespace { prefix }
 }
+
+/// Write a known value and read it back to confirm the KV store is functional.
+///
+/// Call once at startup after [`init()`].  Logs `KV smoke test OK` on success
+/// or a warning describing the failure if the store is broken.
+pub async fn smoke_test() {
+    const MAGIC: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
+    let kv = namespace("_test");
+
+    if let Err(e) = kv.set("smoke", &MAGIC, true).await {
+        defmt::warn!("KV smoke test: write failed: {:?}", e);
+        return;
+    }
+
+    let mut buf = [0u8; 4];
+    match kv.get("smoke", &mut buf).await {
+        Ok(n) if n == MAGIC.len() && buf == MAGIC => {
+            defmt::info!("KV smoke test OK");
+        }
+        Ok(n) => {
+            defmt::warn!("KV smoke test: read back {} bytes, got {:02x} expected {:02x}", n, buf, MAGIC);
+        }
+        Err(e) => {
+            defmt::warn!("KV smoke test: read failed: {:?}", e);
+        }
+    }
+}

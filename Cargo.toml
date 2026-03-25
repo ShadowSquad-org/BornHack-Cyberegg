@@ -125,3 +125,9 @@ name = "embassy"
 path = "src/bin/embassy.rs"
 required-features = ["embassy"]
 harness = false
+
+[[bin]]
+name = "ble_echo"
+path = "src/bin/ble_echo.rs"
+required-features = ["embassy"]
+harness = false

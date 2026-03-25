@@ -18,7 +18,6 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use embassy_futures::select::{Either, select};
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
-use sx126x::reg::Register;
 use sx126x::op::PacketType::LoRa;
 use sx126x::op::irq::IrqMaskBit::{
     CrcErr, HeaderError, HeaderValid, PreambleDetected, RxDone, SyncwordValid, Timeout, TxDone,
@@ -27,6 +26,7 @@ use sx126x::op::rxtx::DeviceSel::SX1262;
 use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
 use sx126x::op::*;
+use sx126x::reg::Register;
 
 // ---------------------------------------------------------------------------
 // MeshCore LoRa configuration
@@ -147,18 +147,22 @@ impl<'a> SimpleLoRa<'a> {
 
     /// Write the RxGain register according to the BOOSTED_RX_GAIN flag.
     fn apply_rx_gain(&mut self) {
-        let value = if crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed) { 0x96u8 } else { 0x94u8 };
+        let value = if crate::BOOSTED_RX_GAIN.load(Ordering::Relaxed) {
+            0x96u8
+        } else {
+            0x94u8
+        };
         self.lora.write_register(Register::RxGain, &[value]).ok();
     }
 
     /// Route the RF switch to the RX path (pin LOW).
     fn rf_switch_rx(&mut self) {
-        self.lora.set_ant_enabled(false).ok();
+        self.lora.set_ant_enabled(true).ok();
     }
 
     /// Route the RF switch to the TX path (pin HIGH).
     fn rf_switch_tx(&mut self) {
-        self.lora.set_ant_enabled(true).ok();
+        self.lora.set_ant_enabled(false).ok();
     }
 
     /// Wait for the chip to enter RX mode (0x05), polling every 50 ms for up to 500 ms.

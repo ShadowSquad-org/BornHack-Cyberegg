@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embedded_graphics::{
     mono_font::{
         MonoTextStyle,
-        ascii::{FONT_6X9, FONT_7X13, FONT_7X13_BOLD, FONT_10X20},
+        ascii::{FONT_7X13, FONT_7X13_BOLD, FONT_10X20},
     },
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Rectangle},
@@ -424,13 +424,7 @@ where
             centered,
         )
         .draw(display)?;
-        Text::with_text_style(
-            &code_str,
-            center,
-            pin_code_style,
-            centered,
-        )
-        .draw(display)?;
+        Text::with_text_style(&code_str, center, pin_code_style, centered).draw(display)?;
     } else {
         Text::with_text_style(
             item_text,
@@ -488,7 +482,7 @@ where
 {
     let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let style_rssi = MonoTextStyle::new(&FONT_6X9, BLACK);
+    let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     let bat_text = format!(4; "{}%", bat_prc).unwrap();
@@ -551,7 +545,7 @@ where
 {
     let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let style_small = MonoTextStyle::new(&FONT_6X9, BLACK);
+    let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     let bat_text = format!(4; "{}%", bat_prc).unwrap();
@@ -609,7 +603,7 @@ where
                     .draw(display)?;
                 Text::with_text_style(
                     adv.pub_key_hex.as_str(),
-                    Point::new(4, 54),
+                    Point::new(4, 56),
                     style_small,
                     bottom,
                 )
@@ -622,11 +616,11 @@ where
                     "Sig: INVALID"
                 };
                 let sig_style = if adv.sig_ok {
-                    MonoTextStyle::new(&FONT_6X9, BLACK)
+                    MonoTextStyle::new(&FONT_7X13, BLACK)
                 } else {
-                    MonoTextStyle::new(&FONT_6X9, RED)
+                    MonoTextStyle::new(&FONT_7X13, RED)
                 };
-                Text::with_text_style(sig_text, Point::new(4, 68), sig_style, bottom)
+                Text::with_text_style(sig_text, Point::new(4, 72), sig_style, bottom)
                     .draw(display)?;
 
                 // RSSI at bottom
