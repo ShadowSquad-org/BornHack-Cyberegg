@@ -194,7 +194,7 @@ impl<const M: usize> DisplayState<M> {
     }
 }
 
-static MAIN_ITEMS: [MenuItem; 3] = [
+static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Item 1",
         action: || {},
@@ -206,6 +206,13 @@ static MAIN_ITEMS: [MenuItem; 3] = [
     MenuItem {
         label: label_boost_rx,
         action: action_boost_rx,
+    },
+    MenuItem {
+        label: || "Reset channels",
+        #[cfg(feature = "embassy")]
+        action: || { CHANNEL_RESET_SIGNAL.signal(()); },
+        #[cfg(not(feature = "embassy"))]
+        action: || {},
     },
 ];
 
@@ -299,6 +306,10 @@ pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
 /// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
 #[cfg(feature = "embassy")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
+#[cfg(feature = "embassy")]
+pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 // Macro for embassy - immutable access
 #[cfg(feature = "embassy")]

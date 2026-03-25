@@ -18,6 +18,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::fw::bonds::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
+use crate::fw::channels;
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -225,6 +226,7 @@ async fn notify_once<P: PacketPool>(
     }
 }
 
+
 // ---------------------------------------------------------------------------
 // BLE peripheral runner
 // ---------------------------------------------------------------------------
@@ -274,6 +276,8 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>, ctx: Compani
     let Host { mut peripheral, mut runner, .. } = stack.build();
 
     let bond_tx = BOND_CMD_CHANNEL.sender();
+    channels::init().await;
+    defmt::info!("BLE: channel store ready ({} active)", channels::count_active().await);
 
     // Run the HCI runner in parallel with the advertising loop.
     embassy_futures::join::join(
@@ -324,6 +328,12 @@ async fn nus_peripheral_loop<C>(
     let server = NusServer::new_default(name_str).unwrap();
 
     loop {
+        // Handle channel reset request from the menu (fires between connections).
+        if crate::CHANNEL_RESET_SIGNAL.signaled() {
+            crate::CHANNEL_RESET_SIGNAL.reset();
+            channels::reset().await;
+        }
+
         defmt::debug!("BLE: advertising…");
 
         let advertiser = match peripheral
@@ -449,7 +459,7 @@ async fn nus_peripheral_loop<C>(
                                 companion::Response::DeviceInfo(companion::DeviceInfo {
                                     fw_version: 3,
                                     max_contacts_raw: 10,  // 20 contacts
-                                    max_channels: 8,
+                                    max_channels: channels::NUM_CHANNELS as u8,
                                     ble_pin: {
                                         let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
                                         if v == u32::MAX { 0 } else { v }
@@ -474,10 +484,23 @@ async fn nus_peripheral_loop<C>(
                             }
 
                             Ok(companion::cmd::Command::SyncNextMessage)
-                            | Ok(companion::cmd::Command::GetContacts)
-                            | Ok(companion::cmd::Command::GetChannel(_)) => {
-                                defmt::info!("companion: msg/contact/channel query → NO_MORE_MSGS");
+                            | Ok(companion::cmd::Command::GetContacts) => {
+                                defmt::info!("companion: msg/contact query → NO_MORE_MSGS");
                                 companion::Response::NoMoreMsgs
+                            }
+
+                            Ok(companion::cmd::Command::GetChannel(idx)) => {
+                                if idx as usize >= channels::NUM_CHANNELS {
+                                    defmt::info!("companion: GET_CHANNEL {=u8} → out of range", idx);
+                                    companion::Response::NoMoreMsgs
+                                } else {
+                                    let (name, key) = channels::get(idx).await
+                                        .unwrap_or(([0u8; 32], [0u8; 16]));
+                                    let empty = name == [0u8; 32] && key == [0u8; 16];
+                                    defmt::info!("companion: GET_CHANNEL {=u8} → {}", idx,
+                                        if empty { "empty" } else { "found" });
+                                    companion::Response::ChannelInfo(companion::ChannelInfo { index: idx, name, key })
+                                }
                             }
 
                             Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
@@ -491,9 +514,14 @@ async fn nus_peripheral_loop<C>(
                                 companion::Response::Ok
                             }
 
-                            Ok(companion::cmd::Command::SetChannel { .. }) => {
-                                defmt::info!("companion: SET_CHANNEL → OK (not stored)");
-                                companion::Response::Ok
+                            Ok(companion::cmd::Command::SetChannel { index, name: ch_name, key: ch_key }) => {
+                                if channels::set(index, ch_name, ch_key).await {
+                                    defmt::info!("companion: SET_CHANNEL idx={=u8} → stored", index);
+                                    companion::Response::Ok
+                                } else {
+                                    defmt::warn!("companion: SET_CHANNEL idx={=u8} out of range", index);
+                                    companion::Response::Error(companion::ErrorCode::IndexOutOfRange)
+                                }
                             }
 
                             Ok(companion::cmd::Command::SendChannelMessage { channel, .. }) => {
