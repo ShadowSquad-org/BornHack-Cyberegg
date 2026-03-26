@@ -15,13 +15,10 @@ use embassy_time::Delay;
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 
-use embassy_futures::select::{Either, select};
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
 use sx126x::op::PacketType::LoRa;
-use sx126x::op::irq::IrqMaskBit::{
-    CrcErr, HeaderError, HeaderValid, PreambleDetected, RxDone, SyncwordValid, Timeout, TxDone,
-};
+use sx126x::op::irq::IrqMaskBit::{CrcErr, RxDone, Timeout, TxDone};
 use sx126x::op::rxtx::DeviceSel::SX1262;
 use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
@@ -220,17 +217,9 @@ impl<'a> SimpleLoRa<'a> {
         self.apply_rx_gain();
         self.rf_switch_rx();
 
-        for i in 0..10u8 {
+        for _ in 0..10u8 {
             Timer::after_millis(50).await;
             if let Ok(s) = self.lora.get_status() {
-                let mode = s.chip_mode().map(|m| m as u8).unwrap_or(0xFF);
-                let cmd = s.command_status().map(|c| c as u8).unwrap_or(0xFF);
-                defmt::debug!(
-                    "ensure_rx poll {=u8}: chip_mode={=u8:#04x} cmd={=u8:#04x}",
-                    i,
-                    mode,
-                    cmd
-                );
                 if matches!(s.chip_mode(), Some(ChipMode::RX)) {
                     return true;
                 }
@@ -248,13 +237,6 @@ impl<'a> SimpleLoRa<'a> {
         &mut self,
         buf: &mut [u8],
     ) -> Result<Option<(usize, i16)>, LoraError> {
-        // Log chip mode so we can confirm the chip is actually in RX before waiting.
-        // Expected: 0x05 (RX). If 0x02 (StbyRC), set_rx() hasn't taken effect yet.
-        if let Ok(s) = self.lora.get_status() {
-            let mode = s.chip_mode().map(|m| m as u8).unwrap_or(0xFF);
-            defmt::debug!("RX wait: chip_mode={=u8:#04x} (0x05=RX, 0x02=StbyRC)", mode);
-        }
-
         // Clear any stale IRQ so DIO1 is deasserted before we arm the rising-edge wait.
         // Without this, a leftover HIGH from the init sequence would block wait_for_rising_edge()
         // forever (it only fires on LOW→HIGH transitions).
@@ -262,22 +244,9 @@ impl<'a> SimpleLoRa<'a> {
             .clear_irq_status(IrqMask::all())
             .map_err(|_| LoraError::Spi("clear_irq before wait failed"))?;
 
-        // TODO: Replace active wait + watchdog timer with deep sleep + GPIO wake-up once
-        // reception is confirmed working. The current approach keeps HFCLK running and
-        // prevents low-power sleep, significantly increasing battery drain.
-        match select(self.dio1.wait_for_rising_edge(), Timer::after_secs(15)).await {
-            Either::First(_) => {} // DIO1 fired — read IRQ below
-            Either::Second(_) => {
-                defmt::debug!("LoRa: no DIO1 in 15s — re-arming RX (continuous mode)");
-                self.lora.wait_on_busy().ok();
-                self.lora
-                    .set_rx(RxTxTimeout::continuous_rx())
-                    .map_err(|_| LoraError::Timeout)?;
-                self.apply_rx_gain();
-                self.rf_switch_rx();
-                return Ok(None);
-            }
-        }
+        // In continuous RX mode the chip stays in RX indefinitely; DIO1 only fires
+        // on real radio events (RxDone, CrcErr, PreambleDetected, …).
+        self.dio1.wait_for_rising_edge().await;
 
         // sx126x 0.3.0 does not call wait_on_busy() before get_irq_status();
         // without this the chip may still be busy processing the just-received
@@ -289,23 +258,6 @@ impl<'a> SimpleLoRa<'a> {
             .map_err(|_| LoraError::Spi("get_irq_status failed"))?;
         self.lora.wait_on_busy().ok();
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
-
-        // Log every IRQ event so we can diagnose reception issues:
-        //   timeout only           → wrong frequency
-        //   preamble, no sync_word  → frequency OK, sync word mismatch
-        //   sync_word, header_err   → SF/BW/CR mismatch
-        //   rx_done + crc_err      → modem settings OK, payload error
-        //   rx_done, no crc_err    → full receive
-        defmt::debug!(
-            "DIO1: rx={} crc_err={} timeout={} | preamble={} syncword={} header_ok={} header_err={}",
-            irq.rx_done(),
-            irq.crc_err(),
-            irq.timeout(),
-            irq.preamble_detected(),
-            irq.syncword_valid(),
-            irq.header_valid(),
-            irq.header_error(),
-        );
 
         let result = if irq.rx_done() && !irq.crc_err() {
             let buf_status = self
@@ -346,7 +298,6 @@ impl<'a> SimpleLoRa<'a> {
         };
 
         // Re-arm continuous RX
-        defmt::debug!("RX re-armed");
         self.lora.wait_on_busy().ok();
         self.lora
             .set_rx(RxTxTimeout::continuous_rx())
@@ -374,8 +325,7 @@ impl<'a> SimpleLoRa<'a> {
         self.dio1.wait_for_rising_edge().await;
         self.lora.clear_irq_status(IrqMask::all()).unwrap();
 
-        // Re-arm continuous RX immediately so receive_packet() doesn't spend
-        // 15 s in standby waiting for the timeout before calling set_rx().
+        // Re-arm continuous RX so receive_packet() finds the chip already in RX mode.
         self.lora.wait_on_busy().ok();
         self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
         self.apply_rx_gain();
@@ -408,11 +358,7 @@ pub(super) fn build_lora_config(config: &MeshCoreConfig) -> LoRaConfig {
         .combine(TxDone)
         .combine(RxDone)
         .combine(CrcErr)
-        .combine(Timeout)
-        .combine(PreambleDetected)
-        .combine(SyncwordValid)
-        .combine(HeaderValid)
-        .combine(HeaderError);
+        .combine(Timeout);
 
     let packet_params = LoRaPacketParams::default()
         .set_preamble_len(config.preamble_len)

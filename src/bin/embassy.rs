@@ -214,7 +214,6 @@ async fn main(spawner: Spawner) {
 
     defmt::info!("Entering main loop...");
     let main_loop = async {
-        // let mut loop_count: u32 = 0;
         loop {
             let _ = display.clear(WHITE);
             let health_str = with_health!(|f| f.to_string());
@@ -225,10 +224,7 @@ async fn main(spawner: Spawner) {
                     health_err!(epd, "Failed to draw graphics");
                 }
             }
-            defmt::info!("Health: {}", health_str.as_str());
-
             let _ = display.reset().await;
-            defmt::info!("Fast B&W refresh");
             if DISPLAY_STATE.lock(|f| f.borrow().active_screen() == 0) {
                 // First screen with menu structure, fast updates
                 let _ = display.update_ghost().await;

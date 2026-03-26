@@ -267,7 +267,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>, ctx: Compani
             for (i, bond) in bonds.iter().enumerate() {
                 let addr = bond.identity.bd_addr.into_inner();
                 match stack.add_bond_information(bond.clone()) {
-                    Ok(()) => defmt::info!(
+                    Ok(()) => defmt::debug!(
                         "BLE: restored bond[{}] addr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                         i, addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
                     ),
@@ -437,7 +437,7 @@ async fn nus_peripheral_loop<C>(
                 // New messages arrived while connected — push 0x83 to app.
                 // -----------------------------------------------------------
                 Either::Second(()) => {
-                    defmt::info!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
+                    defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
                     let mut buf = [0u8; companion::MAX_RESPONSE_LEN];
                     let len = companion::encode(&companion::Response::MessagesWaiting, &mut buf);
                     notify_once(&server, &gatt_conn, &buf[..len]).await;
@@ -505,7 +505,6 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::AppStart) => {
-                                    defmt::info!("companion: APP_START → SELF_INFO");
                                     companion::Response::SelfInfo(companion::SelfInfo {
                                         adv_type: 1,
                                         tx_power: radio_params.tx_power,
@@ -528,7 +527,6 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::DeviceQuery) => {
-                                    defmt::info!("companion: DEVICE_QUERY → DEVICE_INFO");
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
                                         fw_version: 3,
                                         max_contacts_raw: 10,
@@ -586,31 +584,24 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::GetContacts) => {
-                                    defmt::info!("companion: GET_CONTACTS → NO_MORE_MSGS");
                                     companion::Response::NoMoreMsgs
                                 }
 
                                 Ok(companion::cmd::Command::GetChannel(idx)) => {
                                     if idx as usize >= channels::NUM_CHANNELS {
-                                        defmt::info!("companion: GET_CHANNEL {=u8} → out of range", idx);
                                         companion::Response::NoMoreMsgs
                                     } else {
                                         let (name, key) = channels::get(idx).await
                                             .unwrap_or(([0u8; 32], [0u8; 16]));
-                                        let empty = name == [0u8; 32] && key == [0u8; 16];
-                                        defmt::info!("companion: GET_CHANNEL {=u8} → {}",
-                                            idx, if empty { "empty" } else { "found" });
                                         companion::Response::ChannelInfo(companion::ChannelInfo { index: idx, name, key })
                                     }
                                 }
 
-                                Ok(companion::cmd::Command::SendSelfAdvert(mode)) => {
-                                    defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → OK", mode);
+                                Ok(companion::cmd::Command::SendSelfAdvert(_mode)) => {
                                     companion::Response::Ok
                                 }
 
-                                Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
-                                    defmt::info!("companion: SET_DEVICE_TIME ts={=u32} → OK", ts);
+                                Ok(companion::cmd::Command::SetDeviceTime(_ts)) => {
                                     companion::Response::Ok
                                 }
 

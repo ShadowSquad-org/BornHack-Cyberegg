@@ -148,7 +148,7 @@ pub async fn run_meshcore_listener<'a>(
         };
 
         match rx_result {
-            Ok(None) => { /* timeout or CRC error — already re-armed */ }
+            Ok(None) => { /* CRC error or non-data IRQ — already re-armed */ }
 
             Ok(Some((len, rssi))) => {
                 let frame = &raw[..len];
@@ -451,25 +451,32 @@ async fn send_grp_txt(
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
 
-    // Resolve the channel key — prefer the in-RAM table, fall back to KV.
-    let (key, hash) = if let Some(ch) = loaded_channels.iter().find(|c| c.slot_idx == req.channel_idx) {
-        (ch.key, ch.hash)
-    } else if let Some((_, key)) = channels::get(req.channel_idx).await {
-        let hash = hash_from_key(&key);
-        (key, hash)
-    } else {
-        defmt::warn!("send_grp_txt: channel slot {=u8} not found, dropping", req.channel_idx);
+    // Resolve the channel key from the in-RAM table (kept current via CHANNELS_CHANGED_SIGNAL).
+    let Some(ch) = loaded_channels.iter().find(|c| c.slot_idx == req.channel_idx) else {
+        defmt::warn!("send_grp_txt: channel slot {=u8} not in RAM table, dropping", req.channel_idx);
         return;
     };
+    let (key, hash) = (ch.key, ch.hash);
 
     // MeshCore GrpTxt wire format embeds the sender as "Name: MessageText".
-    // Build the prefixed wire text: "{device_id}: {message}".
-    // MAX_GRP_DATA_SIZE = 181 bytes; prefix is 6 bytes ("XXYY: "), leaving 175 for the body.
-    let device_id = super::device_id::get_bytes();
+    // Use the persisted node name, falling back to the 4-byte device-ID hex if unset.
+    let mut name_buf = [0u8; settings::MAX_NODE_NAME];
+    let name_len = {
+        let n = settings::get_node_name(&mut name_buf).await;
+        if n == 0 {
+            let id = super::device_id::get_bytes();
+            name_buf[..id.len()].copy_from_slice(&id);
+            id.len()
+        } else {
+            n
+        }
+    };
+    let sender = &name_buf[..name_len];
+
     let mut wire_text: heapless::Vec<u8, { meshcore::MAX_GRP_DATA_SIZE }> = heapless::Vec::new();
-    let _ = wire_text.extend_from_slice(&device_id);
+    let _ = wire_text.extend_from_slice(sender);
     let _ = wire_text.extend_from_slice(b": ");
-    let body_max = meshcore::MAX_GRP_DATA_SIZE.saturating_sub(device_id.len() + 2);
+    let body_max = meshcore::MAX_GRP_DATA_SIZE.saturating_sub(name_len + 2);
     let _ = wire_text.extend_from_slice(&req.text[..req.text.len().min(body_max)]);
 
     let grp = match grp_txt::encrypt(&key, hash, req.timestamp, 0, &wire_text) {
