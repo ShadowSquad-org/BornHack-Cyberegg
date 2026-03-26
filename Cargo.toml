@@ -11,7 +11,7 @@ embedded-graphics-simulator = { version = "0.8", optional = true }
 defmt = { version = "1.0.1", optional = true }
 
 # Embassy dependencies (only when embassy feature is enabled)
-fixed = { version = "1.10.0", optional = true }
+
 static_cell = { version = "2", optional = true }
 cortex-m = { version = "0.7.6", features = [
     "inline-asm",
@@ -54,7 +54,7 @@ nrf-sdc  = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363
 # seeding trouble-host. This is safe for now because we do not initiate pairing.
 # TODO: seed the SM properly before enabling bonding in production.
 trouble-host = { version = "0.6", features = ["defmt", "security"], optional = true }
-rand_chacha = { version = "0.3", default-features = false, optional = true }
+rand_core = { version = "0.6", default-features = false, optional = true }
 tickv    = { version = "2.0", optional = true }
 meshcore = { path = "./vendor/meshcore", optional = true }
 meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
@@ -67,7 +67,7 @@ uf2conv = "0.1"
 [profile.dev]
 debug = 2
 opt-level = "s"
-lto = false
+lto = "thin"
 
 [profile.release]
 debug = 2
@@ -92,7 +92,7 @@ embassy = [
     "embassy-time",
     "embedded-hal",
     "embedded-hal-bus",
-    "fixed",
+
     "heapless",
     "panic-probe",
     "embassy-boot-nrf",
@@ -102,7 +102,7 @@ embassy = [
     "nrf-mpsl",
     "nrf-sdc",
     "trouble-host",
-    "rand_chacha",
+    "rand_core",
     "tickv",
     "meshcore",
     "meshcore-companion",

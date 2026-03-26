@@ -7,6 +7,7 @@ use embassy_time::Timer;
 
 use super::device_identity::DeviceIdentity;
 use super::health::SYSTEM_HEALTH;
+use super::settings;
 use super::sx1262::{MeshCoreConfig, SimpleLoRa};
 use super::{channels, msg_queue};
 use crate::{health_err, update_health};
@@ -50,11 +51,15 @@ static MSG_SEEN: Mutex<CriticalSectionRawMutex, RefCell<MsgHashRing<50>>> =
 
 /// Listen for MeshCore packets on the SX1262 and store decoded messages.
 ///
-/// Configures the SX1262 using [`MeshCoreConfig::UK_NARROW_BAND`] and enters
-/// a continuous receive loop.  Every received packet is parsed with the
-/// `meshcore` vendor crate.  Group-text messages (`GrpTxt`) are decoded,
-/// deduplicated, and stored in `LAST_LORA_MSG`; node advertisements are
-/// logged; all other types are logged as raw hex.
+/// Loads LoRa radio parameters from [`settings`] (falling back to
+/// [`MeshCoreConfig::UK_NARROW_BAND`] on first boot) and enters a continuous
+/// receive loop.  Every received packet is parsed with the `meshcore` vendor
+/// crate.  Group-text messages (`GrpTxt`) are decoded, deduplicated, and
+/// stored in `LAST_LORA_MSG`; node advertisements are logged; all other types
+/// are logged as raw hex.
+///
+/// Radio parameters updated via the companion app take effect on the **next
+/// reboot** — reinitialisation while in RX is not yet implemented.
 pub async fn run_meshcore_listener<'a>(
     spi: Peri<'a, peripherals::SPI2>,
     sck_pin: Peri<'a, AnyPin>,
@@ -69,7 +74,9 @@ pub async fn run_meshcore_listener<'a>(
 ) -> ! {
     update_health!(|h| h.lora.set_ok("Ok when started."));
 
-    let config = &MeshCoreConfig::UK_NARROW_BAND;
+    let radio = settings::get_radio_params_or_default().await;
+    let lora_cfg = MeshCoreConfig::from_radio_params(&radio);
+    let config = &lora_cfg;
 
     let mut lora = match SimpleLoRa::new(
         spi, sck_pin, mosi_pin, miso_pin, nrst_pin, nss_pin, busy_pin, dio1_pin, ant_pin, config,
@@ -96,8 +103,11 @@ pub async fn run_meshcore_listener<'a>(
     }
 
     defmt::info!(
-        "MeshCore listener ready — freq={=u32}Hz BW=62.5kHz SF=8 CR=4/5 sync={=u16:#06x} preamble={=u16}",
+        "MeshCore listener ready — freq={=u32}Hz bw={=u32}Hz SF={=u8} CR={=u8} sync={=u16:#06x} preamble={=u16}",
         config.frequency_hz,
+        radio.bw_hz,
+        radio.sf,
+        radio.cr,
         config.sync_word,
         config.preamble_len,
     );

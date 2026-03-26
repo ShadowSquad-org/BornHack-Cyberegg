@@ -8,7 +8,7 @@ runner = "probe-rs run --chip nRF52840_xxAA"
 # rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "info,hello_graphics::fw::kv=warn,hello_graphics::fw::bonds=warn,hello_graphics::fw::ble=warn,hello_graphics::fw::battery=off,trouble_host=warn,nrf_mpsl=warn,nrf_sdc=warn"
 
 [alias]
 sim = "run --bin simulator --features simulator"

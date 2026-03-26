@@ -67,6 +67,51 @@ impl MeshCoreConfig {
         preamble_len: 8,
         tcxo: None, // External 32 MHz crystal on XTA/XTB — no DIO3 TCXO control needed
     };
+
+    /// Build a [`MeshCoreConfig`] from user-configurable [`settings::RadioParams`].
+    ///
+    /// Hardware-fixed fields (`sync_word`, `preamble_len`, `tcxo`) are inherited
+    /// from [`UK_NARROW_BAND`] and are never user-configurable via the companion app.
+    ///
+    /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR 4/5,
+    /// 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is handled here.
+    pub fn from_radio_params(p: &crate::fw::settings::RadioParams) -> Self {
+        Self {
+            frequency_hz:  p.freq_hz,
+            spread_factor: match p.sf {
+                5  => LoRaSpreadFactor::SF5,
+                6  => LoRaSpreadFactor::SF6,
+                7  => LoRaSpreadFactor::SF7,
+                9  => LoRaSpreadFactor::SF9,
+                10 => LoRaSpreadFactor::SF10,
+                11 => LoRaSpreadFactor::SF11,
+                12 => LoRaSpreadFactor::SF12,
+                _  => LoRaSpreadFactor::SF8,   // default / SF8
+            },
+            bandwidth: match p.bw_hz {
+                0      ..=9_999    => LoRaBandWidth::BW7,
+                10_000 ..=14_999   => LoRaBandWidth::BW10,
+                15_000 ..=19_999   => LoRaBandWidth::BW15,
+                20_000 ..=30_999   => LoRaBandWidth::BW20,
+                31_000 ..=40_999   => LoRaBandWidth::BW31,
+                41_000 ..=61_999   => LoRaBandWidth::BW41,
+                62_000 ..=124_999  => LoRaBandWidth::BW62,
+                125_000..=249_999  => LoRaBandWidth::BW125,
+                250_000..=499_999  => LoRaBandWidth::BW250,
+                _                  => LoRaBandWidth::BW500,
+            },
+            coding_rate: match p.cr {
+                6 => LoraCodingRate::CR4_6,
+                7 => LoraCodingRate::CR4_7,
+                8 => LoraCodingRate::CR4_8,
+                _ => LoraCodingRate::CR4_5,  // protocol cr=5 → CR 4/5
+            },
+            sync_word:    Self::UK_NARROW_BAND.sync_word,
+            tx_power_dbm: p.tx_power,
+            preamble_len: Self::UK_NARROW_BAND.preamble_len,
+            tcxo:         Self::UK_NARROW_BAND.tcxo,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
-use hello_graphics::fw::device_identity;
+use hello_graphics::fw::settings;
 use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::{
@@ -93,7 +93,7 @@ async fn main(spawner: Spawner) {
     // MeshCore device identity (load from KV or generate via TRNG)
     // Must happen before BLE init, which consumes p.RNG.
     // -----------------------------------------------------------------------
-    let identity = device_identity::load_or_create(kv::namespace("meshcore")).await;
+    let identity = settings::load_or_create_identity().await;
 
     // -----------------------------------------------------------------------
     // BLE (MPSL + SDC + TrouBLE peripheral task)
@@ -101,7 +101,7 @@ async fn main(spawner: Spawner) {
 
     // Collect entropy for the BLE security manager PRNG *before* init_ble
     // consumes p.RNG — the SDC holds the peripheral for its lifetime.
-    let ble_prng_seed = hello_graphics::fw::device_identity::trng_seed();
+    let ble_prng_seed = hello_graphics::fw::device_identity::trng_seed(); // TRNG used before RNG peripheral is consumed by SDC
 
     static SDC_MEM: StaticCell<nrf_sdc::Mem<{ hello_graphics::fw::ble::SDC_MEM_SIZE }>> = StaticCell::new();
     // init_ble returns SoftdeviceController<'static> directly.
@@ -133,11 +133,6 @@ async fn main(spawner: Spawner) {
     );
     let companion_ctx = CompanionContext {
         pub_key: identity.pub_key,
-        frequency_hz: 869_618_000,
-        bandwidth_hz: 62_500,
-        spreading_factor: 8,
-        coding_rate: 1,
-        tx_power: 14,
     };
     spawner.must_spawn(run_ble_peripheral(sdc, companion_ctx, ble_prng_seed));
 

@@ -5,8 +5,27 @@
 
 use core::sync::atomic::Ordering;
 
-use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::SeedableRng;
+use rand_core::{CryptoRng, RngCore};
+
+/// Minimal RNG that yields TRNG entropy bytes directly.
+///
+/// `trouble-host` calls `fill_bytes` exactly once on the RNG passed to
+/// `set_random_generator_seed` — just to extract 32 bytes of seed material.
+/// Since `prng_seed` already contains raw TRNG output we can hand it over
+/// directly, avoiding the full ChaCha20 implementation from `rand_chacha`.
+struct TrngSeed([u8; 32]);
+impl RngCore for TrngSeed {
+    fn next_u32(&mut self) -> u32 { u32::from_le_bytes(self.0[..4].try_into().unwrap()) }
+    fn next_u64(&mut self) -> u64 { u64::from_le_bytes(self.0[..8].try_into().unwrap()) }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        for (i, b) in dest.iter_mut().enumerate() { *b = self.0[i % 32]; }
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+impl CryptoRng for TrngSeed {}
 
 use meshcore_companion as companion;
 
@@ -18,7 +37,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::fw::bonds::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
-use crate::fw::{channels, msg_queue};
+use crate::fw::{channels, msg_queue, settings};
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -181,20 +200,11 @@ pub struct NusServer {
 // ---------------------------------------------------------------------------
 
 /// Device information snapshot passed to the companion protocol handler.
-/// Filled in by `embassy.rs` at startup from the identity and radio config.
+/// Filled in by `embassy.rs` at startup from the device identity.
+/// Radio parameters are loaded from [`settings`] directly inside the BLE task.
 pub struct CompanionContext {
     /// Ed25519 public key (32 bytes).
     pub pub_key: [u8; 32],
-    /// LoRa radio frequency in Hz (e.g. 869_618_000).
-    pub frequency_hz: u32,
-    /// LoRa radio bandwidth in Hz (e.g. 62_500).
-    pub bandwidth_hz: u32,
-    /// LoRa spreading factor value (e.g. 8 for SF8).
-    pub spreading_factor: u8,
-    /// LoRa coding rate: 1 = 4/5.
-    pub coding_rate: u8,
-    /// TX power in dBm.
-    pub tx_power: i8,
 }
 
 /// Send `data` as a single BLE notification.
@@ -240,7 +250,7 @@ pub async fn run_ble_peripheral(sdc: SoftdeviceController<'static>, ctx: Compani
 
     // Seed the security manager PRNG from TRNG entropy collected at startup
     // (before the RNG peripheral was consumed by the SDC).
-    let mut prng = ChaCha20Rng::from_seed(prng_seed);
+    let mut prng = TrngSeed(prng_seed);
 
     let stack = trouble_host::new(sdc, resources)
         .set_random_address(Address::random(crate::fw::device_id::get_ble_addr()))
@@ -326,6 +336,39 @@ async fn nus_peripheral_loop<C>(
     ).unwrap();
 
     let server = NusServer::new_default(name_str).unwrap();
+
+    // Load the persisted node name (set via CMD_SET_ADVERT_NAME 0x08).
+    // Falls back to the 4-byte hardware device-ID hex string on first boot.
+    let mut node_name = [0u8; settings::MAX_NODE_NAME];
+    let mut node_name_len: usize = {
+        let n = settings::get_node_name(&mut node_name).await;
+        if n == 0 {
+            let fb = crate::fw::device_id::get_bytes();
+            node_name[..4].copy_from_slice(&fb);
+            4
+        } else {
+            n
+        }
+    };
+
+    // Load the persisted radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
+    // CMD_SET_RADIO_TX_POWER 0x0C).  Falls back to EU/UK narrow band defaults.
+    let mut radio_params = settings::get_radio_params_or_default().await;
+
+    // Load the persisted GPS position (set via CMD_SET_ADVERT_LATLON 0x0E).
+    // Falls back to (0, 0) on first boot (meaning "no position set").
+    let mut position = settings::get_position_or_default().await;
+
+    // Load other params (set via CMD_SET_OTHER_PARAMS 0x26).
+    // Falls back to all-zero defaults on first boot.
+    let mut other_params = settings::get_other_params().await.unwrap_or(settings::OtherParams {
+        manual_add_contacts: 0,
+        telemetry_mode_base: 0,
+        telemetry_mode_loc:  0,
+        telemetry_mode_env:  0,
+        advert_loc_policy:   0,
+        multi_acks:          0,
+    });
 
     loop {
         // Handle channel reset request from the menu (fires between connections).
@@ -450,8 +493,11 @@ async fn nus_peripheral_loop<C>(
                                 None
                             };
 
-                            // Declare before the match so its lifetime covers `response`.
-                            let device_name = crate::fw::device_id::get_bytes();
+                            // Declared before the match so mutations can happen after encode.
+                            let mut pending_name:     Option<([u8; settings::MAX_NODE_NAME], usize)> = None;
+                            let mut pending_radio:    Option<settings::RadioParams> = None;
+                            let mut pending_position: Option<settings::Position> = None;
+                            let mut pending_other:    Option<settings::OtherParams> = None;
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
@@ -462,20 +508,22 @@ async fn nus_peripheral_loop<C>(
                                     defmt::info!("companion: APP_START → SELF_INFO");
                                     companion::Response::SelfInfo(companion::SelfInfo {
                                         adv_type: 1,
-                                        tx_power: ctx.tx_power,
+                                        tx_power: radio_params.tx_power,
                                         max_tx_power: 22,
                                         pub_key: &ctx.pub_key,
-                                        lat: 0,
-                                        lon: 0,
-                                        multi_acks: 0,
-                                        adv_location_policy: 0,
-                                        telemetry_mode: 0,
-                                        manual_add_contacts: 0,
-                                        frequency_hz: ctx.frequency_hz,
-                                        bandwidth_hz: ctx.bandwidth_hz,
-                                        spreading_factor: ctx.spreading_factor,
-                                        coding_rate: ctx.coding_rate,
-                                        name: &device_name,
+                                        lat: position.lat,
+                                        lon: position.lon,
+                                        multi_acks: other_params.multi_acks,
+                                        adv_location_policy: other_params.advert_loc_policy,
+                                        telemetry_mode: other_params.telemetry_mode_base
+                                            | (other_params.telemetry_mode_loc << 2)
+                                            | (other_params.telemetry_mode_env << 4),
+                                        manual_add_contacts: other_params.manual_add_contacts,
+                                        frequency_hz: radio_params.freq_hz,
+                                        bandwidth_hz: radio_params.bw_hz,
+                                        spreading_factor: radio_params.sf,
+                                        coding_rate: radio_params.cr,
+                                        name: &node_name[..node_name_len],
                                     })
                                 }
 
@@ -604,6 +652,87 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                Ok(companion::cmd::Command::SetAdvertName(name)) => {
+                                    let len = name.len().min(settings::MAX_NODE_NAME);
+                                    let mut new_name = [0u8; settings::MAX_NODE_NAME];
+                                    new_name[..len].copy_from_slice(&name[..len]);
+                                    defmt::info!("companion: SET_ADVERT_NAME ({=usize} B) → OK", len);
+                                    pending_name = Some((new_name, len));
+                                    companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::SetRadioParams { freq_khz, bw_hz, sf, cr, client_repeat }) => {
+                                    // Validate ranges per MeshCore reference firmware.
+                                    if freq_khz >= 300_000 && freq_khz <= 2_500_000
+                                        && bw_hz >= 7_000 && bw_hz <= 500_000
+                                        && sf >= 5 && sf <= 12
+                                        && cr >= 5 && cr <= 8
+                                    {
+                                        defmt::info!(
+                                            "companion: SET_RADIO_PARAMS freq={=u32}kHz bw={=u32}Hz SF={=u8} CR={=u8} → OK",
+                                            freq_khz, bw_hz, sf, cr
+                                        );
+                                        pending_radio = Some(settings::RadioParams {
+                                            freq_hz: freq_khz * 1000,
+                                            bw_hz,
+                                            sf,
+                                            cr,
+                                            tx_power: radio_params.tx_power,
+                                            client_repeat,
+                                        });
+                                        companion::Response::Ok
+                                    } else {
+                                        defmt::warn!("companion: SET_RADIO_PARAMS out of range → ERROR");
+                                        companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SetRadioTxPower(power)) => {
+                                    if power >= -9 && power <= 22 {
+                                        defmt::info!("companion: SET_RADIO_TX_POWER {=i8} dBm → OK", power);
+                                        pending_radio = Some(settings::RadioParams { tx_power: power, ..radio_params });
+                                        companion::Response::Ok
+                                    } else {
+                                        defmt::warn!("companion: SET_RADIO_TX_POWER {=i8} dBm out of range → ERROR", power);
+                                        companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::SetOtherParams { manual_add_contacts, telemetry, advert_loc_policy, multi_acks }) => {
+                                    defmt::info!(
+                                        "companion: SET_OTHER_PARAMS manual={=u8} tele={=u8} loc={=u8} macks={=u8} → OK",
+                                        manual_add_contacts, telemetry, advert_loc_policy, multi_acks
+                                    );
+                                    pending_other = Some(settings::OtherParams {
+                                        manual_add_contacts,
+                                        telemetry_mode_base: telemetry & 0x03,
+                                        telemetry_mode_loc:  (telemetry >> 2) & 0x03,
+                                        telemetry_mode_env:  (telemetry >> 4) & 0x03,
+                                        advert_loc_policy,
+                                        multi_acks,
+                                    });
+                                    companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::SetAdvertLatLon { lat, lon }) => {
+                                    if lat >= -90_000_000 && lat <= 90_000_000
+                                        && lon >= -180_000_000 && lon <= 180_000_000
+                                    {
+                                        defmt::info!(
+                                            "companion: SET_ADVERT_LATLON lat={=i32} lon={=i32} → OK",
+                                            lat, lon
+                                        );
+                                        pending_position = Some(settings::Position { lat, lon });
+                                        companion::Response::Ok
+                                    } else {
+                                        defmt::warn!(
+                                            "companion: SET_ADVERT_LATLON lat={=i32} lon={=i32} out of range → ERROR",
+                                            lat, lon
+                                        );
+                                        companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                    }
+                                }
+
                                 Ok(companion::cmd::Command::Unknown(b)) => {
                                     defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
                                     companion::Response::Error(companion::ErrorCode::InvalidCommand)
@@ -619,6 +748,38 @@ async fn nus_peripheral_loop<C>(
                                 Err(e) => defmt::warn!("companion: write.accept() failed: {:?}", defmt::Debug2Format(&e)),
                             }
                             notify_once(&server, &gatt_conn, &resp_buf[..resp_len]).await;
+
+                            // Apply any pending settings changes (after response is sent
+                            // so the borrow on node_name via `response` has ended).
+                            if let Some((new_name, len)) = pending_name {
+                                node_name[..settings::MAX_NODE_NAME].copy_from_slice(&new_name);
+                                node_name_len = len;
+                                match settings::set_node_name(&node_name[..len]).await {
+                                    Ok(()) => defmt::info!("companion: node_name persisted"),
+                                    Err(e) => defmt::warn!("companion: node_name persist failed: {:?}", e),
+                                }
+                            }
+                            if let Some(new_radio) = pending_radio {
+                                radio_params = new_radio;
+                                match settings::set_radio_params(radio_params).await {
+                                    Ok(()) => defmt::info!("companion: radio params persisted (takes effect on reboot)"),
+                                    Err(e) => defmt::warn!("companion: radio params persist failed: {:?}", e),
+                                }
+                            }
+                            if let Some(new_pos) = pending_position {
+                                position = new_pos;
+                                match settings::set_position(position).await {
+                                    Ok(()) => defmt::info!("companion: position persisted"),
+                                    Err(e) => defmt::warn!("companion: position persist failed: {:?}", e),
+                                }
+                            }
+                            if let Some(new_other) = pending_other {
+                                other_params = new_other;
+                                match settings::set_other_params(other_params).await {
+                                    Ok(()) => defmt::info!("companion: other params persisted"),
+                                    Err(e) => defmt::warn!("companion: other params persist failed: {:?}", e),
+                                }
+                            }
                         } else if let Ok(reply) = write.accept() {
                             reply.send().await;
                         }
