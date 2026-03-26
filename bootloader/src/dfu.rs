@@ -353,6 +353,7 @@ pub async fn dfu_task(
 // ---------------------------------------------------------------------------
 
 /// Erase the entire QSPI flash chip, then reset.
+#[cfg(feature = "with-qspi-flash")]
 /// Triggered by holding execute + cancel + fire at boot. Never returns.
 pub fn factory_reset_and_reset(
     qspi_periph: embassy_nrf::Peri<'static, embassy_nrf::peripherals::QSPI>,

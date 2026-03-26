@@ -75,17 +75,24 @@ fn main() -> ! {
     {
         use embassy_nrf::gpio::{Input, Pull};
 
-        let btn_exe  = Input::new(board!(p, btn_exe),  Pull::Up);
-        let btn_can  = Input::new(board!(p, btn_can),  Pull::Up);
-        let joy_fire = Input::new(board!(p, joy_fire), Pull::Up);
+        let btn_exe = Input::new(board!(p, btn_exe), Pull::Up);
 
-        let factory_reset = btn_exe.is_low() && btn_can.is_low() && joy_fire.is_low();
+        #[cfg(feature = "with-qspi-flash")]
+        let factory_reset = {
+            let btn_can  = Input::new(board!(p, btn_can),  Pull::Up);
+            let joy_fire = Input::new(board!(p, joy_fire), Pull::Up);
+            let combo = btn_exe.is_low() && btn_can.is_low() && joy_fire.is_low();
+            drop(btn_can);
+            drop(joy_fire);
+            combo
+        };
+        #[cfg(not(feature = "with-qspi-flash"))]
+        let factory_reset = false;
+
         let dfu_requested = btn_exe.is_low() && !factory_reset;
-
         drop(btn_exe);
-        drop(btn_can);
-        drop(joy_fire);
 
+        #[cfg(feature = "with-qspi-flash")]
         if factory_reset {
             defmt::info!("btn_exe + btn_can + joy_fire held — factory reset");
             dfu::factory_reset_and_reset(

@@ -33,6 +33,9 @@ static_cell     = { version = "2", optional = true }
 
 [features]
 default = ["defmt", "dfu"]
+# Enable factory-reset via QSPI chip erase (hold exe+cancel+fire at boot).
+# Omit if your board has no external QSPI flash.
+with-qspi-flash = []
 defmt = [
     "dep:defmt",
     "dep:defmt-rtt",
