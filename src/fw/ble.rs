@@ -615,6 +615,13 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                Ok(companion::cmd::Command::AddUpdateContact) => {
+                                    // We don't maintain a contact table — respond OK so the app
+                                    // proceeds normally (contacts are tracked by the app itself).
+                                    defmt::debug!("companion: ADD_UPDATE_CONTACT → OK (no-op)");
+                                    companion::Response::Ok
+                                }
+
                                 Ok(companion::cmd::Command::Reboot) => {
                                     defmt::info!("companion: REBOOT → scheduled");
                                     pending_reboot = true;

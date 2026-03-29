@@ -241,13 +241,9 @@ async fn main(spawner: Spawner) {
             let update_completed = matches!(
                 select(
                     async {
-                        defmt::info!("EPD: reset");
                         let _ = display.reset().await;
-                        defmt::info!("EPD: update_bw");
                         let _ = display.update_bw(UpdateMode::Mode1).await;
-                        defmt::info!("EPD: deep_sleep");
                         let _ = display.deep_sleep().await;
-                        defmt::info!("EPD: done");
                     },
                     async {
                         loop {
