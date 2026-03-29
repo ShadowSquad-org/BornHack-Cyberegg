@@ -9,7 +9,7 @@ use super::device_identity::DeviceIdentity;
 use super::health::SYSTEM_HEALTH;
 use super::settings;
 use super::sx1262::{MeshCoreConfig, SimpleLoRa};
-use super::{channels, msg_queue};
+use super::{channels, contacts, msg_queue};
 use crate::{health_err, update_health};
 use meshcore::channel::hash_from_key;
 use meshcore::contacts::Contacts;
@@ -75,6 +75,10 @@ pub async fn run_meshcore_listener<'a>(
     update_health!(|h| h.lora.set_ok("Ok when started."));
 
     let radio = settings::get_radio_params_or_default().await;
+    // 0 = auto-add contacts on advert, 1 = manual approval only.
+    let manual_add_contacts = settings::get_other_params().await
+        .map(|p| p.manual_add_contacts)
+        .unwrap_or(0);
     let lora_cfg = MeshCoreConfig::from_radio_params(&radio);
     let config = &lora_cfg;
 
@@ -189,7 +193,7 @@ pub async fn run_meshcore_listener<'a>(
                         match msg.payload_type {
                             PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, path_len, &loaded_channels).await,
                             PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, identity),
-                            PayloadType::Advert => log_advert(&msg.payload, rssi),
+                            PayloadType::Advert => log_advert(&msg.payload, rssi, manual_add_contacts == 0).await,
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
                             other => {
                                 defmt::info!(
@@ -320,7 +324,7 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[Loade
     }
 }
 
-fn log_advert(payload: &[u8], rssi: i16) {
+async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
     use meshcore::payload::advert;
 
     let a = match advert::deserialize(payload) {
@@ -388,8 +392,24 @@ fn log_advert(payload: &[u8], rssi: i16) {
         timestamp: a.timestamp,
         lat,
         lon,
-        name: ble_name,
+        name: ble_name.clone(),
     });
+
+    // Auto-add to the persistent contact store when the setting allows it.
+    if auto_add {
+        let contact = contacts::Contact::from_advert(
+            a.pub_key,
+            ble_name.as_slice(),
+            a.role.to_u8(),
+            a.timestamp,
+            lat,
+            lon,
+        );
+        match contacts::ContactStore::new().add_or_update(&contact).await {
+            Ok(r)  => defmt::debug!("contacts: auto-add {:?}", r),
+            Err(e) => defmt::warn!("contacts: auto-add failed: {:?}", e),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -401,8 +421,14 @@ fn log_txt_msg(payload: &[u8], rssi: i16, identity: &DeviceIdentity) {
 
     let msg = match txt_msg::deserialize(payload) {
         Ok(m) => m,
-        Err(_) => {
-            defmt::warn!("TxtMsg: failed to parse payload");
+        Err(e) => {
+            let reason = match e {
+                meshcore::Error::TooShort  => "too short",
+                meshcore::Error::TooLong   => "too long",
+                meshcore::Error::Overflow  => "overflow",
+                _                          => "other",
+            };
+            defmt::warn!("TxtMsg: failed to parse payload ({=usize}B): {=str}", payload.len(), reason);
             return;
         }
     };

@@ -1,5 +1,6 @@
 pub mod battery;
 pub mod ble;
+pub mod contacts;
 pub mod channels;
 pub mod board;
 pub mod bonds;

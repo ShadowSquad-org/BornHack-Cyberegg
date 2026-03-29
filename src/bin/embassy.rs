@@ -13,6 +13,7 @@ use hello_graphics::fw::ble::{CompanionContext, init_ble, run_ble_peripheral};
 use hello_graphics::fw::bonds::bond_task;
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
+use hello_graphics::fw::contacts::ContactStore;
 use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::fw::settings;
@@ -74,6 +75,11 @@ async fn main(spawner: Spawner) {
         ),
     }
     spawner.must_spawn(bond_task());
+
+    // -----------------------------------------------------------------------
+    // Contact store — migrate if MAX_CONTACTS changed since last boot.
+    // -----------------------------------------------------------------------
+    ContactStore::new().init().await;
 
     // -----------------------------------------------------------------------
     // MeshCore device identity (load from KV or generate via TRNG)

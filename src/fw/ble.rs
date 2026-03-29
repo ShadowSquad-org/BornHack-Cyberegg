@@ -37,7 +37,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::fw::bonds::{BOND_CMD_CHANNEL, INITIAL_BONDS, BondCmd};
-use crate::fw::{channels, msg_queue, settings};
+use crate::fw::{channels, contacts, msg_queue, settings};
 
 // ---------------------------------------------------------------------------
 // Interrupt bindings for MPSL + RNG
@@ -494,12 +494,31 @@ async fn nus_peripheral_loop<C>(
                                 None
                             };
 
+                            // Pre-read contact count for GET_CONTACTS (0x04) before the
+                            // match so we can pick ContactStart vs NoMoreMsgs up-front.
+                            let contacts_count = if data.first() == Some(&0x04) {
+                                contacts::ContactStore::new().count().await
+                            } else {
+                                0u16
+                            };
+
+                            // Pre-fetch full contact for GET_CONTACT_BY_KEY (0x1E).
+                            let contact_by_key: Option<contacts::Contact> =
+                                if data.first() == Some(&0x1E) && data.len() >= 33 {
+                                    let key: [u8; 32] = data[1..33].try_into().unwrap();
+                                    contacts::ContactStore::new().find_by_key(&key).await
+                                } else {
+                                    None
+                                };
+
                             // Declared before the match so mutations can happen after encode.
                             let mut pending_name:     Option<([u8; settings::MAX_NODE_NAME], usize)> = None;
                             let mut pending_radio:    Option<settings::RadioParams> = None;
                             let mut pending_position: Option<settings::Position> = None;
                             let mut pending_other:    Option<settings::OtherParams> = None;
                             let mut pending_reboot:   bool = false;
+                            let mut pending_contact:  Option<contacts::Contact> = None;
+                            let mut pending_contacts_sync: bool = false;
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
                                     defmt::warn!("companion: empty write");
@@ -533,7 +552,9 @@ async fn nus_peripheral_loop<C>(
                                     defmt::info!("companion: DEVICE_QUERY app_target_ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
                                         fw_version: 3,
-                                        max_contacts_raw: 10,
+                                        // Protocol encodes capacity as (actual ÷ 2); u8 max = 255
+                                        // so we saturate at 510 (255 × 2) as the reported limit.
+                                        max_contacts_raw: (contacts::MAX_CONTACTS / 2).min(u8::MAX as usize) as u8,
                                         max_channels: channels::NUM_CHANNELS as u8,
                                         ble_pin: {
                                             let v = crate::BLE_PASSKEY.load(Ordering::Relaxed);
@@ -598,7 +619,36 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::GetContacts) => {
-                                    companion::Response::NoMoreMsgs
+                                    if contacts_count > 0 {
+                                        pending_contacts_sync = true;
+                                        companion::Response::ContactStart
+                                    } else {
+                                        companion::Response::NoMoreMsgs
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetContactByKey(_key)) => {
+                                    match contact_by_key {
+                                        Some(ref c) => {
+                                            let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
+                                            companion::Response::ContactDetails(companion::response::NewAdvert {
+                                                pub_key: &c.pub_key,
+                                                adv_type: c.node_type,
+                                                flags: c.flags,
+                                                out_path_len: c.out_path_len,
+                                                out_path: &c.out_path,
+                                                name: &c.name[..name_end],
+                                                last_advert_timestamp: c.last_advert_ts,
+                                                gps_lat: c.gps_lat,
+                                                gps_lon: c.gps_lon,
+                                                lastmod: c.lastmod,
+                                            })
+                                        }
+                                        None => {
+                                            defmt::warn!("companion: GET_CONTACT_BY_KEY not found");
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                    }
                                 }
 
                                 Ok(companion::cmd::Command::GetChannel(idx)) => {
@@ -615,11 +665,35 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
+                                Ok(companion::cmd::Command::RemoveContact(key)) => {
+                                    match contacts::ContactStore::new().delete(key).await {
+                                        Ok(true) => {
+                                            defmt::info!("companion: REMOVE_CONTACT deleted {:02x}", &key[..6]);
+                                            companion::Response::Ok
+                                        }
+                                        Ok(false) => {
+                                            defmt::warn!("companion: REMOVE_CONTACT not found");
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                        Err(e) => {
+                                            defmt::warn!("companion: REMOVE_CONTACT failed: {:?}", e);
+                                            companion::Response::Error(companion::ErrorCode::Generic)
+                                        }
+                                    }
+                                }
+
                                 Ok(companion::cmd::Command::AddUpdateContact) => {
-                                    // We don't maintain a contact table — respond OK so the app
-                                    // proceeds normally (contacts are tracked by the app itself).
-                                    defmt::debug!("companion: ADD_UPDATE_CONTACT → OK (no-op)");
-                                    companion::Response::Ok
+                                    match contacts::Contact::from_add_update_payload(data) {
+                                        Some(c) => {
+                                            defmt::debug!("companion: ADD_UPDATE_CONTACT key={:02x}", &c.pub_key[..6]);
+                                            pending_contact = Some(c);
+                                            companion::Response::Ok
+                                        }
+                                        None => {
+                                            defmt::warn!("companion: ADD_UPDATE_CONTACT payload too short");
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                    }
                                 }
 
                                 Ok(companion::cmd::Command::Reboot) => {
@@ -803,6 +877,67 @@ async fn nus_peripheral_loop<C>(
                                 // before pulling the reset line.
                                 embassy_time::Timer::after_millis(200).await;
                                 cortex_m::peripheral::SCB::sys_reset();
+                            }
+
+                            // Persist an ADD_UPDATE_CONTACT payload to flash and push it back.
+                            if let Some(ref contact) = pending_contact {
+                                let store = contacts::ContactStore::new();
+                                match store.add_or_update(contact).await {
+                                    Ok(r) => {
+                                        defmt::info!("companion: ADD_UPDATE_CONTACT → {:?}", r);
+                                        // Push the stored contact back so the app updates immediately.
+                                        let mut nbuf = [0u8; companion::MAX_RESPONSE_LEN];
+                                        let slen = companion::encode(&companion::Response::ContactStart, &mut nbuf);
+                                        notify_once(&server, &gatt_conn, &nbuf[..slen]).await;
+                                        let mut prefix = [0u8; 6];
+                                        prefix.copy_from_slice(&contact.pub_key[..6]);
+                                        let name_end = contact.name.iter().position(|&b| b == 0).unwrap_or(32);
+                                        let clen = companion::encode(
+                                            &companion::Response::Contact(companion::response::Contact {
+                                                pub_key_prefix: prefix,
+                                                flags:          contact.flags,
+                                                last_seen:      contact.last_advert_ts,
+                                                name:           &contact.name[..name_end],
+                                            }),
+                                            &mut nbuf,
+                                        );
+                                        notify_once(&server, &gatt_conn, &nbuf[..clen]).await;
+                                        let elen = companion::encode(&companion::Response::ContactEnd, &mut nbuf);
+                                        notify_once(&server, &gatt_conn, &nbuf[..elen]).await;
+                                    }
+                                    Err(e) => defmt::warn!("companion: ADD_UPDATE_CONTACT store failed: {:?}", e),
+                                }
+                            }
+
+                            // Stream stored contacts following a GET_CONTACTS ContactStart.
+                            if pending_contacts_sync {
+                                let store = contacts::ContactStore::new();
+                                let mut nbuf = [0u8; companion::MAX_RESPONSE_LEN];
+                                let mut found = 0u16;
+                                for idx in 0..contacts::MAX_CONTACTS {
+                                    if found >= contacts_count {
+                                        break;
+                                    }
+                                    if let Some(c) = store.read_slot(idx).await {
+                                        found += 1;
+                                        let mut prefix = [0u8; 6];
+                                        prefix.copy_from_slice(&c.pub_key[..6]);
+                                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
+                                        let nlen = companion::encode(
+                                            &companion::Response::Contact(companion::response::Contact {
+                                                pub_key_prefix: prefix,
+                                                flags:          c.flags,
+                                                last_seen:      c.last_advert_ts,
+                                                name:           &c.name[..name_end],
+                                            }),
+                                            &mut nbuf,
+                                        );
+                                        notify_once(&server, &gatt_conn, &nbuf[..nlen]).await;
+                                    }
+                                }
+                                let elen = companion::encode(&companion::Response::ContactEnd, &mut nbuf);
+                                notify_once(&server, &gatt_conn, &nbuf[..elen]).await;
+                                defmt::info!("companion: GET_CONTACTS sync complete ({} contacts)", contacts_count);
                             }
                         } else if let Ok(reply) = write.accept() {
                             reply.send().await;

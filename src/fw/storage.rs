@@ -54,10 +54,17 @@ pub const fn fnv1a(data: &[u8]) -> u64 {
 pub struct AlignedBuf(pub [u8; REGION_SIZE]);
 
 /// 256-byte staging area for the write alignment fix (see `write()`).
-struct WriteStagingBuf(UnsafeCell<[u32; 64]>); // 64 × 4 = 256 bytes
+///
+/// Must hold the largest single TicKV object we ever write:
+///   TicKV overhead (11 header + 4 CRC = 15 B) + value + 3 B alignment prefix.
+///
+/// Largest current value: 148 B contact → 163 B TicKV object → 168 B padded.
+const WRITE_STAGING_BYTES: usize = 256;
+struct WriteStagingBuf(UnsafeCell<[u32; WRITE_STAGING_BYTES / 4]>);
 unsafe impl Sync for WriteStagingBuf {}
 
-static WRITE_STAGING: WriteStagingBuf = WriteStagingBuf(UnsafeCell::new([0u32; 64]));
+static WRITE_STAGING: WriteStagingBuf =
+    WriteStagingBuf(UnsafeCell::new([0u32; WRITE_STAGING_BYTES / 4]));
 
 // ---------------------------------------------------------------------------
 // QspiFlashController
@@ -115,9 +122,15 @@ impl<const R: usize> FlashController<R> for QspiFlashController {
         // Safety: WRITE_STAGING accessed only from the owning task.
         let staging_u32 = unsafe { &mut *WRITE_STAGING.0.get() };
         let staging = unsafe {
-            core::slice::from_raw_parts_mut(staging_u32.as_mut_ptr() as *mut u8, 256)
+            core::slice::from_raw_parts_mut(
+                staging_u32.as_mut_ptr() as *mut u8,
+                WRITE_STAGING_BYTES,
+            )
         };
-        assert!(padded_len <= 256, "TicKV write > 256 bytes");
+        assert!(
+            padded_len <= WRITE_STAGING_BYTES,
+            "TicKV write exceeds staging buffer"
+        );
 
         if prefix_len > 0 {
             self.qspi_mut()

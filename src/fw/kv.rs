@@ -30,14 +30,15 @@ use crate::fw::storage::{AlignedBuf, QspiFlashController, QspiIrqs, REGION_SIZE,
 // Flash layout
 // ---------------------------------------------------------------------------
 
-/// Number of 4 KiB TicKV regions reserved for the KV store (256 KiB total).
+/// Number of 4 KiB TicKV regions reserved for the KV store (512 KiB total).
 ///
-/// Using the full chip (512 regions) is tempting but the erase-all recovery
-/// path (triggered on a MAIN_KEY version bump) would block the executor for
-/// ~30 s at 60 ms/sector, firing the 5-second watchdog.  64 regions × 60 ms
-/// = ~4 s typical; the watchdog is fed between sectors (see init) so even the
-/// 200 ms/sector worst case is safe.  Expand if storage needs grow.
-const NUM_REGIONS: usize = 64;
+/// The flash chip is 2 MiB; 512 KiB is reserved for the KV store with the
+/// remainder available for game assets and future use.
+///
+/// The erase-all recovery path (triggered on a MAIN_KEY version bump) erases
+/// one region at a time while feeding the 5-second watchdog between each
+/// sector, so even at 200 ms/sector the watchdog never expires.
+const NUM_REGIONS: usize = 128;
 
 /// Seed key that identifies this firmware's KV schema version.
 /// Change this string when the on-flash layout becomes incompatible with an
@@ -182,9 +183,10 @@ pub async fn init<'d>(
 
     *STORE.lock().await = Some(store);
     defmt::info!(
-        "KV store ready ({} KiB, {} regions)",
+        "KV store ready ({} KiB, {} regions × {} KiB)",
         NUM_REGIONS * REGION_SIZE / 1024,
-        NUM_REGIONS
+        NUM_REGIONS,
+        REGION_SIZE / 1024,
     );
     Ok(())
 }
