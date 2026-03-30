@@ -132,6 +132,35 @@ impl KvStore {
 
 static STORE: Mutex<CriticalSectionRawMutex, Option<KvStore>> = Mutex::new(None);
 
+/// Erase every region in the KV store using the supplied `KvStore`.
+///
+/// Feeds watchdog channel 0 between sectors so the 5-second WDT never expires.
+fn erase_all_regions(store: &KvStore) {
+    for r in 0..NUM_REGIONS {
+        let _ = <QspiFlashController as tickv::FlashController<REGION_SIZE>>::erase_region(
+            &store.tickv.controller,
+            r,
+        );
+        embassy_nrf::pac::WDT
+            .rr(0)
+            .write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
+    }
+}
+
+/// Erase all KV store regions and trigger a system reset.
+///
+/// Call when persistent flash corruption is detected at runtime (e.g. a write
+/// that should always succeed returns `KvError::Other`). The firmware restarts
+/// with a clean store on the next boot.
+pub async fn wipe_and_reset() -> ! {
+    defmt::error!("KV: flash corruption — wiping {} regions and resetting", NUM_REGIONS);
+    let guard = STORE.lock().await;
+    if let Some(store) = guard.as_ref() {
+        erase_all_regions(store);
+    }
+    cortex_m::peripheral::SCB::sys_reset()
+}
+
 /// Initialise the KV store.  Call once from the main task before spawning
 /// any task that uses [`namespace()`].
 ///
@@ -160,25 +189,17 @@ pub async fn init<'d>(
 
     match store.tickv.initialise(MAIN_KEY) {
         Ok(_) | Err(ErrorCode::KeyNotFound) => {}
-        Err(ErrorCode::UnsupportedVersion) => {
-            defmt::warn!("KV store: incompatible schema, erasing {} regions", NUM_REGIONS);
-            for r in 0..NUM_REGIONS {
-                let _ = <QspiFlashController as tickv::FlashController<REGION_SIZE>>::erase_region(
-                    &store.tickv.controller,
-                    r,
-                );
-                // The erase loop is synchronous and blocks the executor.
-                // Feed watchdog channel 0 every sector so it never expires.
-                embassy_nrf::pac::WDT
-                    .rr(0)
-                    .write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
-            }
-            match store.tickv.initialise(MAIN_KEY) {
-                Ok(_) | Err(ErrorCode::KeyNotFound) => {}
-                Err(e) => defmt::warn!("KV store re-init failed: {:?}", defmt::Debug2Format(&e)),
-            }
+        Err(e) => {
+            // Any error — schema version mismatch or corrupt data — is unrecoverable
+            // without a clean erase. Wipe all regions and reset; next boot starts fresh.
+            defmt::error!(
+                "KV store init error ({:?}) — erasing {} regions and resetting",
+                defmt::Debug2Format(&e),
+                NUM_REGIONS,
+            );
+            erase_all_regions(&store);
+            cortex_m::peripheral::SCB::sys_reset();
         }
-        Err(e) => defmt::warn!("KV store init: {:?}", defmt::Debug2Format(&e)),
     }
 
     *STORE.lock().await = Some(store);

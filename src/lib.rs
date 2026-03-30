@@ -10,6 +10,8 @@ pub enum ScreenError {
 
 #[cfg(feature = "embassy")]
 pub mod fw;
+pub mod menu;
+pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
 use core::cell::{Ref, RefCell};
 
@@ -91,167 +93,8 @@ use embassy_sync::signal::Signal;
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
-pub struct MenuItem {
-    pub label: fn() -> &'static str,
-    pub action: fn(),
-}
-
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
-
-fn label_boost_rx() -> &'static str {
-    if BOOSTED_RX_GAIN.load(Ordering::Relaxed) {
-        "Boost RX: ON"
-    } else {
-        "Boost RX: OFF"
-    }
-}
-
-fn action_boost_rx() {
-    let current = BOOSTED_RX_GAIN.load(Ordering::Relaxed);
-    BOOSTED_RX_GAIN.store(!current, Ordering::Relaxed);
-}
-
-pub struct ScreenState {
-    pub items: &'static [MenuItem],
-    pub menu_pos: u8,
-}
-
-impl ScreenState {
-    pub const fn new(items: &'static [MenuItem]) -> Self {
-        Self { items, menu_pos: 0 }
-    }
-
-    pub fn menu_up(&mut self) {
-        if self.menu_pos > 0 {
-            self.menu_pos -= 1;
-        }
-    }
-
-    pub fn menu_down(&mut self) {
-        if (self.menu_pos as usize) + 1 < self.items.len() {
-            self.menu_pos += 1;
-        }
-    }
-
-    pub fn current_item(&self) -> &MenuItem {
-        &self.items[self.menu_pos as usize]
-    }
-}
-
-/// Top-level display state: M screens each with their own item list and cursor position.
-///
-/// Up/down navigates items within the active screen.
-/// Left/right switches between screens, preserving each screen's cursor position.
-pub struct DisplayState<const M: usize> {
-    active_screen: u8,
-    screens: [ScreenState; M],
-}
-
-#[allow(dead_code)]
-impl<const M: usize> DisplayState<M> {
-    pub const fn new(screens: [ScreenState; M]) -> Self {
-        Self {
-            active_screen: 0,
-            screens,
-        }
-    }
-
-    pub fn screen_left(&mut self) {
-        if self.active_screen > 0 {
-            self.active_screen -= 1;
-        }
-    }
-
-    pub fn screen_right(&mut self) {
-        if (self.active_screen as usize) + 1 < M {
-            self.active_screen += 1;
-        }
-    }
-
-    pub fn active_screen(&self) -> u8 {
-        self.active_screen
-    }
-
-    pub fn current_screen(&self) -> &ScreenState {
-        &self.screens[self.active_screen as usize]
-    }
-
-    pub fn current_screen_mut(&mut self) -> &mut ScreenState {
-        &mut self.screens[self.active_screen as usize]
-    }
-
-    pub fn menu_up(&mut self) {
-        self.current_screen_mut().menu_up();
-    }
-
-    pub fn menu_down(&mut self) {
-        self.current_screen_mut().menu_down();
-    }
-
-    pub fn fire(&self) {
-        (self.current_screen().current_item().action)();
-    }
-
-    pub fn get_current_menu_item(&self) -> Option<&'static str> {
-        Some((self.current_screen().current_item().label)())
-    }
-
-    pub fn get_menu_item(&self, index: usize) -> Option<&'static str> {
-        self.current_screen().items.get(index).map(|i| (i.label)())
-    }
-}
-
-static MAIN_ITEMS: [MenuItem; 2] = [
-    MenuItem {
-        label: label_boost_rx,
-        action: action_boost_rx,
-    },
-    MenuItem {
-        label: || "Reset channels",
-        #[cfg(feature = "embassy")]
-        action: || {
-            CHANNEL_RESET_SIGNAL.signal(());
-        },
-        #[cfg(not(feature = "embassy"))]
-        action: || {},
-    },
-];
-
-static LORA_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "LoRa",
-    action: || {},
-}];
-
-static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Adverts",
-    action: || {},
-}];
-
-static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Badgercorn",
-    action: || {},
-}];
-
-// Embassy version with ThreadModeRawMutex
-#[cfg(feature = "embassy")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<4>>> =
-    Mutex::new(RefCell::new(DisplayState::new([
-        ScreenState::new(&MAIN_ITEMS),
-        ScreenState::new(&LORA_ITEMS),
-        ScreenState::new(&ADVERT_ITEMS),
-        ScreenState::new(&BADGERCORN_ITEMS),
-    ])));
-
-// Simulator version with std::sync::Mutex
-#[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<4>>> =
-    Mutex::new(RefCell::new(DisplayState::new([
-        ScreenState::new(&MAIN_ITEMS),
-        ScreenState::new(&LORA_ITEMS),
-        ScreenState::new(&ADVERT_ITEMS),
-        ScreenState::new(&BADGERCORN_ITEMS),
-    ])));
 
 /// Last decoded LoRa group-text message, updated by the meshcore listener task.
 #[cfg(feature = "embassy")]
@@ -348,9 +191,36 @@ pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
 #[cfg(feature = "embassy")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// MeshCore node name cached from KV for synchronous access by the display renderer.
+/// Populated by the BLE task at startup (after reading from flash) and on every
+/// SET_ADVERT_NAME update.  Empty until the BLE task has initialized.
+#[cfg(feature = "embassy")]
+pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
+    Mutex::new(RefCell::new(heapless::String::new()));
+
+/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
+#[cfg(feature = "embassy")]
+pub fn update_node_name(name: &[u8]) {
+    if let Ok(s) = core::str::from_utf8(name) {
+        NODE_NAME.lock(|cell| {
+            let mut stored = cell.borrow_mut();
+            stored.clear();
+            let _ = stored.push_str(&s[..s.len().min(31)]);
+        });
+    }
+}
+
 /// Fired by the menu to request the BLE task to wipe and re-seed the channel store.
 #[cfg(feature = "embassy")]
 pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the menu when the boost-RX toggle changes so the BLE task can persist it.
+#[cfg(feature = "embassy")]
+pub static BOOST_RX_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by the menu to request the BLE task to clear all stored contacts.
+#[cfg(feature = "embassy")]
+pub static CONTACT_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired by the meshcore task whenever a new message is pushed to `msg_queue`.
 /// The BLE task listens for this to send an unsolicited `0x83` notification.
@@ -490,11 +360,6 @@ where
     // Animated red dot
     let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
     Circle::with_center(dot_pos, 10)
-        .into_styled(PrimitiveStyle::with_fill(RED))
-        .draw(display)?;
-
-    let position = Point::new(76, 76);
-    Circle::with_center(position, 110)
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
@@ -506,12 +371,8 @@ where
         .into_styled(PrimitiveStyle::with_stroke(RED, 2))
         .draw(display)?;
 
-    let text_style = MonoTextStyle::new(&FONT_7X13, WHITE);
     let text_style_inverted = MonoTextStyle::new(&FONT_10X20, BLACK);
     let bat_style = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let item_text = with_display_state!(|state: &Ref<'_, DisplayState<4>>| state
-        .get_current_menu_item()
-        .unwrap());
 
     let bat_text = format!(4; "{}%", bat_prc).unwrap();
     Text::with_text_style(
@@ -521,37 +382,48 @@ where
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )
     .draw(display)?;
-    let id_text = get_device_id();
-    Text::with_text_style(
-        unsafe { core::str::from_utf8_unchecked(&id_text) },
-        Point::new(110, 30),
-        text_style_inverted,
-        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-    )
-    .draw(display)?;
+    #[cfg(feature = "embassy")]
+    NODE_NAME.lock(|cell| -> Result<(), D::Error> {
+        let name = cell.borrow();
+        let display_name = if name.is_empty() { "<Empty>" } else { name.as_str() };
+        Text::with_text_style(
+            display_name,
+            Point::new(148, 33),
+            text_style_inverted,
+            TextStyleBuilder::new().baseline(Baseline::Bottom).alignment(Alignment::Right).build(),
+        )
+        .draw(display)
+        .map(|_| ())
+    })?;
+
     let passkey_val = BLE_PASSKEY.load(Ordering::Relaxed);
     if passkey_val != u32::MAX {
-        let pin_label_style = MonoTextStyle::new(&FONT_7X13, WHITE);
-        let pin_code_style = MonoTextStyle::new(&FONT_10X20, WHITE);
-        let center = display.bounding_box().center();
+        // BLE pairing PIN — white square with double black border to signal importance.
+        // Outer border at (20, 48), inner border 4 px inside, PIN text centered.
+        Rectangle::new(Point::new(20, 48), Size::new(112, 62))
+            .into_styled(PrimitiveStyle::with_fill(WHITE))
+            .draw(display)?;
+        Rectangle::new(Point::new(20, 48), Size::new(112, 62))
+            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+            .draw(display)?;
+        Rectangle::new(Point::new(24, 52), Size::new(104, 54))
+            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+            .draw(display)?;
+        let pin_label_style = MonoTextStyle::new(&FONT_7X13, BLACK);
+        let pin_code_style = MonoTextStyle::new(&FONT_10X20, BLACK);
+        Text::with_text_style("BT PIN:", Point::new(76, 66), pin_label_style, centered)
+            .draw(display)?;
         let code_str = format!(8; "{:06}", passkey_val).unwrap();
-        Text::with_text_style(
-            "BT PIN:",
-            Point::new(center.x, center.y - 14),
-            pin_label_style,
-            centered,
-        )
-        .draw(display)?;
-        Text::with_text_style(&code_str, center, pin_code_style, centered).draw(display)?;
+        Text::with_text_style(&code_str, Point::new(76, 86), pin_code_style, centered)
+            .draw(display)?;
     } else {
-        Text::with_text_style(
-            item_text,
-            display.bounding_box().center(),
-            text_style,
-            centered,
-        )
-        .draw(display)?;
+        let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<4>>| {
+            let screen = state.current_screen();
+            (screen.current_items(), screen.current_pos())
+        });
+        menu::draw_menu(display, items, pos)?;
     }
+
     Text::with_text_style(
         health_str,
         Point::new(10, 128),

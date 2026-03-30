@@ -86,8 +86,7 @@ pub async fn run_buttons(
             }
             6 => {
                 if joy_fire.is_low() {
-                    let action = DISPLAY_STATE.lock(|f| f.borrow().current_screen().current_item().action);
-                    action();
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().fire());
                     btn_sender.send(index as u8);
                 }
                 defmt::info!("Joystick fire: {}", joy_fire.is_low());

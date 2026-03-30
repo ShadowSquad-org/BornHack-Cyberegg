@@ -453,7 +453,10 @@ impl ContactStore {
                 };
                 match self.kv.set("meta", &meta.to_bytes(), true).await {
                     Ok(()) => defmt::info!("contacts: initialised (capacity {})", MAX_CONTACTS),
-                    Err(e) => defmt::warn!("contacts: failed to write initial metadata: {:?}", e),
+                    Err(e) => {
+                        defmt::error!("contacts: failed to write initial metadata: {:?} — wiping KV store", e);
+                        crate::fw::kv::wipe_and_reset().await;
+                    }
                 }
             }
         }
@@ -676,5 +679,14 @@ impl ContactStore {
         meta.count = meta.count.saturating_sub(1);
         self.kv.set("meta", &meta.to_bytes(), true).await?;
         Ok(true)
+    }
+
+    /// Delete all contacts by iterating every slot and calling [`delete`] on each.
+    pub async fn clear_all(&self) {
+        for idx in 0..MAX_CONTACTS {
+            if let Some(contact) = self.read_slot(idx).await {
+                let _ = self.delete(&contact.pub_key).await;
+            }
+        }
     }
 }

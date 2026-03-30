@@ -294,6 +294,21 @@ pub async fn set_autoadd_config(config: u8, max_hops: u8) -> Result<(), kv::KvEr
 }
 
 // ---------------------------------------------------------------------------
+// Boost RX gain  (menu toggle, persisted locally)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted boost-RX flag.  Returns `false` if not stored.
+pub async fn get_boost_rx() -> bool {
+    let mut b = [0u8; 1];
+    matches!(ns().get("boost_rx", &mut b).await, Ok(1) if b[0] != 0)
+}
+
+/// Persist the boost-RX flag to flash.
+pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
+    ns().set("boost_rx", &[enabled as u8], true).await
+}
+
+// ---------------------------------------------------------------------------
 // Path hash mode  (CMD_SET_PATH_HASH_MODE 0x3D)
 // ---------------------------------------------------------------------------
 

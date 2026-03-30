@@ -352,6 +352,10 @@ async fn nus_peripheral_loop<C>(
             n
         }
     };
+    crate::update_node_name(&node_name[..node_name_len]);
+
+    // Load the persisted boost-RX flag.
+    crate::BOOSTED_RX_GAIN.store(settings::get_boost_rx().await, core::sync::atomic::Ordering::Relaxed);
 
     // Load the persisted radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
     // CMD_SET_RADIO_TX_POWER 0x0C).  Falls back to EU/UK narrow band defaults.
@@ -377,6 +381,21 @@ async fn nus_peripheral_loop<C>(
         if crate::CHANNEL_RESET_SIGNAL.signaled() {
             crate::CHANNEL_RESET_SIGNAL.reset();
             channels::reset().await;
+        }
+        // Persist boost-RX flag when toggled from the menu.
+        if crate::BOOST_RX_CHANGED_SIGNAL.signaled() {
+            crate::BOOST_RX_CHANGED_SIGNAL.reset();
+            let enabled = crate::BOOSTED_RX_GAIN.load(core::sync::atomic::Ordering::Relaxed);
+            match settings::set_boost_rx(enabled).await {
+                Ok(()) => defmt::info!("settings: boost_rx={} persisted", enabled),
+                Err(e) => defmt::warn!("settings: boost_rx persist failed: {:?}", e),
+            }
+        }
+        // Clear all contacts when requested from the menu.
+        if crate::CONTACT_RESET_SIGNAL.signaled() {
+            crate::CONTACT_RESET_SIGNAL.reset();
+            defmt::info!("settings: clearing all contacts");
+            crate::fw::contacts::ContactStore::new().clear_all().await;
         }
 
         defmt::debug!("BLE: advertising…");
@@ -952,6 +971,7 @@ async fn nus_peripheral_loop<C>(
                                     Ok(()) => defmt::info!("companion: node_name persisted"),
                                     Err(e) => defmt::warn!("companion: node_name persist failed: {:?}", e),
                                 }
+                                crate::update_node_name(&node_name[..node_name_len]);
                             }
                             if let Some(new_radio) = pending_radio {
                                 radio_params = new_radio;
