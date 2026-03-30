@@ -70,6 +70,79 @@ pub const RICK_INTRO: &[Tone] = &[
     Tone::new(Note::As3, RIQ),
 ];
 
+// Darude – Sandstorm (main riff)
+// Tempo: 428571 µs/beat = 140 BPM, 96 ppq → 4.464 ms/tick
+// Sixteenth (S) = 24 ticks = 107 ms  |  Eighth (E) = 48 ticks = 214 ms
+// Notes: C4(60) Ds4(63) F4(65) As3(58)  — all within C3-B4 range
+// SP separates consecutive same-pitch notes.
+const SS: u32 = 107; // sixteenth
+const SE: u32 = 214; // eighth
+const SP: u32 = 30;  // inter-same-note gap
+
+pub const SANDSTORM: &[Tone] = &[
+    // ── A: 4×C4(S) C4(E) 6×C4(S) C4(E) ─────────────────────────────────────
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE),
+    // ── B: 6×F4(S) F4(E) ─────────────────────────────────────────────────────
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::F4, SE),
+    // ── C: 6×Eb4(S) Eb4(E) ───────────────────────────────────────────────────
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::Ds4, SE),
+    // ── D: Bb3(E) ─────────────────────────────────────────────────────────────
+    Tone::new(Note::As3, SE),
+    // ── A ────────────────────────────────────────────────────────────────────
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE),
+    // ── E: F4(E) ──────────────────────────────────────────────────────────────
+    Tone::new(Note::F4, SE),
+    // ── A ────────────────────────────────────────────────────────────────────
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SS-SP), Tone::new(Note::Rest, SP),
+    Tone::new(Note::C4, SE),
+    // ── E: F4(E) ──────────────────────────────────────────────────────────────
+    Tone::new(Note::F4, SE),
+];
+
 pub const IMPERIAL_MARCH: &[Tone] = &[
     // ── Phrase 1 ────────────────────────────────────────────────────
     // G(Q) G(Q) G(Q) Eb(D8) Bb(S) | G(Q) Eb(D8) Bb(S) G(H)

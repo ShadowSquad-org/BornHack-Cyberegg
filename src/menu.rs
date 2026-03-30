@@ -18,6 +18,9 @@ pub enum MenuItemKind {
     Back,
     /// Visual divider — not selectable; navigation skips over it.
     Separator,
+    /// Inline value selector. Cancel increments, execute decrements.
+    /// The label function should return the current value as a string.
+    Stepper { inc: fn(), dec: fn() },
 }
 
 pub struct MenuItem {
@@ -117,6 +120,15 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
+            MenuItemKind::Stepper { dec, .. } => dec(),
+        }
+    }
+
+    /// Called when the cancel button is pressed.  Increments a focused stepper;
+    /// no-op for all other item kinds.
+    pub fn on_cancel(&mut self) {
+        if let MenuItemKind::Stepper { inc, .. } = self.current_item().kind {
+            inc();
         }
     }
 
@@ -183,6 +195,10 @@ impl<const M: usize> DisplayState<M> {
         self.current_screen_mut().fire();
     }
 
+    pub fn on_cancel(&mut self) {
+        self.current_screen_mut().on_cancel();
+    }
+
     pub fn get_current_menu_item(&self) -> Option<&'static str> {
         self.current_screen().get_current_label()
     }
@@ -219,6 +235,37 @@ fn action_reset_contacts() {
     crate::CONTACT_RESET_SIGNAL.signal(());
 }
 
+static TZ_LABELS: [&str; 27] = [
+    "UTC-12", "UTC-11", "UTC-10", "UTC-9",  "UTC-8",  "UTC-7",  "UTC-6",
+    "UTC-5",  "UTC-4",  "UTC-3",  "UTC-2",  "UTC-1",  "UTC+0",
+    "UTC+1",  "UTC+2",  "UTC+3",  "UTC+4",  "UTC+5",  "UTC+6",
+    "UTC+7",  "UTC+8",  "UTC+9",  "UTC+10", "UTC+11", "UTC+12",
+    "UTC+13", "UTC+14",
+];
+
+fn label_timezone() -> &'static str {
+    let offset = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
+    TZ_LABELS[(offset.clamp(-12, 14) + 12) as usize]
+}
+
+fn action_tz_inc() {
+    let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
+    if v < 14 {
+        crate::TIMEZONE_OFFSET.store(v + 1, Ordering::Relaxed);
+        #[cfg(feature = "embassy")]
+        crate::TZ_CHANGED_SIGNAL.signal(());
+    }
+}
+
+fn action_tz_dec() {
+    let v = crate::TIMEZONE_OFFSET.load(Ordering::Relaxed);
+    if v > -12 {
+        crate::TIMEZONE_OFFSET.store(v - 1, Ordering::Relaxed);
+        #[cfg(feature = "embassy")]
+        crate::TZ_CHANGED_SIGNAL.signal(());
+    }
+}
+
 fn action_melody_0() {
     #[cfg(feature = "embassy")]
     crate::fw::buzzer::play(0);
@@ -234,9 +281,14 @@ fn action_melody_2() {
     crate::fw::buzzer::play(2);
 }
 
+fn action_melody_3() {
+    #[cfg(feature = "embassy")]
+    crate::fw::buzzer::play(3);
+}
+
 // ── Static item arrays ────────────────────────────────────────────────────────
 
-static MELODY_ITEMS: [MenuItem; 4] = [
+static MELODY_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -253,9 +305,13 @@ static MELODY_ITEMS: [MenuItem; 4] = [
         label: || "Imp. March",
         kind: MenuItemKind::Action(action_melody_2),
     },
+    MenuItem {
+        label: || "Sandstorm",
+        kind: MenuItemKind::Action(action_melody_3),
+    },
 ];
 
-static SETTINGS_ITEMS: [MenuItem; 5] = [
+static SETTINGS_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -263,6 +319,10 @@ static SETTINGS_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: label_boost_rx,
         kind: MenuItemKind::Action(action_boost_rx),
+    },
+    MenuItem {
+        label: label_timezone,
+        kind: MenuItemKind::Stepper { inc: action_tz_inc, dec: action_tz_dec },
     },
     MenuItem {
         label: || "",
@@ -397,8 +457,13 @@ where
                         .draw(display)?;
                 } else {
                     let mut label: heapless::String<24> = heapless::String::new();
+                    if matches!(item.kind, MenuItemKind::Stepper { .. }) {
+                        let _ = label.push_str("< ");
+                    }
                     let _ = label.push_str((item.label)());
                     if matches!(item.kind, MenuItemKind::Submenu(_)) {
+                        let _ = label.push_str(" >");
+                    } else if matches!(item.kind, MenuItemKind::Stepper { .. }) {
                         let _ = label.push_str(" >");
                     }
                     Text::with_text_style(

@@ -21,7 +21,8 @@ use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::fw::settings;
 use hello_graphics::{
-    ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, health_err, with_health,
+    ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, MINUTE_TICK,
+    health_err, unix_now, with_health,
 };
 use hello_graphics::{
     board, draw_graphics,
@@ -34,6 +35,18 @@ use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+
+/// Fires `MINUTE_TICK` at every minute boundary so the display updates the clock.
+#[embassy_executor::task]
+async fn minute_tick_task() {
+    loop {
+        let secs_until_next = unix_now()
+            .map(|t| 60 - (t % 60) as u64)
+            .unwrap_or(60);
+        Timer::after(embassy_time::Duration::from_secs(secs_until_next)).await;
+        MINUTE_TICK.signal(());
+    }
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -225,6 +238,7 @@ async fn main(spawner: Spawner) {
         }
     };
     spawner.must_spawn(battery_task(battery_monitor));
+    spawner.must_spawn(minute_tick_task());
 
     // White light blink indicating we can enter the main loop
     led_red.set_low();
@@ -270,19 +284,23 @@ async fn main(spawner: Spawner) {
                     },
                     async {
                         loop {
-                            match select4(
-                                button_rcvr.changed(),
-                                LORA_MSG_SIGNAL.wait(),
-                                ADVERT_SIGNAL.wait(),
-                                BLE_PAIRING_SIGNAL.wait(),
+                            match select(
+                                select4(
+                                    button_rcvr.changed(),
+                                    LORA_MSG_SIGNAL.wait(),
+                                    ADVERT_SIGNAL.wait(),
+                                    BLE_PAIRING_SIGNAL.wait(),
+                                ),
+                                MINUTE_TICK.wait(),
                             )
                             .await
                             {
-                                Either4::First(_) => break,
-                                Either4::Second(_) if active_screen == 1 => break,
-                                Either4::Third(_) if active_screen == 2 => break,
-                                Either4::Fourth(_) => break,
-                                _ => {} // event not relevant for current screen
+                                Either::First(Either4::First(_)) => break,
+                                Either::First(Either4::Second(_)) if active_screen == 1 => break,
+                                Either::First(Either4::Third(_)) if active_screen == 2 => break,
+                                Either::First(Either4::Fourth(_)) => break,
+                                Either::Second(_) if active_screen == 0 => break,
+                                _ => {}
                             }
                         }
                     },
@@ -299,18 +317,22 @@ async fn main(spawner: Spawner) {
                 // Update finished cleanly — wait for the next event before redrawing.
                 // Signal-driven redraws only fire when the relevant screen is active.
                 loop {
-                    match select4(
-                        button_rcvr.changed(),
-                        LORA_MSG_SIGNAL.wait(),
-                        ADVERT_SIGNAL.wait(),
-                        BLE_PAIRING_SIGNAL.wait(),
+                    match select(
+                        select4(
+                            button_rcvr.changed(),
+                            LORA_MSG_SIGNAL.wait(),
+                            ADVERT_SIGNAL.wait(),
+                            BLE_PAIRING_SIGNAL.wait(),
+                        ),
+                        MINUTE_TICK.wait(),
                     )
                     .await
                     {
-                        Either4::First(_) => break,
-                        Either4::Second(_) if active_screen == 1 => break,
-                        Either4::Third(_) if active_screen == 2 => break,
-                        Either4::Fourth(_) => break,
+                        Either::First(Either4::First(_)) => break,
+                        Either::First(Either4::Second(_)) if active_screen == 1 => break,
+                        Either::First(Either4::Third(_)) if active_screen == 2 => break,
+                        Either::First(Either4::Fourth(_)) => break,
+                        Either::Second(_) if active_screen == 0 => break,
                         _ => {}
                     }
                 }

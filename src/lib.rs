@@ -96,6 +96,13 @@ use std::sync::Mutex;
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
+/// UTC offset in whole hours (-12..=+14). Default: 0 (UTC).
+pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(0);
+
+/// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
+#[cfg(feature = "embassy")]
+pub static TZ_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// Last decoded LoRa group-text message, updated by the meshcore listener task.
 #[cfg(feature = "embassy")]
 pub struct LoraMessage {
@@ -190,6 +197,47 @@ pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
 /// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
 #[cfg(feature = "embassy")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired every minute by `minute_tick_task` so the display redraws the clock.
+#[cfg(feature = "embassy")]
+pub static MINUTE_TICK: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// ---------------------------------------------------------------------------
+// Wall clock
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "embassy")]
+struct WallClock {
+    unix_base:  u32,
+    ticks_base: u64,
+}
+
+#[cfg(feature = "embassy")]
+static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
+    Mutex::new(RefCell::new(None));
+
+/// Called by the BLE task when `SET_DEVICE_TIME` (0x06) is received.
+#[cfg(feature = "embassy")]
+pub fn set_wall_clock(unix_secs: u32) {
+    WALL_CLOCK.lock(|cell| {
+        *cell.borrow_mut() = Some(WallClock {
+            unix_base:  unix_secs,
+            ticks_base: embassy_time::Instant::now().as_ticks(),
+        });
+    });
+}
+
+/// Current unix time in seconds, or `None` if the clock has never been synced.
+#[cfg(feature = "embassy")]
+pub fn unix_now() -> Option<u32> {
+    WALL_CLOCK.lock(|cell| {
+        cell.borrow().as_ref().map(|wc| {
+            let elapsed = embassy_time::Instant::now().as_ticks()
+                .saturating_sub(wc.ticks_base);
+            wc.unix_base.saturating_add((elapsed / embassy_time::TICK_HZ) as u32)
+        })
+    })
+}
 
 /// MeshCore node name cached from KV for synchronous access by the display renderer.
 /// Populated by the BLE task at startup (after reading from flash) and on every
@@ -431,6 +479,25 @@ where
         TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
     )
     .draw(display)?;
+
+    #[cfg(feature = "embassy")]
+    if let Some(unix) = unix_now() {
+        let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
+        let local = (unix as i64 + offset_secs) as u32;
+        let h = (local % 86400) / 3600;
+        let m = (local % 3600) / 60;
+        let time_str = format!(5; "{:02}:{:02}", h, m).unwrap();
+        Text::with_text_style(
+            &time_str,
+            Point::new(148, 148),
+            MonoTextStyle::new(&FONT_7X13, BLACK),
+            TextStyleBuilder::new()
+                .baseline(Baseline::Bottom)
+                .alignment(Alignment::Right)
+                .build(),
+        )
+        .draw(display)?;
+    }
 
     Ok(())
 }

@@ -297,6 +297,24 @@ pub async fn set_autoadd_config(config: u8, max_hops: u8) -> Result<(), kv::KvEr
 // Boost RX gain  (menu toggle, persisted locally)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Timezone offset  (menu stepper, persisted locally)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted UTC hour offset (-12..=+14).  Returns 0 if not stored.
+pub async fn get_timezone() -> i8 {
+    let mut b = [0u8; 1];
+    match ns().get("tz", &mut b).await {
+        Ok(1) => b[0] as i8,
+        _ => 0,
+    }
+}
+
+/// Persist the UTC hour offset to flash.
+pub async fn set_timezone(offset: i8) -> Result<(), kv::KvError> {
+    ns().set("tz", &[offset as u8], true).await
+}
+
 /// Read the persisted boost-RX flag.  Returns `false` if not stored.
 pub async fn get_boost_rx() -> bool {
     let mut b = [0u8; 1];

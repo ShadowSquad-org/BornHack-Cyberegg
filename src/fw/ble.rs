@@ -354,8 +354,9 @@ async fn nus_peripheral_loop<C>(
     };
     crate::update_node_name(&node_name[..node_name_len]);
 
-    // Load the persisted boost-RX flag.
+    // Load the persisted boost-RX flag and timezone offset.
     crate::BOOSTED_RX_GAIN.store(settings::get_boost_rx().await, core::sync::atomic::Ordering::Relaxed);
+    crate::TIMEZONE_OFFSET.store(settings::get_timezone().await, core::sync::atomic::Ordering::Relaxed);
 
     // Load the persisted radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
     // CMD_SET_RADIO_TX_POWER 0x0C).  Falls back to EU/UK narrow band defaults.
@@ -389,6 +390,15 @@ async fn nus_peripheral_loop<C>(
             match settings::set_boost_rx(enabled).await {
                 Ok(()) => defmt::info!("settings: boost_rx={} persisted", enabled),
                 Err(e) => defmt::warn!("settings: boost_rx persist failed: {:?}", e),
+            }
+        }
+        // Persist timezone offset when changed from the menu.
+        if crate::TZ_CHANGED_SIGNAL.signaled() {
+            crate::TZ_CHANGED_SIGNAL.reset();
+            let offset = crate::TIMEZONE_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+            match settings::set_timezone(offset).await {
+                Ok(()) => defmt::info!("settings: timezone={} persisted", offset),
+                Err(e) => defmt::warn!("settings: timezone persist failed: {:?}", e),
             }
         }
         // Clear all contacts when requested from the menu.
@@ -795,7 +805,9 @@ async fn nus_peripheral_loop<C>(
                                     companion::Response::Ok
                                 }
 
-                                Ok(companion::cmd::Command::SetDeviceTime(_ts)) => {
+                                Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
+                                    crate::set_wall_clock(ts);
+                                    defmt::info!("companion: SET_DEVICE_TIME unix={}", ts);
                                     companion::Response::Ok
                                 }
 

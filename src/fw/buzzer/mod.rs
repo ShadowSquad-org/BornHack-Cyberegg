@@ -10,6 +10,7 @@ pub const MELODIES: &[&[Tone]] = &[
     melodies::STARTUP,        // 0
     melodies::RICK_INTRO,     // 1
     melodies::IMPERIAL_MARCH, // 2
+    melodies::SANDSTORM,      // 3
 ];
 
 /// Signal a melody index to the buzzer task.

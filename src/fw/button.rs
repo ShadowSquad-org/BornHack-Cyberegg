@@ -41,6 +41,7 @@ pub async fn run_buttons(
             0 => {
                 defmt::info!("Cancel button {}", btn_can.is_low());
                 if btn_can.is_low() {
+                    DISPLAY_STATE.lock(|f| f.borrow_mut().on_cancel());
                     btn_sender.send(index as u8);
                 }
                 update_button_health!(btn_can, cancel);
