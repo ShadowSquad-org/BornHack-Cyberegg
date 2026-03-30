@@ -197,7 +197,7 @@ async fn probe_lut(
     }
 
     if mode == LutMode::NoInvert {
-        // Zero the pre-charge/erase timing phases that cause visible inversion.
+        // ~Zero the pre-charge/erase timing phases that cause visible inversion.
         // Variant is detected by the same rule used in set_otp_lut().
         if lut[7] != 0 || lut[8] != 0 || lut[9] != 0 {
             // SSD1675: 7-byte waveform rows → waveform 5×7=35 bytes, timing groups 5 bytes each.
@@ -210,9 +210,6 @@ async fn probe_lut(
             lut[55] = 2;
         } else {
             // SSD1675B (data sheet p.14): waveform 5×10=50 bytes (0–49), then 10 timing phases
-            // of 5 bytes each (TP[A/B/C/D] + RP) = 50 bytes (50–99).
-            // Phase 4 (bytes 70–74) is the erase/inversion phase — zero it.
-            // Phases 0–3 and 5–9 drive the actual image and must be kept intact.
             lut[50..64].fill(0);
         }
     }

@@ -1,4 +1,7 @@
-//! KV-backed persistent circular message queue for received channel messages.
+//! KV-backed persistent circular message queue for received messages.
+//!
+//! Stores both channel (group) messages and private (P2P) messages in a single
+//! ring buffer, distinguished by a `MsgKind` discriminator.
 //!
 //! Classic circular buffer with a producer (`write_idx`) and consumer
 //! (`read_idx`).  Both indices are bounded to `[0, NUM_SLOTS)` — they wrap via
@@ -16,16 +19,19 @@
 //!
 //! KV namespace `"mq"`, keys `"00"`–`"ff"` (slot index as 2-digit hex).
 //!
-//! # Record layout (up to 190 bytes)
+//! # Record layout (up to MAX_RECORD bytes)
 //! ```text
-//! [channel_idx : 1]
-//! [path_len    : 1]
+//! [kind        : 1]  0x01 = channel, 0x02 = private
+//! [sender_pfx  : 6]  pub_key[0..6] of sender (zeros for channel messages)
+//! [channel_idx : 1]  channel slot (0 for private messages)
+//! [path_len    : 1]  MeshCore path_len_byte encoding
+//! [text_type   : 1]
 //! [timestamp   : 4 LE]
 //! [rssi        : 2 LE signed]
 //! [text_len    : 1]
-//! [text        : 0..=181]
+//! [text        : 0..=MAX_TEXT]
 //! ```
-//! Total: 10 + text_len bytes (max 191).
+//! Total header: 17 bytes + text_len bytes.
 
 use core::cell::RefCell;
 
@@ -40,18 +46,30 @@ use crate::fw::kv;
 /// Maximum text payload length (mirrors `meshcore::MAX_GRP_DATA_SIZE`).
 pub const MAX_TEXT: usize = 181;
 
+const HEADER: usize = 17;
+
 /// Maximum serialised record size in bytes.
-const MAX_RECORD: usize = 10 + MAX_TEXT; // 191
+const MAX_RECORD: usize = HEADER + MAX_TEXT;
 
 /// Total number of KV slots.  Capacity = NUM_SLOTS − 1 = 255 messages.
 const NUM_SLOTS: u16 = 256;
 
 // ---------------------------------------------------------------------------
-// Record type
+// Record types
 // ---------------------------------------------------------------------------
 
-/// A single received channel message, dequeued from the flash queue.
-pub struct ReceivedChannelMsg {
+/// Whether this queued message is a channel (group) or private (P2P) message.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MsgKind {
+    Channel,
+    Private,
+}
+
+/// A single dequeued message, either channel or private.
+pub struct ReceivedMsg {
+    pub kind:        MsgKind,
+    /// First 6 bytes of the sender's pub_key (zeros for channel messages).
+    pub sender_prefix: [u8; 6],
     pub channel_idx: u8,
     pub path_len:    u8,
     pub text_type:   u8,
@@ -98,34 +116,42 @@ fn slot_key(idx: u16) -> heapless::String<2> {
 // Serialisation / deserialisation
 // ---------------------------------------------------------------------------
 
-fn serialize(msg: &ReceivedChannelMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
-    buf[0] = msg.channel_idx;
-    buf[1] = msg.path_len;
-    buf[2] = msg.text_type;
-    buf[3..7].copy_from_slice(&msg.timestamp.to_le_bytes());
-    buf[7..9].copy_from_slice(&msg.rssi.to_le_bytes());
+fn serialize(msg: &ReceivedMsg, buf: &mut [u8; MAX_RECORD]) -> usize {
+    buf[0] = match msg.kind { MsgKind::Channel => 0x01, MsgKind::Private => 0x02 };
+    buf[1..7].copy_from_slice(&msg.sender_prefix);
+    buf[7]  = msg.channel_idx;
+    buf[8]  = msg.path_len;
+    buf[9]  = msg.text_type;
+    buf[10..14].copy_from_slice(&msg.timestamp.to_le_bytes());
+    buf[14..16].copy_from_slice(&msg.rssi.to_le_bytes());
     let text_len = msg.text.len().min(MAX_TEXT) as u8;
-    buf[9] = text_len;
-    buf[10..10 + text_len as usize].copy_from_slice(&msg.text[..text_len as usize]);
-    10 + text_len as usize
+    buf[16] = text_len;
+    buf[HEADER..HEADER + text_len as usize].copy_from_slice(&msg.text[..text_len as usize]);
+    HEADER + text_len as usize
 }
 
-fn deserialize(buf: &[u8]) -> Option<ReceivedChannelMsg> {
-    if buf.len() < 10 {
+fn deserialize(buf: &[u8]) -> Option<ReceivedMsg> {
+    if buf.len() < HEADER {
         return None;
     }
-    let channel_idx = buf[0];
-    let path_len    = buf[1];
-    let text_type   = buf[2];
-    let timestamp   = u32::from_le_bytes(buf[3..7].try_into().ok()?);
-    let rssi        = i16::from_le_bytes(buf[7..9].try_into().ok()?);
-    let text_len    = buf[9] as usize;
-    if buf.len() < 10 + text_len || text_len > MAX_TEXT {
+    let kind = match buf[0] {
+        0x01 => MsgKind::Channel,
+        0x02 => MsgKind::Private,
+        _    => return None,
+    };
+    let sender_prefix: [u8; 6] = buf[1..7].try_into().ok()?;
+    let channel_idx = buf[7];
+    let path_len    = buf[8];
+    let text_type   = buf[9];
+    let timestamp   = u32::from_le_bytes(buf[10..14].try_into().ok()?);
+    let rssi        = i16::from_le_bytes(buf[14..16].try_into().ok()?);
+    let text_len    = buf[16] as usize;
+    if buf.len() < HEADER + text_len || text_len > MAX_TEXT {
         return None;
     }
     let mut text = heapless::Vec::<u8, MAX_TEXT>::new();
-    text.extend_from_slice(&buf[10..10 + text_len]).ok()?;
-    Some(ReceivedChannelMsg { channel_idx, path_len, text_type, timestamp, rssi, text })
+    text.extend_from_slice(&buf[HEADER..HEADER + text_len]).ok()?;
+    Some(ReceivedMsg { kind, sender_prefix, channel_idx, path_len, text_type, timestamp, rssi, text })
 }
 
 // ---------------------------------------------------------------------------
@@ -150,11 +176,9 @@ pub fn count() -> u16 {
 
 /// Push a received message onto the queue.
 ///
-/// If the queue is full (`(write_idx + 1) % NUM_SLOTS == read_idx`), the
-/// consumer pointer is advanced by one, silently dropping the oldest message.
-pub async fn push(msg: &ReceivedChannelMsg) {
-    // Claim the write slot and possibly advance the consumer — all inside a
-    // critical section so no await occurs while holding the lock.
+/// If the queue is full, the consumer pointer is advanced by one, silently
+/// dropping the oldest message.
+pub async fn push(msg: &ReceivedMsg) {
     let (slot_idx, dropped) = STATE.lock(|cell| {
         let mut s = cell.borrow_mut();
         let full = advance(s.write_idx) == s.read_idx;
@@ -182,8 +206,7 @@ pub async fn push(msg: &ReceivedChannelMsg) {
 /// Pop the oldest message from the queue.
 ///
 /// Returns `None` if the queue is empty.
-pub async fn pop() -> Option<ReceivedChannelMsg> {
-    // Claim the read slot inside a critical section.
+pub async fn pop() -> Option<ReceivedMsg> {
     let slot_idx = STATE.lock(|cell| {
         let mut s = cell.borrow_mut();
         if s.write_idx == s.read_idx {

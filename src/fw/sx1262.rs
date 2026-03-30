@@ -250,12 +250,13 @@ impl<'a> SimpleLoRa<'a> {
     /// Wait for the next LoRa event (RxDone or Timeout), read the payload if
     /// present, and re-arm RX.
     ///
-    /// Returns `Ok(Some((len, rssi_dbm)))` on a valid receive,
+    /// Returns `Ok(Some((len, rssi_dbm, snr_x4)))` on a valid receive,
+    /// where `snr_x4` is SNR in units of 0.25 dB (same encoding as SX1262's snr_pkt).
     /// `Ok(None)` on timeout or CRC error (RX is re-armed in both cases).
     pub async fn receive_packet(
         &mut self,
         buf: &mut [u8],
-    ) -> Result<Option<(usize, i16)>, LoraError> {
+    ) -> Result<Option<(usize, i16, i8)>, LoraError> {
         // Clear any stale IRQ so DIO1 is deasserted before we arm the rising-edge wait.
         // Without this, a leftover HIGH from the init sequence would block wait_for_rising_edge()
         // forever (it only fires on LOW→HIGH transitions).
@@ -294,19 +295,19 @@ impl<'a> SimpleLoRa<'a> {
                 .read_buffer(offset, &mut buf[..len])
                 .map_err(|_| LoraError::Buffer("read_buffer failed"))?;
 
-            let rssi = self
+            let (rssi, snr_x4) = self
                 .lora
                 .get_packet_status()
-                .map(|s| s.rssi_pkt() as i16)
-                .unwrap_or(0);
+                .map(|s| (s.rssi_pkt() as i16, (s.snr_pkt() * 4.0) as i8))
+                .unwrap_or((0, 0));
 
-            Some((len, rssi))
+            Some((len, rssi, snr_x4))
         } else if irq.crc_err() {
-            let rssi = self
+            let (rssi, _snr_x4) = self
                 .lora
                 .get_packet_status()
-                .map(|s| s.rssi_pkt() as i16)
-                .unwrap_or(0);
+                .map(|s| (s.rssi_pkt() as i16, (s.snr_pkt() * 4.0) as i8))
+                .unwrap_or((0, 0));
             defmt::warn!(
                 "LoRa CRC error {=i16}dBm — header decoded OK (SF/BW/CR/syncword match) but payload bytes corrupted (collision, interference, or sender has CRC disabled)",
                 rssi

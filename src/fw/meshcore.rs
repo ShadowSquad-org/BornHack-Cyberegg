@@ -46,6 +46,19 @@ static MSG_SEEN: Mutex<CriticalSectionRawMutex, RefCell<MsgHashRing<50>>> =
     Mutex::new(RefCell::new(MsgHashRing::new()));
 
 // ---------------------------------------------------------------------------
+// Advert mode
+// ---------------------------------------------------------------------------
+
+/// How to route a self-advert transmission.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AdvertMode {
+    /// Flood — relayed across the full mesh.
+    Flood,
+    /// Zero-hop (direct, path_len=0) — reaches only immediate radio neighbors.
+    ZeroHop,
+}
+
+// ---------------------------------------------------------------------------
 // MeshCore listener task
 // ---------------------------------------------------------------------------
 
@@ -134,32 +147,44 @@ pub async fn run_meshcore_listener<'a>(
         while let Ok(req) = crate::TX_MSG_CHANNEL.try_receive() {
             send_grp_txt(&mut lora, &loaded_channels, req).await;
         }
+        while let Ok(req) = crate::TX_PM_CHANNEL.try_receive() {
+            send_txt_msg(&mut lora, req, identity).await;
+        }
+        if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
+            let mut name_buf = [0u8; settings::MAX_NODE_NAME];
+            let name_len = settings::get_node_name(&mut name_buf).await;
+            send_advert(&mut lora, identity, &name_buf[..name_len], 0, mode).await;
+        }
 
         // Race: receive the next LoRa packet OR a new TX request arrives.
         // This keeps TX latency to the radio air-time only, instead of up to
         // the full 15-second receive_packet timeout.
-        use embassy_futures::select::{Either, select};
-        let rx_result = match select(
+        use embassy_futures::select::{Either3, select3};
+        let rx_result = match select3(
             lora.receive_packet(&mut raw),
             crate::TX_MSG_CHANNEL.receive(),
+            crate::TX_PM_CHANNEL.receive(),
         ).await {
-            Either::Second(tx_req) => {
-                // A TX request interrupted RX — send it immediately and loop.
+            Either3::Second(tx_req) => {
                 send_grp_txt(&mut lora, &loaded_channels, tx_req).await;
                 continue;
             }
-            Either::First(result) => result,
+            Either3::Third(pm_req) => {
+                send_txt_msg(&mut lora, pm_req, identity).await;
+                continue;
+            }
+            Either3::First(result) => result,
         };
 
         match rx_result {
             Ok(None) => { /* CRC error or non-data IRQ — already re-armed */ }
 
-            Ok(Some((len, rssi))) => {
+            Ok(Some((len, rssi, snr_x4))) => {
                 // Push raw bytes to the BLE task immediately (before dedup/decrypt)
                 // so the client can do its own decryption and relay-repeat tracking.
                 {
                     let mut pkt = crate::RawLoRaPkt {
-                        snr_x4: 0,
+                        snr_x4,
                         rssi:   rssi.clamp(-128, 0) as i8,
                         len,
                         data:   [0u8; meshcore::MAX_TRANS_UNIT],
@@ -191,9 +216,9 @@ pub async fn run_meshcore_listener<'a>(
                             _ => 0xFF,
                         };
                         match msg.payload_type {
-                            PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, path_len, &loaded_channels).await,
-                            PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, identity),
-                            PayloadType::Advert => log_advert(&msg.payload, rssi, manual_add_contacts == 0).await,
+                            PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, snr_x4, path_len, &loaded_channels).await,
+                            PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, path_len, &msg.path, identity).await,
+                            PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path, manual_add_contacts == 0).await,
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
                             other => {
                                 defmt::info!(
@@ -221,7 +246,7 @@ pub async fn run_meshcore_listener<'a>(
 // Per-type handlers
 // ---------------------------------------------------------------------------
 
-async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[LoadedChannel]) {
+async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, channels: &[LoadedChannel]) {
     use meshcore::payload::grp_txt;
 
     let grp = match grp_txt::deserialize(payload) {
@@ -300,6 +325,7 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[Loade
                     text: text_str,
                     timestamp: dec.timestamp,
                     rssi,
+                    snr_x4,
                 });
             });
             crate::LORA_MSG_SIGNAL.signal(());
@@ -307,13 +333,15 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[Loade
             // Push to the flash queue and notify any connected BLE companion.
             let mut queued_text: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
             let _ = queued_text.extend_from_slice(&dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]);
-            msg_queue::push(&msg_queue::ReceivedChannelMsg {
-                channel_idx: ch.slot_idx,
+            msg_queue::push(&msg_queue::ReceivedMsg {
+                kind:          msg_queue::MsgKind::Channel,
+                sender_prefix: [0u8; 6],
+                channel_idx:   ch.slot_idx,
                 path_len,
-                text_type: dec.text_type,
-                timestamp: dec.timestamp,
+                text_type:     dec.text_type,
+                timestamp:     dec.timestamp,
                 rssi,
-                text: queued_text,
+                text:          queued_text,
             }).await;
             defmt::info!("msg_queue: {} message(s) waiting", msg_queue::count());
             crate::MESSAGES_WAITING_SIGNAL.signal(());
@@ -324,7 +352,14 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, path_len: u8, channels: &[Loade
     }
 }
 
-async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
+async fn log_advert(
+    payload:       &[u8],
+    rssi:          i16,
+    snr_x4:        i8,
+    path_len_byte: u8,
+    path:          &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    auto_add:      bool,
+) {
     use meshcore::payload::advert;
 
     let a = match advert::deserialize(payload) {
@@ -375,6 +410,7 @@ async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
             role: a.role.to_u8(),
             sig_ok,
             rssi,
+            snr_x4,
             lat,
             lon,
         });
@@ -395,6 +431,8 @@ async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
         name: ble_name.clone(),
     });
 
+    let store = contacts::ContactStore::new();
+
     // Auto-add to the persistent contact store when the setting allows it.
     if auto_add {
         let contact = contacts::Contact::from_advert(
@@ -405,9 +443,19 @@ async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
             lat,
             lon,
         );
-        match contacts::ContactStore::new().add_or_update(&contact).await {
+        match store.add_or_update(&contact).await {
             Ok(r)  => defmt::debug!("contacts: auto-add {:?}", r),
             Err(e) => defmt::warn!("contacts: auto-add failed: {:?}", e),
+        }
+    }
+
+    // Update routing path for this contact if it arrived via flood.
+    if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
+        let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
+        let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
+        path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
+        if let Err(e) = store.update_path(&a.pub_key, path_len_byte, &path_buf).await {
+            defmt::warn!("contacts: path update failed: {:?}", e);
         }
     }
 }
@@ -416,7 +464,13 @@ async fn log_advert(payload: &[u8], rssi: i16, auto_add: bool) {
 // TxtMsg (private message) handler
 // ---------------------------------------------------------------------------
 
-fn log_txt_msg(payload: &[u8], rssi: i16, identity: &DeviceIdentity) {
+async fn log_txt_msg(
+    payload:      &[u8],
+    rssi:         i16,
+    path_len_byte: u8,
+    path:         &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    identity:     &DeviceIdentity,
+) {
     use meshcore::payload::txt_msg;
 
     let msg = match txt_msg::deserialize(payload) {
@@ -439,50 +493,86 @@ fn log_txt_msg(payload: &[u8], rssi: i16, identity: &DeviceIdentity) {
         return;
     }
 
-    // Try to decrypt using each known contact as the potential sender.
-    type DecResult = Option<(heapless::String<32>, [u8; meshcore::PUB_KEY_SIZE], meshcore::payload::txt_msg::DecryptedTxtMsg)>;
-    let result: DecResult = CONTACTS.lock(|cell| {
-        let contacts = cell.borrow();
-        for contact in contacts.iter() {
-            if txt_msg::verify_mac(&identity.sec_key, &contact.pub_key, &msg).is_ok() {
-                if let Ok(dec) = txt_msg::decrypt(&identity.sec_key, &contact.pub_key, &msg) {
-                    return Some((contact.name.clone(), contact.pub_key, dec));
+    // Scan ContactStore for a contact whose sec_key can verify the MAC.
+    // This is O(n) but TxtMsg RX is infrequent (user-level event).
+    let store = contacts::ContactStore::new();
+    let count = store.count().await;
+    let mut found: Option<(contacts::Contact, meshcore::payload::txt_msg::DecryptedTxtMsg)> = None;
+
+    let mut found_count = 0u16;
+    for idx in 0..contacts::MAX_CONTACTS {
+        if found_count >= count { break; }
+        if let Some(c) = store.read_slot(idx).await {
+            found_count += 1;
+            if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_ok() {
+                if let Ok(dec) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) {
+                    found = Some((c, dec));
+                    break;
                 }
             }
         }
-        None
-    });
+    }
 
-    match result {
+    match found {
         None => {
             defmt::warn!("TxtMsg: received but could not decrypt (sender unknown or MAC fail) [{=i16}dBm]", rssi);
         }
-        Some((sender_name, sender_pk, dec)) => {
+        Some((sender, dec)) => {
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
             defmt::info!(
-                "TxtMsg from {=str} [{=i16}dBm ts={=u32}]: {=str}",
-                sender_name.as_str(),
-                rssi,
-                dec.timestamp,
-                text,
+                "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32}]: {=str}",
+                &sender.pub_key[..6], rssi, dec.timestamp, text,
             );
 
-            // Fallback name: first 8 bytes of pub_key as hex.
-            let display_name = if sender_name.is_empty() {
-                let mut hex: heapless::String<32> = heapless::String::new();
-                for &b in &sender_pk[..4] {
-                    let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
-                    let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
+            // Update the stored routing path so replies can go direct.
+            if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
+                let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
+                let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
+                path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
+                if let Err(e) = store.update_path(&sender.pub_key, path_len_byte, &path_buf).await {
+                    defmt::warn!("TxtMsg: path update failed: {:?}", e);
                 }
-                hex
-            } else {
-                sender_name
-            };
+            }
 
+            // Push to the message queue so SYNC_NEXT_MESSAGE delivers it.
+            let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+            let _ = text_bytes.extend_from_slice(
+                &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
+            );
+            let mut sender_prefix = [0u8; 6];
+            sender_prefix.copy_from_slice(&sender.pub_key[..6]);
+            msg_queue::push(&msg_queue::ReceivedMsg {
+                kind:          msg_queue::MsgKind::Private,
+                sender_prefix,
+                channel_idx:   0,
+                path_len:      path_len_byte,
+                text_type:     dec.text_type,
+                timestamp:     dec.timestamp,
+                rssi,
+                text:          text_bytes,
+            }).await;
+            crate::MESSAGES_WAITING_SIGNAL.signal(());
+
+            // Also update the display.
+            let display_name = {
+                let name_end = sender.name.iter().position(|&b| b == 0).unwrap_or(32);
+                let name_str = core::str::from_utf8(&sender.name[..name_end]).unwrap_or("");
+                if name_str.is_empty() {
+                    let mut hex: heapless::String<32> = heapless::String::new();
+                    for &b in &sender.pub_key[..4] {
+                        let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
+                        let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
+                    }
+                    hex
+                } else {
+                    let mut s: heapless::String<32> = heapless::String::new();
+                    let _ = s.push_str(name_str);
+                    s
+                }
+            };
             let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
                 heapless::String::new();
             let _ = text_str.push_str(text);
-
             crate::LAST_PM.lock(|cell| {
                 *cell.borrow_mut() = Some(crate::LastPm {
                     sender_name: display_name,
@@ -594,6 +684,88 @@ async fn send_grp_txt(
 }
 
 // ---------------------------------------------------------------------------
+// Private message transmission
+// ---------------------------------------------------------------------------
+
+/// Encrypt and send a private (TxtMsg) message to a contact.
+///
+/// Uses `RouteType::Direct` with the stored path when one is known, falling
+/// back to `RouteType::Flood` when `out_path_len == OUT_PATH_UNKNOWN`.
+async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, identity: &DeviceIdentity) {
+    use meshcore::payload::txt_msg;
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
+
+    // Look up the recipient contact for their stored path.
+    let contact = contacts::ContactStore::new()
+        .find_by_key(&req.recipient_pub_key)
+        .await;
+
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
+    let encrypted = match txt_msg::encrypt(
+        &identity.sec_key,
+        &req.recipient_pub_key,
+        req.timestamp,
+        0, // text_type = plain
+        &req.text,
+    ) {
+        Ok(e) => e,
+        Err(e) => {
+            defmt::warn!("send_txt_msg: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = txt_msg::serialize(&encrypted, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_txt_msg: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
+    let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
+
+    let msg = Message {
+        payload_type:   PayloadType::TxtMsg,
+        route,
+        version:        0,
+        transport_code: 0,
+        path_len_byte,
+        path:           path_bytes,
+        payload:        msg_payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_txt_msg: TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "TxtMsg sent: to={=[u8]:02x} route={=str} len={=usize}B",
+                    &req.recipient_pub_key[..6],
+                    if route == RouteType::Direct { "direct" } else { "flood" },
+                    len,
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_txt_msg: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Advert transmission
 // ---------------------------------------------------------------------------
 
@@ -606,6 +778,7 @@ pub async fn send_advert(
     identity: &DeviceIdentity,
     name: &[u8],
     timestamp: u32,
+    mode: AdvertMode,
 ) {
     use meshcore::payload::advert::{Advert, DeviceRole, serialize};
     use meshcore::packet::{Message, PayloadType, RouteType};
@@ -641,9 +814,14 @@ pub async fn send_advert(
     let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
     let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
 
+    let route = match mode {
+        AdvertMode::Flood   => RouteType::Flood,
+        AdvertMode::ZeroHop => RouteType::Direct, // path_len=0 → zero-hop direct
+    };
+
     let msg = Message {
         payload_type:   PayloadType::Advert,
-        route:          RouteType::Flood,
+        route,
         version:        0,
         transport_code: 0,
         path_len_byte:  0,
@@ -657,7 +835,11 @@ pub async fn send_advert(
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_advert: TX failed: {:?}", e);
             } else {
-                defmt::info!("MeshCore advert sent ({=usize}B)", len);
+                defmt::info!(
+                    "MeshCore advert sent ({=usize}B, {=str})",
+                    len,
+                    if mode == AdvertMode::Flood { "flood" } else { "zero-hop" },
+                );
             }
         }
         Err(e) => {

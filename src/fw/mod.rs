@@ -1,4 +1,5 @@
 pub mod battery;
+pub mod images;
 pub mod ble;
 pub mod contacts;
 pub mod channels;
