@@ -1,4 +1,5 @@
 use crate::{DISPLAY_STATE, update_health};
+use crate::fw::game::nav::{nav_down, nav_left, nav_right, nav_up, NavResult};
 use embassy_nrf::gpio::Input;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 
@@ -55,32 +56,42 @@ pub async fn run_buttons(
             }
             2 => {
                 if joy_up.is_low() {
+                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+                    if on_game { nav_up(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up()); }
                     btn_sender.send(index as u8);
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up());
                 }
-                defmt::info!("Menu up");
+                defmt::info!("Joystick up");
                 update_button_health!(joy_up, up);
             }
             3 => {
                 if joy_down.is_low() {
+                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+                    if on_game { nav_down(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down()); }
                     btn_sender.send(index as u8);
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down());
                 }
-                defmt::info!("Menu down");
+                defmt::info!("Joystick down");
                 update_button_health!(joy_down, down);
             }
             4 => {
                 if joy_left.is_low() {
+                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+                    if on_game { nav_left(); } else { DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left()); }
                     btn_sender.send(index as u8);
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left());
                 }
                 defmt::info!("Joystick left");
                 update_button_health!(joy_left, left);
             }
             5 => {
                 if joy_right.is_low() {
+                    let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+                    if on_game {
+                        if matches!(nav_right(), NavResult::NextScreen) {
+                            DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
+                        }
+                    } else {
+                        DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
+                    }
                     btn_sender.send(index as u8);
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
                 }
                 defmt::info!("Joystick right");
                 update_button_health!(joy_right, right);

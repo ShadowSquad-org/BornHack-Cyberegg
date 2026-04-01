@@ -338,10 +338,46 @@ static SETTINGS_ITEMS: [MenuItem; 6] = [
     },
 ];
 
+static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "Mute",
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "Disable Game",
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "Set Name",
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "Reset Pet",
+        kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "Unicorn Realm",
+        kind: MenuItemKind::Action(|| {}),
+    },
+];
+
+static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "BornPets",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Bornagotchi",
-        kind: MenuItemKind::Action(|| {}),
+        kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
     },
     MenuItem {
         label: || "Play melodies",
@@ -378,8 +414,9 @@ static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
 #[cfg(feature = "embassy")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<4>>> =
+pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<5>>> =
     Mutex::new(RefCell::new(DisplayState::new([
+        ScreenState::new(&GAME_ITEMS),
         ScreenState::new(&MAIN_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
@@ -390,8 +427,9 @@ pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<4>>> =
 use std::sync::Mutex;
 
 #[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<4>>> =
+pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<5>>> =
     Mutex::new(RefCell::new(DisplayState::new([
+        ScreenState::new(&GAME_ITEMS),
         ScreenState::new(&MAIN_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),

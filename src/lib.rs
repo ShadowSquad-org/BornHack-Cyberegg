@@ -381,14 +381,16 @@ pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resu
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let active = with_display_state!(|state: &Ref<'_, DisplayState<4>>| state.active_screen());
+    let active = with_display_state!(|state: &Ref<'_, DisplayState<5>>| state.active_screen());
     match active {
-        0 => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
-        1 => draw_screen_lora(display, bat_prc),
+        0 => fw::game::draw_screen_game(display, fw::game::nav::get_nav()),
+        1 => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
-        2 => draw_screen_advert(display, bat_prc),
-        // Screen 3 (badgercorn) is rendered via blit() in embassy.rs — nothing to draw here.
+        2 => draw_screen_lora(display, bat_prc),
+        #[cfg(feature = "embassy")]
+        3 => draw_screen_advert(display, bat_prc),
+        // Screen 4 (badgercorn) is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
     }
 }
@@ -465,7 +467,7 @@ where
         Text::with_text_style(&code_str, Point::new(76, 86), pin_code_style, centered)
             .draw(display)?;
     } else {
-        let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<4>>| {
+        let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<5>>| {
             let screen = state.current_screen();
             (screen.current_items(), screen.current_pos())
         });

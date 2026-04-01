@@ -256,7 +256,7 @@ async fn main(spawner: Spawner) {
             let _ = display.clear(Color::White);
             // Snapshot active screen once; used for rendering and event filtering below.
             let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
-            if active_screen == 3 {
+            if active_screen == 4 {
                 display.blit(Some(BADGERCORN_DATA), None);
             } else {
                 let health_str = with_health!(|f| f.to_string());
@@ -296,10 +296,10 @@ async fn main(spawner: Spawner) {
                             .await
                             {
                                 Either::First(Either4::First(_)) => break,
-                                Either::First(Either4::Second(_)) if active_screen == 1 => break,
-                                Either::First(Either4::Third(_)) if active_screen == 2 => break,
+                                Either::First(Either4::Second(_)) if active_screen == 2 => break,
+                                Either::First(Either4::Third(_)) if active_screen == 3 => break,
                                 Either::First(Either4::Fourth(_)) => break,
-                                Either::Second(_) if active_screen == 0 => break,
+                                Either::Second(_) if active_screen == 1 => break,
                                 _ => {}
                             }
                         }
@@ -329,10 +329,10 @@ async fn main(spawner: Spawner) {
                     .await
                     {
                         Either::First(Either4::First(_)) => break,
-                        Either::First(Either4::Second(_)) if active_screen == 1 => break,
-                        Either::First(Either4::Third(_)) if active_screen == 2 => break,
+                        Either::First(Either4::Second(_)) if active_screen == 2 => break,
+                        Either::First(Either4::Third(_)) if active_screen == 3 => break,
                         Either::First(Either4::Fourth(_)) => break,
-                        Either::Second(_) if active_screen == 0 => break,
+                        Either::Second(_) if active_screen == 1 => break,
                         _ => {}
                     }
                 }

@@ -51,7 +51,7 @@ use crate::fw::kv;
 /// Change this constant to resize the store.  The first boot after a change
 /// will automatically migrate existing data: growing keeps all contacts,
 /// shrinking discards slots beyond the new limit.
-pub const MAX_CONTACTS: usize = 700;
+pub const MAX_CONTACTS: usize = 300;
 
 const _: () = assert!(MAX_CONTACTS <= 9999, "MAX_CONTACTS exceeds the 4-digit slot key format");
 
@@ -609,6 +609,9 @@ impl ContactStore {
                     if !existing.is_deleted() && existing.pub_key == contact.pub_key {
                         let mut updated = contact.clone();
                         updated.flags |= existing.flags & FLAG_FAVORITE;
+                        if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
+                            return Ok(AddResult::Updated);
+                        }
                         self.kv.set(slot_key(slot).as_str(), &updated.to_bytes(), true).await?;
                         return Ok(AddResult::Updated);
                     }

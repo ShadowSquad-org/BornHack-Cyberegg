@@ -3,8 +3,8 @@ BIN         = target/thumbv7em-none-eabihf/debug/embassy.bin
 BIN_REL     = target/thumbv7em-none-eabihf/release/embassy.bin
 ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
 
-# App flash base matches the app slot in memory.x (after the 64 K bootloader)
-FLASH_BASE = 0x00010000
+# App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
+FLASH_BASE = 0x0000D000
 
 .PHONY: fw fw-release sim flash flash-release monitor bl bl-flash dfu-flash
 
@@ -32,7 +32,7 @@ sim:
 
 # Monitor RTT output (app)
 monitor:
-	probe-rs attach --chip nRF52840_xxAA target/thumbv7em-none-eabihf/debug/embassy
+	probe-rs attach --chip nRF52840_xxAA --always-print-stacktrace target/thumbv7em-none-eabihf/debug/embassy
 
 # Monitor RTT output (bootloader)
 bl-monitor:

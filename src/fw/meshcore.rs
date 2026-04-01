@@ -88,10 +88,6 @@ pub async fn run_meshcore_listener<'a>(
     update_health!(|h| h.lora.set_ok("Ok when started."));
 
     let radio = settings::get_radio_params_or_default().await;
-    // 0 = auto-add contacts on advert, 1 = manual approval only.
-    let manual_add_contacts = settings::get_other_params().await
-        .map(|p| p.manual_add_contacts)
-        .unwrap_or(0);
     let lora_cfg = MeshCoreConfig::from_radio_params(&radio);
     let config = &lora_cfg;
 
@@ -218,7 +214,7 @@ pub async fn run_meshcore_listener<'a>(
                         match msg.payload_type {
                             PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, snr_x4, path_len, &loaded_channels).await,
                             PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, path_len, &msg.path, identity).await,
-                            PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path, manual_add_contacts == 0).await,
+                            PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path).await,
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
                             other => {
                                 defmt::info!(
@@ -358,7 +354,6 @@ async fn log_advert(
     snr_x4:        i8,
     path_len_byte: u8,
     path:          &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-    auto_add:      bool,
 ) {
     use meshcore::payload::advert;
 
@@ -432,22 +427,6 @@ async fn log_advert(
     });
 
     let store = contacts::ContactStore::new();
-
-    // Auto-add to the persistent contact store when the setting allows it.
-    if auto_add {
-        let contact = contacts::Contact::from_advert(
-            a.pub_key,
-            ble_name.as_slice(),
-            a.role.to_u8(),
-            a.timestamp,
-            lat,
-            lon,
-        );
-        match store.add_or_update(&contact).await {
-            Ok(r)  => defmt::debug!("contacts: auto-add {:?}", r),
-            Err(e) => defmt::warn!("contacts: auto-add failed: {:?}", e),
-        }
-    }
 
     // Update routing path for this contact if it arrived via flood.
     if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
