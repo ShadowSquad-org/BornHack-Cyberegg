@@ -1,5 +1,5 @@
 use crate::{DISPLAY_STATE, update_health};
-use crate::fw::game::input::{GameBtn, dispatch};
+use crate::game::input::{GameBtn, dispatch};
 use embassy_nrf::gpio::Input;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 

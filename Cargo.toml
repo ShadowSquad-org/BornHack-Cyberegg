@@ -94,7 +94,7 @@ opt-level = "z"
 [features]
 # default = ["simulator"]
 # default = ["embassy"]
-simulator = ["embedded-graphics-simulator"]
+simulator = ["embedded-graphics-simulator", "heapless"]
 embassy = [
     "cortex-m",
     "cortex-m-rt",

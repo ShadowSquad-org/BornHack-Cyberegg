@@ -1,7 +1,8 @@
 #![cfg_attr(feature = "embassy", no_std)]
 #![cfg_attr(feature = "embassy", no_main)]
 
-#[derive(Debug, defmt::Format, PartialEq)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "embassy", derive(defmt::Format))]
 pub enum ScreenError {
     NotFound,
     OutOfBounds,
@@ -10,6 +11,7 @@ pub enum ScreenError {
 
 #[cfg(feature = "embassy")]
 pub mod fw;
+pub mod game;
 pub mod menu;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
@@ -32,7 +34,6 @@ use fw::device_id::get_bytes as get_device_id;
 fn get_device_id() -> [u8; 4] {
     *b"A3F7"
 }
-#[cfg(feature = "embassy")]
 use heapless::format;
 // Embassy: re-export Color from ssd1675 hardware driver
 #[cfg(feature = "embassy")]
@@ -281,6 +282,7 @@ pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Signals the meshcore task to transmit a self-advert.
+#[cfg(feature = "embassy")]
 pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, fw::meshcore::AdvertMode> =
     Signal::new();
 
@@ -383,8 +385,7 @@ where
 {
     let active = with_display_state!(|state: &Ref<'_, DisplayState<5>>| state.active_screen());
     match active {
-        #[cfg(feature = "embassy")]
-        0 => fw::game::draw_screen_game(display, fw::game::nav::get_nav()),
+        0 => game::draw_screen_game(display, game::nav::get_nav()),
         1 => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
         2 => draw_screen_lora(display, bat_prc),

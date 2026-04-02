@@ -1,5 +1,4 @@
 pub mod battery;
-pub mod game;
 pub mod images;
 pub mod ble;
 pub mod contacts;
