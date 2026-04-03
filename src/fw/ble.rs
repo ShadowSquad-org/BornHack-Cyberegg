@@ -28,6 +28,7 @@ impl RngCore for TrngSeed {
 impl CryptoRng for TrngSeed {}
 
 use meshcore_companion as companion;
+use meshcore;
 
 use embassy_executor::Spawner;
 use embassy_nrf::{Peri, bind_interrupts, mode::Blocking, peripherals, rng};
@@ -472,7 +473,7 @@ async fn nus_peripheral_loop<C>(
         let mut contacts_stream: Option<(usize, u16)> = None;
 
         loop {
-            use embassy_futures::select::{Either, Either4, select, select4};
+            use embassy_futures::select::{Either, Either6, select, select6};
 
             // ---------------------------------------------------------------
             // Lazy contact streaming: emit one slot per iteration into outbox.
@@ -509,11 +510,13 @@ async fn nus_peripheral_loop<C>(
                 let _ = vec.extend_from_slice(&buf[..len.min(244)]);
                 match select(
                     server.nus.tx.notify(&gatt_conn, &vec),
-                    select4(
+                    select6(
                         gatt_conn.next(),
                         crate::MESSAGES_WAITING_SIGNAL.wait(),
                         crate::RAW_PKT_CHANNEL.receive(),
                         crate::ADVERT_BLE_CHANNEL.receive(),
+                        crate::TRACE_RESULT_CHANNEL.receive(),
+                        crate::LOGIN_RESULT_CHANNEL.receive(),
                     ),
                 ).await {
                     Either::First(r) => {
@@ -526,11 +529,13 @@ async fn nus_peripheral_loop<C>(
                     Either::Second(ev) => ev,
                 }
             } else {
-                select4(
+                select6(
                     gatt_conn.next(),
                     crate::MESSAGES_WAITING_SIGNAL.wait(),
                     crate::RAW_PKT_CHANNEL.receive(),
                     crate::ADVERT_BLE_CHANNEL.receive(),
+                    crate::TRACE_RESULT_CHANNEL.receive(),
+                    crate::LOGIN_RESULT_CHANNEL.receive(),
                 ).await
             };
 
@@ -538,7 +543,7 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 // GATT event
                 // -----------------------------------------------------------
-                Either4::First(event) => match event {
+                Either6::First(event) => match event {
                     GattConnectionEvent::Disconnected { reason } => {
                         defmt::info!("BLE: disconnected (reason {:?})", defmt::Debug2Format(&reason));
                         crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
@@ -593,10 +598,14 @@ async fn nus_peripheral_loop<C>(
                                 0u16
                             };
 
-                            // Pre-fetch full contact for GET_CONTACT_BY_KEY (0x1E).
+                            // Pre-fetch full contact for GET_CONTACT_BY_KEY (0x1E)
+                            // and GET_ADVERT_PATH (0x2A).
                             let contact_by_key: Option<contacts::Contact> =
                                 if data.first() == Some(&0x1E) && data.len() >= 33 {
                                     let key: [u8; 32] = data[1..33].try_into().unwrap();
+                                    contacts::ContactStore::new().find_by_key(&key).await
+                                } else if data.first() == Some(&0x2A) && data.len() >= 34 {
+                                    let key: [u8; 32] = data[2..34].try_into().unwrap();
                                     contacts::ContactStore::new().find_by_key(&key).await
                                 } else {
                                     None
@@ -766,6 +775,20 @@ async fn nus_peripheral_loop<C>(
                                     crate::SEND_ADVERT_SIGNAL.signal(advert_mode);
                                     defmt::info!("companion: SEND_SELF_ADVERT mode={=u8} → signalled", mode);
                                     companion::Response::Ok
+                                }
+
+                                Ok(companion::cmd::Command::ResetPath(key)) => {
+                                    defmt::info!("companion: RESET_PATH key={=[u8]:02x}", &key[..6]);
+                                    match contacts::ContactStore::new()
+                                        .update_path(key, contacts::OUT_PATH_UNKNOWN, &[0u8; contacts::MAX_PATH_SIZE])
+                                        .await
+                                    {
+                                        Ok(()) => companion::Response::Ok,
+                                        Err(e) => {
+                                            defmt::warn!("companion: RESET_PATH failed: {:?}", e);
+                                            companion::Response::Error(companion::ErrorCode::Generic)
+                                        }
+                                    }
                                 }
 
                                 Ok(companion::cmd::Command::RemoveContact(key)) => {
@@ -961,6 +984,78 @@ async fn nus_peripheral_loop<C>(
                                     }
                                 }
 
+                                Ok(companion::cmd::Command::SendTracePath { tag, auth, flags, path }) => {
+                                    let mut path_vec: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> =
+                                        heapless::Vec::new();
+                                    let _ = path_vec.extend_from_slice(
+                                        &path[..path.len().min(meshcore::MAX_PATH_SIZE)]
+                                    );
+                                    // Estimate timeout: 5 seconds per hop + base 3 seconds
+                                    let hops = path_vec.len().max(1) as u32;
+                                    let est_timeout_ms = 3_000 + hops * 5_000;
+                                    defmt::info!(
+                                        "companion: SEND_TRACE_PATH tag={=u32:#010x} path_len={=usize} → queued",
+                                        tag, path_vec.len(),
+                                    );
+                                    let _ = crate::TX_TRACE_CHANNEL.try_send(crate::TxTracePath {
+                                        tag,
+                                        auth,
+                                        flags,
+                                        path: path_vec,
+                                    });
+                                    let sent_resp = companion::Response::SentWithTag {
+                                        is_flood: false,
+                                        tag,
+                                        est_timeout_ms,
+                                    };
+                                    let mut _s = [0u8; 10];
+                                    let _sl = companion::encode(&sent_resp, &mut _s);
+                                    defmt::info!("companion: RESP_CODE_SENT ({=usize}B): {=[u8]:02x}", _sl, &_s[.._sl]);
+                                    sent_resp
+                                }
+
+                                Ok(companion::cmd::Command::SendLogin { pub_key, password }) => {
+                                    let mut pw_vec: heapless::Vec<u8, 15> = heapless::Vec::new();
+                                    let _ = pw_vec.extend_from_slice(
+                                        &password[..password.len().min(15)]
+                                    );
+                                    // Generate a tag from the dest pub_key (first 4 bytes LE).
+                                    let tag = u32::from_le_bytes([
+                                        pub_key[0], pub_key[1], pub_key[2], pub_key[3],
+                                    ]);
+                                    defmt::info!(
+                                        "companion: SEND_LOGIN key={=[u8]:02x} tag={=u32:#010x} → queued",
+                                        &pub_key[..6], tag,
+                                    );
+                                    let _ = crate::TX_LOGIN_CHANNEL.try_send(crate::TxLogin {
+                                        pub_key: *pub_key,
+                                        password: pw_vec,
+                                    });
+                                    companion::Response::SentWithTag {
+                                        is_flood: false,
+                                        tag,
+                                        est_timeout_ms: 15_000,
+                                    }
+                                }
+
+                                Ok(companion::cmd::Command::GetAdvertPath { pub_key }) => {
+                                    defmt::info!("companion: GET_ADVERT_PATH key={=[u8]:02x}", &pub_key[..6]);
+                                    match contact_by_key {
+                                        Some(ref c) => {
+                                            let path_byte_len = c.path_actual_bytes();
+                                            companion::Response::AdvertPath {
+                                                recv_timestamp: c.last_advert_ts,
+                                                path_len_byte:  c.out_path_len,
+                                                path:           &c.out_path[..path_byte_len],
+                                            }
+                                        }
+                                        None => {
+                                            defmt::warn!("companion: GET_ADVERT_PATH key={=[u8]:02x} not found", &pub_key[..6]);
+                                            companion::Response::Error(companion::ErrorCode::InvalidParameter)
+                                        }
+                                    }
+                                }
+
                                 Ok(companion::cmd::Command::Unknown(b)) => {
                                     defmt::warn!("companion: unknown command 0x{:02X} → ERROR", b);
                                     companion::Response::Error(companion::ErrorCode::InvalidCommand)
@@ -1045,7 +1140,7 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 // New messages arrived while connected — push 0x83 to app.
                 // -----------------------------------------------------------
-                Either4::Second(()) => {
+                Either6::Second(()) => {
                     defmt::debug!("BLE: {} message(s) waiting, sending 0x83", msg_queue::count());
                     enqueue_notify(outbox, &companion::Response::MessagesWaiting);
                 }
@@ -1053,7 +1148,7 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 // Raw LoRa packet received — push 0x88 to app.
                 // -----------------------------------------------------------
-                Either4::Third(pkt) => {
+                Either6::Third(pkt) => {
                     defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
                     enqueue_notify(outbox, &companion::Response::LogRxData {
                         snr_x4: pkt.snr_x4,
@@ -1065,7 +1160,7 @@ async fn nus_peripheral_loop<C>(
                 // -----------------------------------------------------------
                 // Advert received — push 0x8A (NewAdvert) to app.
                 // -----------------------------------------------------------
-                Either4::Fourth(notif) => {
+                Either6::Fourth(notif) => {
                     defmt::debug!("BLE: advert from {:02x}, pushing 0x8A", &notif.pub_key[..6]);
                     let out_path = [0u8; 64];
                     enqueue_notify(outbox, &companion::Response::NewAdvert(companion::response::NewAdvert {
@@ -1080,6 +1175,56 @@ async fn nus_peripheral_loop<C>(
                         gps_lon:               notif.lon,
                         lastmod:               0,
                     }));
+                }
+
+                // -----------------------------------------------------------
+                // Trace-path result — push 0x89 (PUSH_CODE_TRACE_DATA) to app.
+                // -----------------------------------------------------------
+                Either6::Fifth(trace) => {
+                    let mut _dbg_buf = [0u8; companion::MAX_RESPONSE_LEN];
+                    let _dbg_len = companion::encode(&companion::Response::TraceData {
+                        path_len:    trace.path_len,
+                        flags:       trace.flags,
+                        tag:         trace.tag,
+                        auth_code:   trace.auth_code,
+                        path_hashes: &trace.path_hashes,
+                        path_snrs:   &trace.path_snrs,
+                        final_snr:   trace.final_snr,
+                    }, &mut _dbg_buf);
+                    defmt::info!(
+                        "BLE: trace result tag={=u32:#010x} path_len={=u8}, pushing 0x89 ({=usize}B): {=[u8]:02x}",
+                        trace.tag, trace.path_len, _dbg_len, &_dbg_buf[.._dbg_len],
+                    );
+                    enqueue_notify(outbox, &companion::Response::TraceData {
+                        path_len:    trace.path_len,
+                        flags:       trace.flags,
+                        tag:         trace.tag,
+                        auth_code:   trace.auth_code,
+                        path_hashes: &trace.path_hashes,
+                        path_snrs:   &trace.path_snrs,
+                        final_snr:   trace.final_snr,
+                    });
+                }
+
+                // -----------------------------------------------------------
+                // Login result — push 0x85 (success) or 0x86 (fail) to app.
+                // -----------------------------------------------------------
+                Either6::Sixth(login) => {
+                    let mut prefix = [0u8; 6];
+                    prefix.copy_from_slice(&login.pub_key[..6]);
+                    if login.success {
+                        defmt::info!("BLE: login OK from {:02x}, pushing 0x85", &login.pub_key[..6]);
+                        enqueue_notify(outbox, &companion::Response::LoginSuccess {
+                            is_admin:       login.is_admin,
+                            pub_key_prefix: prefix,
+                            tag:            login.tag,
+                            acl_perms:      login.acl_perms,
+                            fw_ver_level:   login.fw_ver_level,
+                        });
+                    } else {
+                        defmt::info!("BLE: login FAIL from {:02x}, pushing 0x86", &login.pub_key[..6]);
+                        enqueue_notify(outbox, &companion::Response::LoginFail { pub_key_prefix: prefix });
+                    }
                 }
             }
         }

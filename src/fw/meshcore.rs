@@ -146,6 +146,12 @@ pub async fn run_meshcore_listener<'a>(
         while let Ok(req) = crate::TX_PM_CHANNEL.try_receive() {
             send_txt_msg(&mut lora, req, identity).await;
         }
+        while let Ok(req) = crate::TX_TRACE_CHANNEL.try_receive() {
+            send_trace(&mut lora, req).await;
+        }
+        while let Ok(req) = crate::TX_LOGIN_CHANNEL.try_receive() {
+            send_login(&mut lora, req, identity).await;
+        }
         if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
             let mut name_buf = [0u8; settings::MAX_NODE_NAME];
             let name_len = settings::get_node_name(&mut name_buf).await;
@@ -216,6 +222,8 @@ pub async fn run_meshcore_listener<'a>(
                             PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, path_len, &msg.path, identity).await,
                             PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path).await,
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
+                            PayloadType::Trace => handle_trace_recv(&msg.payload, &msg.path, snr_x4).await,
+                            PayloadType::Response => handle_response_recv(&msg.payload, identity).await,
                             other => {
                                 defmt::info!(
                                     "MeshCore type={=u8} [{=usize}B {=i16}dBm]: {=[u8]:x}",
@@ -260,7 +268,7 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
                 "MeshCore GrpTxt [hash={=u8} {=i16}dBm] no matching channel (have: {=[u8]})",
                 grp.channel_hash,
                 rssi,
-                &channels.iter().map(|c| c.hash).collect::<heapless::Vec<u8, 8>>()[..],
+                &channels.iter().map(|c| c.hash).collect::<heapless::Vec<u8, { channels::NUM_CHANNELS }>>()[..],
             );
             return;
         }
@@ -889,4 +897,255 @@ pub async fn send_pm(
             defmt::warn!("send_pm: packet serialize failed: {:?}", defmt::Debug2Format(&e));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Trace-path transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a TRACE packet.
+///
+/// TRACE packets use `RouteType::Direct` with the routing path embedded in
+/// the payload (not the packet path field).  Each relay along the path appends
+/// its SNR and rebroadcasts; the final node calls `onTraceRecv` and (on
+/// MeshCore firmware) pushes a `0x89 PUSH_CODE_TRACE_DATA` response to its
+/// companion app.
+///
+/// Wire payload: `[tag:4 LE][auth:4 LE][flags:1][path_hashes...]`
+async fn send_trace(lora: &mut SimpleLoRa<'_>, req: crate::TxTracePath) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
+
+    let mut payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
+    let _ = payload.extend_from_slice(&req.tag.to_le_bytes());
+    let _ = payload.extend_from_slice(&req.auth.to_le_bytes());
+    let _ = payload.push(req.flags);
+    let _ = payload.extend_from_slice(&req.path);
+
+    let msg = Message {
+        payload_type:   PayloadType::Trace,
+        route:          RouteType::Direct,
+        version:        0,
+        transport_code: 0,
+        path_len_byte:  0,
+        path:           heapless::Vec::new(),
+        payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_trace: TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "Trace sent: tag={=u32:#010x} path_len={=usize}B len={=usize}B",
+                    req.tag, req.path.len(), len,
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_trace: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Login (ANON_REQ) transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit an ANON_REQ login packet.
+///
+/// Constructs the encrypted `PAYLOAD_TYPE_ANON_REQ` payload and sends it as
+/// a `RouteType::Direct` packet to the target node.  The target responds with
+/// a `PayloadType::Response` packet which is handled by [`handle_response_recv`].
+async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &DeviceIdentity) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+
+    let timestamp = crate::unix_now().unwrap_or(0);
+
+    let payload = match meshcore::payload::anon_req::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        timestamp,
+        &req.password,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            defmt::warn!("send_login: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let msg = Message {
+        payload_type:   PayloadType::AnonReq,
+        route:          RouteType::Direct,
+        version:        0,
+        transport_code: 0,
+        path_len_byte:  0,
+        path:           heapless::Vec::new(),
+        payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_login: TX failed: {:?}", e);
+            } else {
+                defmt::info!("Login sent to {=[u8]:02x} ({=usize}B)", &req.pub_key[..6], len);
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_login: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trace-path receive handler
+// ---------------------------------------------------------------------------
+
+/// Handle a received `PayloadType::Trace` packet.
+///
+/// When a TRACE packet is reflected back to us by the relay, the packet contains:
+/// - `payload` = `[tag:4 LE][auth:4 LE][flags:1][route_hashes...]`
+///   — the original route hashes embedded in the payload by `sendDirect`.
+/// - `pkt_path` = `[snr_relay1, snr_relay2, ...]`
+///   — per-hop SNRs appended by each relay that forwarded the packet.
+/// - `snr_x4` = our receive SNR × 4 (the final hop SNR at our radio).
+///
+/// Pushes a [`crate::TraceResult`] to [`crate::TRACE_RESULT_CHANNEL`] so the
+/// BLE task can send a `0x89 PUSH_CODE_TRACE_DATA` notification.
+async fn handle_trace_recv(
+    payload: &[u8],
+    pkt_path: &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    snr_x4: i8,
+) {
+    if payload.len() < 9 {
+        defmt::warn!("Trace recv: payload too short ({=usize}B)", payload.len());
+        return;
+    }
+
+    let tag       = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+    let auth_code = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    let flags = payload[8];
+
+    // payload[9..] = route path hashes embedded by the sender.
+    let route_hashes = &payload[9..];
+
+    // path_len counts the route hashes in units of hash_size bytes.
+    let path_sz   = (flags & 0x03) as usize; // 0=1B, 1=2B, 2=4B per hash entry
+    let hash_size = path_sz + 1;
+    let path_len  = (route_hashes.len() / hash_size.max(1)) as u8;
+
+    // The per-hop relay SNRs come from the packet's path field (appended by each relay).
+    let relay_snrs = pkt_path.as_slice();
+
+    defmt::info!(
+        "Trace recv: tag={=u32:#010x} auth={=u32:#010x} flags={=u8:#04x} path_len={=u8} relay_snrs={=usize}B final_snr={=i8}",
+        tag, auth_code, flags, path_len, relay_snrs.len(), snr_x4,
+    );
+
+    let mut path_hashes: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+    let mut path_snrs:   heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+    let _ = path_hashes.extend_from_slice(route_hashes);
+    let _ = path_snrs.extend_from_slice(relay_snrs);
+
+    let _ = crate::TRACE_RESULT_CHANNEL.try_send(crate::TraceResult {
+        path_len,
+        flags,
+        tag,
+        auth_code,
+        path_hashes,
+        path_snrs,
+        final_snr: snr_x4,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Login response receive handler
+// ---------------------------------------------------------------------------
+
+/// Handle a received `PayloadType::Response` packet.
+///
+/// Attempts to decrypt the response using each stored contact's public key.
+/// A successful decryption where `decrypted[4]` matches `NODE_TYPE_RESP_OK`
+/// is treated as a login success and pushes a [`crate::LoginResult`] with
+/// `success = true`; otherwise `success = false` is pushed.
+///
+/// Wire format (same as TxtMsg):
+/// `[dest_pub_key:32][mac:2][aes_ciphertext]`
+///
+/// Decrypted plaintext: `[timestamp:4][resp_type:1][keep_alive_secs:2][...]`
+/// where `resp_type` 4 = login OK, 5 = login fail (MeshCore convention).
+async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
+    use meshcore::payload::txt_msg;
+
+    let msg = match txt_msg::deserialize(payload) {
+        Ok(m) => m,
+        Err(_) => {
+            defmt::debug!("Response recv: payload deserialize failed");
+            return;
+        }
+    };
+
+    // Only process responses addressed to us.
+    if msg.dest_pub_key != identity.pub_key {
+        defmt::debug!("Response recv: not for us, ignoring");
+        return;
+    }
+
+    // Try each stored contact as the potential sender (server).
+    let store = contacts::ContactStore::new();
+    let count = store.count().await;
+    let mut found_count = 0u16;
+    for idx in 0..contacts::MAX_CONTACTS {
+        if found_count >= count { break; }
+        let Some(c) = store.read_slot(idx).await else { continue; };
+        found_count += 1;
+
+        if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_err() {
+            continue;
+        }
+        let Ok(dec) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) else {
+            continue;
+        };
+
+        // dec.text = [resp_type:1][keep_alive_secs:2][...]
+        // (timestamp is stripped by decrypt; text_type maps to resp_type)
+        let resp_type = dec.text_type; // byte at offset 4 in decrypted = resp_type
+        // MeshCore NODE_TYPE login response codes: 4 = OK, 5 = fail.
+        let success = resp_type == 4;
+
+        defmt::info!(
+            "Response recv: login {} from {=[u8]:02x} resp_type={=u8}",
+            if success { "OK" } else { "FAIL" },
+            &c.pub_key[..6],
+            resp_type,
+        );
+
+        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+        pub_key.copy_from_slice(&c.pub_key);
+
+        let tag = if dec.text.len() >= 4 {
+            u32::from_le_bytes([dec.text[0], dec.text[1], dec.text[2], dec.text[3]])
+        } else {
+            0
+        };
+
+        let _ = crate::LOGIN_RESULT_CHANNEL.try_send(crate::LoginResult {
+            success,
+            is_admin: 0,
+            pub_key,
+            tag,
+            acl_perms: 0,
+            fw_ver_level: 0,
+        });
+        return; // Only process the first matching contact.
+    }
+
+    defmt::debug!("Response recv: could not decrypt with any known contact");
 }

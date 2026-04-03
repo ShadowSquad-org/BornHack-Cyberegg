@@ -23,19 +23,23 @@ use crate::fw::kv;
 ///
 /// Used both here and in the `PACKET_DEVICE_INFO` `max_channels` field so
 /// the companion app knows how many `GET_CHANNEL` requests to issue.
-pub const NUM_CHANNELS: usize = 8;
+pub const NUM_CHANNELS: usize = 40;
 
 const NAME_LEN: usize = 32;
-const KEY_LEN: usize  = 16;
+const KEY_LEN: usize = 16;
 const SLOT_LEN: usize = NAME_LEN + KEY_LEN; // 48 bytes
 
-/// KV key strings, one per slot index.
-const SLOT_KEYS: [&str; NUM_CHANNELS] = ["0", "1", "2", "3", "4", "5", "6", "7"];
+/// Format a slot index as a zero-padded 4-digit decimal string.
+fn slot_key(idx: usize) -> heapless::String<4> {
+    use core::fmt::Write;
+    let mut s = heapless::String::new();
+    let _ = write!(s, "{:02}", idx);
+    s
+}
 
 /// Well-known public channel AES-128 key (publicly documented constant).
 const PUBLIC_CHANNEL_KEY: [u8; KEY_LEN] = [
-    0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a,
-    0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72,
+    0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a, 0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72,
 ];
 
 // ---------------------------------------------------------------------------
@@ -47,7 +51,10 @@ fn is_empty(slot: &[u8; SLOT_LEN]) -> bool {
 }
 
 async fn kv_write(i: usize, slot: &[u8; SLOT_LEN]) {
-    if let Err(e) = kv::namespace("ch").set(SLOT_KEYS[i], slot, true).await {
+    if let Err(e) = kv::namespace("ch")
+        .set(slot_key(i).as_str(), slot, true)
+        .await
+    {
         defmt::warn!("channels: write slot {} failed: {:?}", i, e);
     }
 }
@@ -67,7 +74,7 @@ pub async fn init() {
 
     for i in 0..NUM_CHANNELS {
         let mut buf = [0u8; SLOT_LEN];
-        match kv.get(SLOT_KEYS[i], &mut buf).await {
+        match kv.get(slot_key(i).as_str(), &mut buf).await {
             Ok(n) if n == SLOT_LEN => found += 1,
             _ => kv_write(i, &[0u8; SLOT_LEN]).await,
         }
@@ -91,10 +98,13 @@ pub async fn get(idx: u8) -> Option<([u8; NAME_LEN], [u8; KEY_LEN])> {
         return None;
     }
     let mut buf = [0u8; SLOT_LEN];
-    match kv::namespace("ch").get(SLOT_KEYS[idx as usize], &mut buf).await {
+    match kv::namespace("ch")
+        .get(slot_key(idx as usize).as_str(), &mut buf)
+        .await
+    {
         Ok(n) if n == SLOT_LEN && !is_empty(&buf) => {
             let name: [u8; NAME_LEN] = buf[..NAME_LEN].try_into().unwrap();
-            let key:  [u8; KEY_LEN]  = buf[NAME_LEN..].try_into().unwrap();
+            let key: [u8; KEY_LEN] = buf[NAME_LEN..].try_into().unwrap();
             Some((name, key))
         }
         _ => None,
@@ -152,7 +162,7 @@ pub async fn count_active() -> u8 {
     let mut count = 0u8;
     for i in 0..NUM_CHANNELS {
         let mut buf = [0u8; SLOT_LEN];
-        if let Ok(n) = kv.get(SLOT_KEYS[i], &mut buf).await {
+        if let Ok(n) = kv.get(slot_key(i).as_str(), &mut buf).await {
             if n == SLOT_LEN && !is_empty(&buf) {
                 count += 1;
             }

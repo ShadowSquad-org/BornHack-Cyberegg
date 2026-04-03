@@ -13,9 +13,8 @@ pub enum ScreenError {
 pub mod fw;
 pub mod game;
 pub mod menu;
-pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
-
 use core::cell::{Ref, RefCell};
+pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
 use core::result::{Result, Result::Ok};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -209,7 +208,7 @@ pub static MINUTE_TICK: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 #[cfg(feature = "embassy")]
 struct WallClock {
-    unix_base:  u32,
+    unix_base: u32,
     ticks_base: u64,
 }
 
@@ -222,7 +221,7 @@ static WALL_CLOCK: Mutex<CriticalSectionRawMutex, RefCell<Option<WallClock>>> =
 pub fn set_wall_clock(unix_secs: u32) {
     WALL_CLOCK.lock(|cell| {
         *cell.borrow_mut() = Some(WallClock {
-            unix_base:  unix_secs,
+            unix_base: unix_secs,
             ticks_base: embassy_time::Instant::now().as_ticks(),
         });
     });
@@ -233,9 +232,11 @@ pub fn set_wall_clock(unix_secs: u32) {
 pub fn unix_now() -> Option<u32> {
     WALL_CLOCK.lock(|cell| {
         cell.borrow().as_ref().map(|wc| {
-            let elapsed = embassy_time::Instant::now().as_ticks()
+            let elapsed = embassy_time::Instant::now()
+                .as_ticks()
                 .saturating_sub(wc.ticks_base);
-            wc.unix_base.saturating_add((elapsed / embassy_time::TICK_HZ) as u32)
+            wc.unix_base
+                .saturating_add((elapsed / embassy_time::TICK_HZ) as u32)
         })
     })
 }
@@ -336,6 +337,93 @@ pub struct TxPrivateMsg {
 #[cfg(feature = "embassy")]
 pub static TX_PM_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxPrivateMsg, 4> =
     embassy_sync::channel::Channel::new();
+
+/// An outgoing trace-path request queued by the BLE task for the meshcore task.
+#[cfg(feature = "embassy")]
+pub struct TxTracePath {
+    /// Random tag for correlating the response.
+    pub tag: u32,
+    /// Auth code embedded in the trace payload.
+    pub auth: u32,
+    /// Trace flags (bits 0-1 = path hash width).
+    pub flags: u8,
+    /// Routing path bytes (node hashes); empty for a zero-hop trace.
+    pub path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+}
+
+/// Queue from the BLE companion task to the meshcore task for outgoing trace-path requests.
+#[cfg(feature = "embassy")]
+pub static TX_TRACE_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TxTracePath,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// An outgoing login request queued by the BLE task for the meshcore task.
+#[cfg(feature = "embassy")]
+pub struct TxLogin {
+    /// Full 32-byte Ed25519 public key of the target (room/repeater server).
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    /// Password bytes (UTF-8, 0–15 bytes).
+    pub password: heapless::Vec<u8, 15>,
+}
+
+/// Queue from the BLE companion task to the meshcore task for outgoing login requests.
+#[cfg(feature = "embassy")]
+pub static TX_LOGIN_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxLogin, 2> =
+    embassy_sync::channel::Channel::new();
+
+/// Trace-path result pushed from the meshcore task to the BLE task (0x89).
+#[cfg(feature = "embassy")]
+pub struct TraceResult {
+    /// Number of relay hops recorded in the trace.
+    pub path_len: u8,
+    /// Trace flags (bits 0-1 = path hash width).
+    pub flags: u8,
+    /// Tag echoed from the original request.
+    pub tag: u32,
+    /// Auth code echoed from the original request.
+    pub auth_code: u32,
+    /// Per-hop node hash bytes (from trace payload route field).
+    pub path_hashes: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    /// Per-hop SNR bytes from relays (from LoRa packet path field, raw × 4).
+    pub path_snrs: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    /// SNR at the final receiving hop (our radio's receive SNR × 4).
+    pub final_snr: i8,
+}
+
+/// Passes trace-path results from the meshcore task to the BLE task for 0x89 push.
+#[cfg(feature = "embassy")]
+pub static TRACE_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TraceResult,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Login result pushed from the meshcore task to the BLE task (0x85 or 0x86).
+#[cfg(feature = "embassy")]
+pub struct LoginResult {
+    /// `true` = login accepted (push 0x85), `false` = rejected (push 0x86).
+    pub success: bool,
+    /// 1 if the authenticated user has admin rights (valid only when `success`).
+    pub is_admin: u8,
+    /// Full 32-byte public key of the server (first 6 bytes used in both success/fail frames).
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    /// Tag from the original request (valid only when `success`).
+    pub tag: u32,
+    /// ACL permission bits (valid only when `success`).
+    pub acl_perms: u8,
+    /// Server firmware version level (valid only when `success`).
+    pub fw_ver_level: u8,
+}
+
+/// Passes login results from the meshcore task to the BLE task for 0x85/0x86 push.
+#[cfg(feature = "embassy")]
+pub static LOGIN_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    LoginResult,
+    2,
+> = embassy_sync::channel::Channel::new();
 
 // Macro for embassy - immutable access
 #[cfg(feature = "embassy")]
@@ -459,10 +547,10 @@ where
     let circle_post = CIRCLE_POS.load(Ordering::Relaxed);
     CIRCLE_POS.store(circle_post.wrapping_add(1) % 4, Ordering::Relaxed);
 
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
+    // let centered = TextStyleBuilder::new()
+    //     .baseline(Baseline::Middle)
+    //     .alignment(Alignment::Center)
+    //     .build();
 
     // Animated red dot
     let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
@@ -492,12 +580,19 @@ where
     #[cfg(feature = "embassy")]
     NODE_NAME.lock(|cell| -> Result<(), D::Error> {
         let name = cell.borrow();
-        let display_name = if name.is_empty() { "<Empty>" } else { name.as_str() };
+        let display_name = if name.is_empty() {
+            "<Empty>"
+        } else {
+            name.as_str()
+        };
         Text::with_text_style(
             display_name,
             Point::new(148, 33),
             text_style_inverted,
-            TextStyleBuilder::new().baseline(Baseline::Bottom).alignment(Alignment::Right).build(),
+            TextStyleBuilder::new()
+                .baseline(Baseline::Bottom)
+                .alignment(Alignment::Right)
+                .build(),
         )
         .draw(display)
         .map(|_| ())
