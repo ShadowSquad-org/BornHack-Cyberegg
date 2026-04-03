@@ -152,6 +152,9 @@ pub async fn run_meshcore_listener<'a>(
         while let Ok(req) = crate::TX_LOGIN_CHANNEL.try_receive() {
             send_login(&mut lora, req, identity).await;
         }
+        while let Ok(req) = crate::TX_STATUS_REQ_CHANNEL.try_receive() {
+            send_status_request(&mut lora, req, identity).await;
+        }
         if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
             let mut name_buf = [0u8; settings::MAX_NODE_NAME];
             let name_len = settings::get_node_name(&mut name_buf).await;
@@ -219,11 +222,12 @@ pub async fn run_meshcore_listener<'a>(
                         };
                         match msg.payload_type {
                             PayloadType::GrpTxt => push_grp_txt(&msg.payload, rssi, snr_x4, path_len, &loaded_channels).await,
-                            PayloadType::TxtMsg => log_txt_msg(&msg.payload, rssi, path_len, &msg.path, identity).await,
+                            PayloadType::TxtMsg => log_txt_msg(&mut lora, &msg.payload, rssi, path_len, &msg.path, identity).await,
                             PayloadType::Advert => log_advert(&msg.payload, rssi, snr_x4, path_len, &msg.path).await,
                             PayloadType::Ack => defmt::info!("MeshCore Ack [{=i16}dBm]", rssi),
                             PayloadType::Trace => handle_trace_recv(&msg.payload, &msg.path, snr_x4).await,
                             PayloadType::Response => handle_response_recv(&msg.payload, identity).await,
+                            PayloadType::Path => handle_path_recv(&msg.payload, rssi, identity).await,
                             other => {
                                 defmt::info!(
                                     "MeshCore type={=u8} [{=usize}B {=i16}dBm]: {=[u8]:x}",
@@ -452,11 +456,12 @@ async fn log_advert(
 // ---------------------------------------------------------------------------
 
 async fn log_txt_msg(
-    payload:      &[u8],
-    rssi:         i16,
+    lora:          &mut SimpleLoRa<'_>,
+    payload:       &[u8],
+    rssi:          i16,
     path_len_byte: u8,
-    path:         &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
-    identity:     &DeviceIdentity,
+    path:          &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    identity:      &DeviceIdentity,
 ) {
     use meshcore::payload::txt_msg;
 
@@ -474,26 +479,27 @@ async fn log_txt_msg(
         }
     };
 
-    // Only process messages addressed to us.
-    if msg.dest_pub_key != identity.pub_key {
-        defmt::debug!("TxtMsg: not for us, ignoring");
+    // Only process messages addressed to us (dest_hash = first byte of our pub_key).
+    if msg.dest_hash != identity.pub_key[0] {
+        defmt::debug!("TxtMsg: dest_hash={=u8:#04x} not ours, ignoring", msg.dest_hash);
         return;
     }
 
-    // Scan ContactStore for a contact whose sec_key can verify the MAC.
-    // This is O(n) but TxtMsg RX is infrequent (user-level event).
+    // Scan ContactStore for a contact whose hash matches src_hash and can decrypt.
     let store = contacts::ContactStore::new();
     let count = store.count().await;
-    let mut found: Option<(contacts::Contact, meshcore::payload::txt_msg::DecryptedTxtMsg)> = None;
+    let mut found: Option<(contacts::Contact, meshcore::payload::txt_msg::DecryptedTxtMsg, u32)> = None;
 
     let mut found_count = 0u16;
     for idx in 0..contacts::MAX_CONTACTS {
         if found_count >= count { break; }
         if let Some(c) = store.read_slot(idx).await {
             found_count += 1;
+            // Quick hash pre-filter.
+            if c.pub_key[0] != msg.src_hash { continue; }
             if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_ok() {
-                if let Ok(dec) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) {
-                    found = Some((c, dec));
+                if let Ok((dec, ack_hash)) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) {
+                    found = Some((c, dec, ack_hash));
                     break;
                 }
             }
@@ -504,11 +510,11 @@ async fn log_txt_msg(
         None => {
             defmt::warn!("TxtMsg: received but could not decrypt (sender unknown or MAC fail) [{=i16}dBm]", rssi);
         }
-        Some((sender, dec)) => {
+        Some((sender, dec, ack_hash)) => {
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
             defmt::info!(
-                "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32}]: {=str}",
-                &sender.pub_key[..6], rssi, dec.timestamp, text,
+                "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32} type={=u8}]: {=str}",
+                &sender.pub_key[..6], rssi, dec.timestamp, dec.txt_type(), text,
             );
 
             // Update the stored routing path so replies can go direct.
@@ -521,54 +527,61 @@ async fn log_txt_msg(
                 }
             }
 
-            // Push to the message queue so SYNC_NEXT_MESSAGE delivers it.
-            let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
-            let _ = text_bytes.extend_from_slice(
-                &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
-            );
-            let mut sender_prefix = [0u8; 6];
-            sender_prefix.copy_from_slice(&sender.pub_key[..6]);
-            msg_queue::push(&msg_queue::ReceivedMsg {
-                kind:          msg_queue::MsgKind::Private,
-                sender_prefix,
-                channel_idx:   0,
-                path_len:      path_len_byte,
-                text_type:     dec.text_type,
-                timestamp:     dec.timestamp,
-                rssi,
-                text:          text_bytes,
-            }).await;
-            crate::MESSAGES_WAITING_SIGNAL.signal(());
-
-            // Also update the display.
-            let display_name = {
-                let name_end = sender.name.iter().position(|&b| b == 0).unwrap_or(32);
-                let name_str = core::str::from_utf8(&sender.name[..name_end]).unwrap_or("");
-                if name_str.is_empty() {
-                    let mut hex: heapless::String<32> = heapless::String::new();
-                    for &b in &sender.pub_key[..4] {
-                        let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
-                        let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
-                    }
-                    hex
-                } else {
-                    let mut s: heapless::String<32> = heapless::String::new();
-                    let _ = s.push_str(name_str);
-                    s
-                }
-            };
-            let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
-                heapless::String::new();
-            let _ = text_str.push_str(text);
-            crate::LAST_PM.lock(|cell| {
-                *cell.borrow_mut() = Some(crate::LastPm {
-                    sender_name: display_name,
-                    text: text_str,
-                    timestamp: dec.timestamp,
+            // Only push plain-text messages to the UI / message queue.
+            // CLI_DATA and signed types are not handled yet.
+            if dec.txt_type() == txt_msg::TXT_TYPE_PLAIN {
+                // Push to the message queue so SYNC_NEXT_MESSAGE delivers it.
+                let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
+                let _ = text_bytes.extend_from_slice(
+                    &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
+                );
+                let mut sender_prefix = [0u8; 6];
+                sender_prefix.copy_from_slice(&sender.pub_key[..6]);
+                msg_queue::push(&msg_queue::ReceivedMsg {
+                    kind:          msg_queue::MsgKind::Private,
+                    sender_prefix,
+                    channel_idx:   0,
+                    path_len:      path_len_byte,
+                    text_type:     dec.txt_type(),
+                    timestamp:     dec.timestamp,
                     rssi,
+                    text:          text_bytes,
+                }).await;
+                crate::MESSAGES_WAITING_SIGNAL.signal(());
+
+                // Send ACK back to the sender.
+                send_ack(lora, &sender.pub_key, path_len_byte, path, ack_hash).await;
+
+                // Update the display.
+                let display_name = {
+                    let name_end = sender.name.iter().position(|&b| b == 0).unwrap_or(32);
+                    let name_str = core::str::from_utf8(&sender.name[..name_end]).unwrap_or("");
+                    if name_str.is_empty() {
+                        let mut hex: heapless::String<32> = heapless::String::new();
+                        for &b in &sender.pub_key[..4] {
+                            let _ = hex.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('?'));
+                            let _ = hex.push(char::from_digit((b & 0xF) as u32, 16).unwrap_or('?'));
+                        }
+                        hex
+                    } else {
+                        let mut s: heapless::String<32> = heapless::String::new();
+                        let _ = s.push_str(name_str);
+                        s
+                    }
+                };
+                let mut text_str: heapless::String<{ meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE }> =
+                    heapless::String::new();
+                let _ = text_str.push_str(text);
+                crate::LAST_PM.lock(|cell| {
+                    *cell.borrow_mut() = Some(crate::LastPm {
+                        sender_name: display_name,
+                        text: text_str,
+                        timestamp: dec.timestamp,
+                        rssi,
+                    });
                 });
-            });
-            crate::PM_SIGNAL.signal(());
+                crate::PM_SIGNAL.signal(());
+            }
         }
     }
 }
@@ -698,11 +711,13 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
         _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
     };
 
-    let encrypted = match txt_msg::encrypt(
+    let (encrypted, _expected_ack) = match txt_msg::encrypt(
         &identity.sec_key,
+        &identity.pub_key,
         &req.recipient_pub_key,
         req.timestamp,
-        0, // text_type = plain
+        0, // txt_type = plain
+        0, // attempt
         &req.text,
     ) {
         Ok(e) => e,
@@ -854,13 +869,18 @@ pub async fn send_pm(
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
 
-    let msg = match txt_msg::encrypt(&identity.sec_key, recipient_pk, timestamp, 0, text) {
+    let (msg, expected_ack) = match txt_msg::encrypt(
+        &identity.sec_key, &identity.pub_key, recipient_pk,
+        timestamp, txt_msg::TXT_TYPE_PLAIN, 0, text,
+    ) {
         Ok(m) => m,
         Err(e) => {
             defmt::warn!("send_pm: encrypt failed: {:?}", defmt::Debug2Format(&e));
             return;
         }
     };
+
+    defmt::info!("send_pm: expected_ack={=u32:#010x}", expected_ack);
 
     let mut payload_buf = [0u8; MAX_PAYLOAD_SIZE];
     let mut payload_len = 0usize;
@@ -895,6 +915,66 @@ pub async fn send_pm(
         }
         Err(e) => {
             defmt::warn!("send_pm: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ACK transmission
+// ---------------------------------------------------------------------------
+
+/// Send an ACK for a received TxtMsg back toward the sender.
+///
+/// If we have a stored path for the sender we send Direct; otherwise Flood.
+async fn send_ack(
+    lora:          &mut SimpleLoRa<'_>,
+    sender_pk:     &[u8; meshcore::PUB_KEY_SIZE],
+    _recv_path_len: u8,
+    _recv_path:    &heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    ack_hash:      u32,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+    use meshcore::payload::txt_msg;
+
+    let ack_bytes = ack_hash.to_le_bytes();
+
+    let mut payload: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+    let _ = payload.extend_from_slice(&ack_bytes);
+
+    // Route: Direct if we have a stored path, Flood otherwise.
+    let contact = contacts::ContactStore::new().find_by_key(sender_pk).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
+    let msg = Message {
+        payload_type:   PayloadType::Ack,
+        route,
+        version:        0,
+        transport_code: 0,
+        path_len_byte,
+        path:           path_bytes,
+        payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_ack: TX failed: {:?}", e);
+            } else {
+                defmt::info!("ACK sent ack={=u32:#010x} ({=usize}B)", ack_hash, len);
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_ack: serialize failed: {:?}", defmt::Debug2Format(&e));
         }
     }
 }
@@ -956,9 +1036,9 @@ async fn send_trace(lora: &mut SimpleLoRa<'_>, req: crate::TxTracePath) {
 
 /// Build and transmit an ANON_REQ login packet.
 ///
-/// Constructs the encrypted `PAYLOAD_TYPE_ANON_REQ` payload and sends it as
-/// a `RouteType::Direct` packet to the target node.  The target responds with
-/// a `PayloadType::Response` packet which is handled by [`handle_response_recv`].
+/// Uses `RouteType::Flood` when no path to the target is known (the common
+/// case for first login), and `RouteType::Direct` when a stored path exists.
+/// This mirrors C++ `BaseChatMesh::sendLogin`: flood when `out_path_len == OUT_PATH_UNKNOWN`.
 async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &DeviceIdentity) {
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::MAX_TRANS_UNIT;
@@ -979,13 +1059,25 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
         }
     };
 
+    // Flood when no path is known; direct when a stored path exists.
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
     let msg = Message {
         payload_type:   PayloadType::AnonReq,
-        route:          RouteType::Direct,
+        route,
         version:        0,
         transport_code: 0,
-        path_len_byte:  0,
-        path:           heapless::Vec::new(),
+        path_len_byte,
+        path:           path_bytes,
         payload,
     };
 
@@ -1000,6 +1092,76 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
         }
         Err(e) => {
             defmt::warn!("send_login: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status request transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a STATUS REQUEST — same `AnonReq` wire format as login
+/// but with an empty password.  The server sees `data[4] == 0` (no password
+/// byte) and responds with uptime + battery instead of a login result.
+async fn send_status_request(
+    lora: &mut SimpleLoRa<'_>,
+    req: crate::TxStatusReq,
+    identity: &DeviceIdentity,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+
+    let timestamp = crate::unix_now().unwrap_or(0);
+
+    let payload = match meshcore::payload::anon_req::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        timestamp,
+        &[], // empty password = status/ping request
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            defmt::warn!("send_status_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+    let (route, path_len_byte, path_bytes) = match contact {
+        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
+            let actual = c.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&c.out_path[..actual]);
+            (RouteType::Direct, c.out_path_len, pv)
+        }
+        _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
+    };
+
+    let msg = Message {
+        payload_type:   PayloadType::AnonReq,
+        route,
+        version:        0,
+        transport_code: 0,
+        path_len_byte,
+        path:           path_bytes,
+        payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            // Record as pending BEFORE transmitting so the response handler can match it.
+            crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(Some(req.pub_key)));
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_status_req: TX failed: {:?}", e);
+                crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
+            } else {
+                defmt::info!("Status req sent to {=[u8]:02x} ({=usize}B)", &req.pub_key[..6], len);
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_status_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
         }
     }
 }
@@ -1077,10 +1239,9 @@ async fn handle_trace_recv(
 /// `success = true`; otherwise `success = false` is pushed.
 ///
 /// Wire format (same as TxtMsg):
-/// `[dest_pub_key:32][mac:2][aes_ciphertext]`
+/// `[dest_hash:1][src_hash:1][mac:2][aes_ciphertext]`
 ///
 /// Decrypted plaintext: `[timestamp:4][resp_type:1][keep_alive_secs:2][...]`
-/// where `resp_type` 4 = login OK, 5 = login fail (MeshCore convention).
 async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
     use meshcore::payload::txt_msg;
 
@@ -1093,8 +1254,8 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
     };
 
     // Only process responses addressed to us.
-    if msg.dest_pub_key != identity.pub_key {
-        defmt::debug!("Response recv: not for us, ignoring");
+    if msg.dest_hash != identity.pub_key[0] {
+        defmt::debug!("Response recv: dest_hash={=u8:#04x} not ours, ignoring", msg.dest_hash);
         return;
     }
 
@@ -1107,18 +1268,73 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
         let Some(c) = store.read_slot(idx).await else { continue; };
         found_count += 1;
 
+        if c.pub_key[0] != msg.src_hash { continue; }
         if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_err() {
             continue;
         }
-        let Ok(dec) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) else {
+        let Ok((dec, _ack_hash)) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) else {
             continue;
         };
 
-        // dec.text = [resp_type:1][keep_alive_secs:2][...]
-        // (timestamp is stripped by decrypt; text_type maps to resp_type)
-        let resp_type = dec.text_type; // byte at offset 4 in decrypted = resp_type
-        // MeshCore NODE_TYPE login response codes: 4 = OK, 5 = fail.
-        let success = resp_type == 4;
+        // Decrypted plaintext layout (same as C++ onContactResponse `data` arg):
+        //   [0..4]  = tag / timestamp (u32 LE)      → dec.timestamp
+        //   [4]     = resp_type                      → dec.text_type
+        //
+        // For a LOGIN response:
+        //   [5]     = keep_alive_secs / 16           → dec.text[0]
+        //   [6]     = is_admin                       → dec.text[1]
+        //   [7]     = acl_perms                      → dec.text[2]
+        //   [12]    = fw_ver_level                   → dec.text[7]
+        //   RESP_SERVER_LOGIN_OK = 0 (new), legacy = b'O'/b'K'
+        //
+        // For a STATUS PONG response (AnonReq with empty password):
+        //   The server's resp_type value for status is not firmly documented;
+        //   we distinguish via the PENDING_STATUS_PUBKEY flag set before TX.
+        //   dec.text[0..4] = uptime_secs (u32 LE), dec.text[4..6] = battery_mv (u16 LE)
+        // In the Response payload, dec.flags = resp_type byte, dec.text = body after flags.
+        let resp_type = dec.flags;
+        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+        pub_key.copy_from_slice(&c.pub_key);
+
+        // Check if this is a response to a pending status request.
+        let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
+        if let Some(pending_key) = pending_status {
+            if pending_key == pub_key {
+                crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
+
+                // Status pong body: [uptime:4 LE][battery_mv:2 LE]
+                let uptime_secs = if dec.text.len() >= 4 {
+                    u32::from_le_bytes([
+                        dec.text.get(0).copied().unwrap_or(0),
+                        dec.text.get(1).copied().unwrap_or(0),
+                        dec.text.get(2).copied().unwrap_or(0),
+                        dec.text.get(3).copied().unwrap_or(0),
+                    ])
+                } else { 0 };
+                let battery_mv = if dec.text.len() >= 6 {
+                    u16::from_le_bytes([
+                        dec.text.get(4).copied().unwrap_or(0),
+                        dec.text.get(5).copied().unwrap_or(0),
+                    ])
+                } else { 0 };
+
+                defmt::info!(
+                    "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
+                    &c.pub_key[..6], resp_type, uptime_secs, battery_mv,
+                );
+
+                let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult {
+                    pub_key,
+                    uptime_secs,
+                    battery_mv,
+                });
+                return;
+            }
+        }
+
+        // No pending status request — treat as a login response.
+        let success = resp_type == 0
+            || (resp_type == b'O' && dec.text.first() == Some(&b'K'));
 
         defmt::info!(
             "Response recv: login {} from {=[u8]:02x} resp_type={=u8}",
@@ -1127,25 +1343,161 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
             resp_type,
         );
 
-        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-        pub_key.copy_from_slice(&c.pub_key);
+        let tag = dec.timestamp;
 
-        let tag = if dec.text.len() >= 4 {
-            u32::from_le_bytes([dec.text[0], dec.text[1], dec.text[2], dec.text[3]])
-        } else {
-            0
-        };
+        let is_admin      = if success { dec.text.get(1).copied().unwrap_or(0) } else { 0 };
+        let acl_perms     = if success { dec.text.get(2).copied().unwrap_or(0) } else { 0 };
+        let fw_ver_level  = if success { dec.text.get(7).copied().unwrap_or(0) } else { 0 };
 
         let _ = crate::LOGIN_RESULT_CHANNEL.try_send(crate::LoginResult {
             success,
-            is_admin: 0,
+            is_admin,
             pub_key,
             tag,
-            acl_perms: 0,
-            fw_ver_level: 0,
+            acl_perms,
+            fw_ver_level,
         });
         return; // Only process the first matching contact.
     }
 
     defmt::debug!("Response recv: could not decrypt with any known contact");
+}
+
+// ---------------------------------------------------------------------------
+// Path receive handler
+// ---------------------------------------------------------------------------
+
+/// Handle a received `PayloadType::Path` packet (type=8).
+///
+/// These arrive when a server sends its login response via `createPathReturn`
+/// (typically flood-routed).  The packet wraps an extra payload whose type
+/// indicates what is inside; `extra_type == 1` (PAYLOAD_TYPE_RESPONSE) means
+/// it is a login response.
+///
+/// Wire format: `[dest_hash:1][src_hash:1][mac:2][AES-128-ECB ciphertext]`
+///
+/// Decrypted data: `[path_len_byte:1][path_bytes:N][extra_type:1][extra...]`
+async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) {
+    use meshcore::payload::path_msg;
+
+    let msg = match path_msg::deserialize(payload) {
+        Ok(m) => m,
+        Err(_) => {
+            defmt::warn!("Path recv: failed to parse payload ({=usize}B)", payload.len());
+            return;
+        }
+    };
+
+    // Quick check: is this addressed to us?
+    if msg.dest_hash != identity.pub_key[0] {
+        defmt::debug!(
+            "Path recv: dest_hash={=u8:#04x} not ours ({=u8:#04x}), ignoring",
+            msg.dest_hash, identity.pub_key[0],
+        );
+        return;
+    }
+
+    defmt::info!(
+        "Path recv: dest={=u8:#04x} src={=u8:#04x} [{=i16}dBm]",
+        msg.dest_hash, msg.src_hash, rssi,
+    );
+
+    // Scan contacts for a matching src_hash and try to decrypt.
+    let store = contacts::ContactStore::new();
+    let count = store.count().await;
+    let mut found_count = 0u16;
+
+    for idx in 0..contacts::MAX_CONTACTS {
+        if found_count >= count { break; }
+        let Some(c) = store.read_slot(idx).await else { continue; };
+        found_count += 1;
+
+        if c.pub_key[0] != msg.src_hash { continue; }
+
+        let dec = match path_msg::verify_and_decrypt(&identity.sec_key, &c.pub_key, &msg) {
+            Ok(d) => d,
+            Err(meshcore::Error::MacMismatch) => continue, // wrong contact
+            Err(e) => {
+                defmt::warn!(
+                    "Path recv: decrypt failed for {=[u8]:02x}: {:?}",
+                    &c.pub_key[..6],
+                    defmt::Debug2Format(&e),
+                );
+                continue;
+            }
+        };
+
+        defmt::info!(
+            "Path recv: decrypted from {=[u8]:02x} path_len={=u8} extra_type={=u8} extra_len={=usize}",
+            &c.pub_key[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
+        );
+
+        // Update the stored routing path for this contact.
+        if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN && !dec.path.is_empty() {
+            let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
+            let copy = dec.path.len().min(contacts::MAX_PATH_SIZE);
+            path_buf[..copy].copy_from_slice(&dec.path[..copy]);
+            if let Err(e) = store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
+                defmt::warn!("Path recv: path update failed: {:?}", e);
+            }
+        }
+
+        // PAYLOAD_TYPE_RESPONSE = 1 → login response embedded in the path packet.
+        if dec.extra_type == 1 {
+            handle_path_login_response(&dec.extra, &c.pub_key);
+        }
+
+        return;
+    }
+
+    defmt::debug!("Path recv: no matching contact for src_hash={=u8:#04x}", msg.src_hash);
+}
+
+/// Extract and push a login result from path-packet extra bytes.
+///
+/// Extra byte layout (same as the plaintext seen by C++ `onContactResponse`):
+///   `[timestamp:4 LE][resp_type:1][keep_alive:1][is_admin:1][acl_perms:1][random:4][fw_ver_level:1]`
+fn handle_path_login_response(extra: &[u8], sender_pub_key: &[u8; meshcore::PUB_KEY_SIZE]) {
+    if extra.len() < path_msg::LOGIN_RESPONSE_EXTRA_LEN {
+        defmt::warn!(
+            "Path login response: extra too short ({=usize}B, need {=usize}B)",
+            extra.len(), path_msg::LOGIN_RESPONSE_EXTRA_LEN,
+        );
+        return;
+    }
+
+    use meshcore::payload::path_msg;
+
+    let tag          = u32::from_le_bytes([extra[0], extra[1], extra[2], extra[3]]);
+    let resp_type    = extra[4];
+    // extra[5] = keep_alive / 16
+    let is_admin     = extra[6];
+    let acl_perms    = extra[7];
+    // extra[8..12] = random
+    let fw_ver_level = extra[12];
+
+    // RESP_SERVER_LOGIN_OK = 0 (new format).
+    // Legacy: resp_type == b'O' and extra[5] == b'K'.
+    let success = resp_type == 0
+        || (resp_type == b'O' && extra.get(5) == Some(&b'K'));
+
+    defmt::info!(
+        "Path login response: {} from {=[u8]:02x} resp_type={=u8} tag={=u32:#010x}",
+        if success { "OK" } else { "FAIL" },
+        &sender_pub_key[..6],
+        resp_type,
+        tag,
+    );
+
+    let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+    pub_key.copy_from_slice(sender_pub_key);
+
+    let _ = crate::LOGIN_RESULT_CHANNEL.try_send(crate::LoginResult {
+        success,
+        is_admin:      if success { is_admin     } else { 0 },
+        pub_key,
+        tag,
+        acl_perms:     if success { acl_perms    } else { 0 },
+        fw_ver_level:  if success { fw_ver_level } else { 0 },
+    });
 }

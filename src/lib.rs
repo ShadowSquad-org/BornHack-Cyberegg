@@ -359,6 +359,48 @@ pub static TX_TRACE_CHANNEL: embassy_sync::channel::Channel<
     2,
 > = embassy_sync::channel::Channel::new();
 
+/// An outgoing status request queued by the BLE task for the meshcore task.
+#[cfg(feature = "embassy")]
+pub struct TxStatusReq {
+    /// Full 32-byte Ed25519 public key of the target node.
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+}
+
+/// Queue from the BLE companion task to the meshcore task for outgoing status requests.
+#[cfg(feature = "embassy")]
+pub static TX_STATUS_REQ_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxStatusReq, 2> =
+    embassy_sync::channel::Channel::new();
+
+/// Tracks the pub_key of the currently pending status request (if any).
+///
+/// Set by `send_status_request` before the AnonReq is transmitted;
+/// cleared by `handle_response_recv` when a matching response is decoded.
+/// Using a blocking mutex so it can be accessed from non-async context.
+#[cfg(feature = "embassy")]
+pub static PENDING_STATUS_PUBKEY: embassy_sync::blocking_mutex::Mutex<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    core::cell::Cell<Option<[u8; meshcore::PUB_KEY_SIZE]>>,
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::Cell::new(None));
+
+/// Status result pushed from the meshcore task to the BLE task (0x87).
+#[cfg(feature = "embassy")]
+pub struct StatusResult {
+    /// Full 32-byte public key of the responding node (first 6 bytes used in push).
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    /// Node uptime in seconds.
+    pub uptime_secs: u32,
+    /// Battery voltage in millivolts.
+    pub battery_mv: u16,
+}
+
+/// Passes status results from the meshcore task to the BLE task for 0x87 push.
+#[cfg(feature = "embassy")]
+pub static STATUS_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    StatusResult,
+    2,
+> = embassy_sync::channel::Channel::new();
+
 /// An outgoing login request queued by the BLE task for the meshcore task.
 #[cfg(feature = "embassy")]
 pub struct TxLogin {

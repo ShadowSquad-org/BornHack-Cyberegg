@@ -516,7 +516,10 @@ async fn nus_peripheral_loop<C>(
                         crate::RAW_PKT_CHANNEL.receive(),
                         crate::ADVERT_BLE_CHANNEL.receive(),
                         crate::TRACE_RESULT_CHANNEL.receive(),
-                        crate::LOGIN_RESULT_CHANNEL.receive(),
+                        select(
+                            crate::LOGIN_RESULT_CHANNEL.receive(),
+                            crate::STATUS_RESULT_CHANNEL.receive(),
+                        ),
                     ),
                 ).await {
                     Either::First(r) => {
@@ -535,7 +538,10 @@ async fn nus_peripheral_loop<C>(
                     crate::RAW_PKT_CHANNEL.receive(),
                     crate::ADVERT_BLE_CHANNEL.receive(),
                     crate::TRACE_RESULT_CHANNEL.receive(),
-                    crate::LOGIN_RESULT_CHANNEL.receive(),
+                    select(
+                        crate::LOGIN_RESULT_CHANNEL.receive(),
+                        crate::STATUS_RESULT_CHANNEL.receive(),
+                    ),
                 ).await
             };
 
@@ -1014,6 +1020,17 @@ async fn nus_peripheral_loop<C>(
                                     sent_resp
                                 }
 
+                                Ok(companion::cmd::Command::SendStatusRequest { pub_key }) => {
+                                    defmt::info!(
+                                        "companion: SEND_STATUS_REQUEST key={=[u8]:02x}",
+                                        &pub_key[..6],
+                                    );
+                                    let _ = crate::TX_STATUS_REQ_CHANNEL.try_send(crate::TxStatusReq {
+                                        pub_key: *pub_key,
+                                    });
+                                    companion::Response::Ok
+                                }
+
                                 Ok(companion::cmd::Command::SendLogin { pub_key, password }) => {
                                     let mut pw_vec: heapless::Vec<u8, 15> = heapless::Vec::new();
                                     let _ = pw_vec.extend_from_slice(
@@ -1208,22 +1225,38 @@ async fn nus_peripheral_loop<C>(
 
                 // -----------------------------------------------------------
                 // Login result — push 0x85 (success) or 0x86 (fail) to app.
+                // Status result — push 0x87 to app.
                 // -----------------------------------------------------------
-                Either6::Sixth(login) => {
-                    let mut prefix = [0u8; 6];
-                    prefix.copy_from_slice(&login.pub_key[..6]);
-                    if login.success {
-                        defmt::info!("BLE: login OK from {:02x}, pushing 0x85", &login.pub_key[..6]);
-                        enqueue_notify(outbox, &companion::Response::LoginSuccess {
-                            is_admin:       login.is_admin,
+                Either6::Sixth(either) => match either {
+                    Either::First(login) => {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&login.pub_key[..6]);
+                        if login.success {
+                            defmt::info!("BLE: login OK from {:02x}, pushing 0x85", &login.pub_key[..6]);
+                            enqueue_notify(outbox, &companion::Response::LoginSuccess {
+                                is_admin:       login.is_admin,
+                                pub_key_prefix: prefix,
+                                tag:            login.tag,
+                                acl_perms:      login.acl_perms,
+                                fw_ver_level:   login.fw_ver_level,
+                            });
+                        } else {
+                            defmt::info!("BLE: login FAIL from {:02x}, pushing 0x86", &login.pub_key[..6]);
+                            enqueue_notify(outbox, &companion::Response::LoginFail { pub_key_prefix: prefix });
+                        }
+                    }
+                    Either::Second(status) => {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&status.pub_key[..6]);
+                        defmt::info!(
+                            "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
+                            &status.pub_key[..6], status.uptime_secs, status.battery_mv,
+                        );
+                        enqueue_notify(outbox, &companion::Response::StatusResponse {
                             pub_key_prefix: prefix,
-                            tag:            login.tag,
-                            acl_perms:      login.acl_perms,
-                            fw_ver_level:   login.fw_ver_level,
+                            uptime_secs:    status.uptime_secs,
+                            battery_mv:     status.battery_mv,
                         });
-                    } else {
-                        defmt::info!("BLE: login FAIL from {:02x}, pushing 0x86", &login.pub_key[..6]);
-                        enqueue_notify(outbox, &companion::Response::LoginFail { pub_key_prefix: prefix });
                     }
                 }
             }
