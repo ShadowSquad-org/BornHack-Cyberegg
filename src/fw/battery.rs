@@ -24,7 +24,7 @@
 //! let mv  = battery::read_mv();
 //! ```
 
-use core::sync::atomic::{AtomicU16, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI16, AtomicU16, AtomicU8, Ordering};
 
 use embassy_nrf::{
     Peri,

@@ -636,8 +636,9 @@ async fn nus_peripheral_loop<C>(
                             let mut pending_other:    Option<settings::OtherParams> = None;
                             let mut pending_reboot:   bool = false;
                             let mut pending_contact:  Option<contacts::Contact> = None;
-                            // Self-telemetry LPP buffer: CayenneLPP [ch=1][0x02][val:2 BE].
-                            let mut self_telem_lpp: [u8; 4] = [0u8; 4];
+                            // Self-telemetry LPP buffer: voltage (4B) + temperature (4B).
+                            let mut self_telem_lpp: [u8; 8] = [0u8; 8];
+                            let mut self_telem_lpp_len: usize = 4;
                             let mut self_telem_prefix: [u8; 6] = [0u8; 6];
                             let response = match companion::cmd::parse(data) {
                                 Err(_) => {
@@ -1162,16 +1163,35 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SendTelemetryRequest { pub_key: None }) => {
-                                    // Self-telemetry: immediately return own battery voltage as CayenneLPP.
-                                    // CayenneLPP voltage: [channel=1][type=0x02][value:2 BE], 0.01V resolution.
+                                    // Self-telemetry: CayenneLPP battery voltage + die temperature.
+                                    // LPP_VOLTAGE (0x74): [ch=1][0x74][val:2 BE unsigned], 0.01V resolution.
                                     let mv = crate::fw::battery::read_mv() as u32;
-                                    let val = ((mv + 5) / 10) as u16;
-                                    self_telem_lpp = [1, 0x02, (val >> 8) as u8, val as u8];
+                                    let v_val = ((mv + 5) / 10) as u16; // mV → cV
+                                    self_telem_lpp[0] = 1;
+                                    self_telem_lpp[1] = 0x74;
+                                    self_telem_lpp[2] = (v_val >> 8) as u8;
+                                    self_telem_lpp[3] = v_val as u8;
+                                    self_telem_lpp_len = 4;
+
+                                    // CayenneLPP temperature: [ch=1][0x67][val:2 BE signed], 0.1°C resolution.
+                                    let t_c10 = crate::fw::epd::last_temp_c10();
+                                    if t_c10 != i16::MIN {
+                                        let t_bytes = t_c10.to_be_bytes();
+                                        self_telem_lpp[4] = 1;
+                                        self_telem_lpp[5] = 0x67;
+                                        self_telem_lpp[6] = t_bytes[0];
+                                        self_telem_lpp[7] = t_bytes[1];
+                                        self_telem_lpp_len = 8;
+                                    }
+
                                     self_telem_prefix.copy_from_slice(&ctx.pub_key[..6]);
-                                    defmt::info!("companion: SEND_TELEMETRY_REQ (self) batt={=u16} centivolt", val);
+                                    defmt::info!(
+                                        "companion: SEND_TELEMETRY_REQ (self) batt={=u16}cV temp={=i16}×0.1°C lpp={=usize}B",
+                                        v_val, t_c10, self_telem_lpp_len,
+                                    );
                                     companion::Response::TelemetryResponse {
                                         pub_key_prefix: self_telem_prefix,
-                                        lpp_data: &self_telem_lpp,
+                                        lpp_data: &self_telem_lpp[..self_telem_lpp_len],
                                     }
                                 }
 
