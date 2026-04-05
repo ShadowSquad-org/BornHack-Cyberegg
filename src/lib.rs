@@ -575,6 +575,23 @@ pub static TX_CONTROL_DATA_CHANNEL: embassy_sync::channel::Channel<
     2,
 > = embassy_sync::channel::Channel::new();
 
+/// A received `PAYLOAD_TYPE_CONTROL (0x0B)` packet to forward to the companion app
+/// as `PUSH_CODE_CONTROL_DATA (0x8E)`.
+#[cfg(feature = "embassy")]
+pub struct ControlDataPkt {
+    pub snr_x4:   i8,
+    pub rssi:     i8,
+    pub path_len: u8,
+    pub payload:  heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }>,
+}
+
+#[cfg(feature = "embassy")]
+pub static CONTROL_DATA_PKT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    ControlDataPkt,
+    4,
+> = embassy_sync::channel::Channel::new();
+
 /// Tag stored while waiting for a telemetry response; cleared when received.
 #[cfg(feature = "embassy")]
 pub static PENDING_TELEM_TAG: Mutex<

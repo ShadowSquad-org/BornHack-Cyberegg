@@ -253,6 +253,24 @@ pub async fn run_meshcore_listener<'a>(
                             PayloadType::Trace => handle_trace_recv(&msg.payload, &msg.path, snr_x4).await,
                             PayloadType::Response => handle_response_recv(&msg.payload, identity).await,
                             PayloadType::Path => handle_path_recv(&msg.payload, rssi, identity).await,
+                            PayloadType::Unknown(0x0B) => {
+                                // PAYLOAD_TYPE_CONTROL — forward to BLE as PUSH_CODE_CONTROL_DATA (0x8E).
+                                defmt::info!(
+                                    "MeshCore control [{=usize}B {=i16}dBm ctl={=u8:#04x}]: {=[u8]:x}",
+                                    len,
+                                    rssi,
+                                    msg.payload.first().copied().unwrap_or(0),
+                                    msg.payload.as_slice(),
+                                );
+                                let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+                                let _ = payload_vec.extend_from_slice(&msg.payload);
+                                let _ = crate::CONTROL_DATA_PKT_CHANNEL.try_send(crate::ControlDataPkt {
+                                    snr_x4,
+                                    rssi: rssi.clamp(-128, 0) as i8,
+                                    path_len: msg.path_len_byte,
+                                    payload: payload_vec,
+                                });
+                            }
                             other => {
                                 defmt::info!(
                                     "MeshCore type={=u8} [{=usize}B {=i16}dBm]: {=[u8]:x}",

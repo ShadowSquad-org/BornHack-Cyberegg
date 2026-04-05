@@ -570,7 +570,10 @@ async fn nus_peripheral_loop<C>(
                                     crate::ACK_EVENT_CHANNEL.receive(),
                                     select(
                                         crate::TELEM_RESULT_CHANNEL.receive(),
-                                        crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                                        select(
+                                            crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                                            crate::CONTROL_DATA_PKT_CHANNEL.receive(),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -603,7 +606,10 @@ async fn nus_peripheral_loop<C>(
                                 crate::ACK_EVENT_CHANNEL.receive(),
                                 select(
                                     crate::TELEM_RESULT_CHANNEL.receive(),
-                                    crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                                    select(
+                                        crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                                        crate::CONTROL_DATA_PKT_CHANNEL.receive(),
+                                    ),
                                 ),
                             ),
                         ),
@@ -1793,7 +1799,8 @@ async fn nus_peripheral_loop<C>(
                                         },
                                     );
                                 }
-                                Either::Second(disc) => {
+                                Either::Second(disc_or_ctl) => match disc_or_ctl {
+                                Either::First(disc) => {
                                     let mut prefix = [0u8; 6];
                                     prefix.copy_from_slice(&disc.pub_key[..6]);
                                     defmt::info!(
@@ -1812,6 +1819,23 @@ async fn nus_peripheral_loop<C>(
                                         },
                                     );
                                 }
+                                Either::Second(ctl) => {
+                                    defmt::info!(
+                                        "BLE: control pkt ctl={=u8:#04x} {=usize}B, pushing 0x8E",
+                                        ctl.payload.first().copied().unwrap_or(0),
+                                        ctl.payload.len(),
+                                    );
+                                    enqueue_notify(
+                                        outbox,
+                                        &companion::Response::PushControlData {
+                                            snr_x4:   ctl.snr_x4,
+                                            rssi:     ctl.rssi,
+                                            path_len: ctl.path_len,
+                                            payload:  &ctl.payload,
+                                        },
+                                    );
+                                }
+                                }, // end disc_or_ctl
                             },
                         },
                     },
