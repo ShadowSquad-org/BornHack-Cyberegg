@@ -28,7 +28,6 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 #[cfg(feature = "embassy")]
-use fw::device_id::get_bytes as get_device_id;
 #[cfg(feature = "simulator")]
 fn get_device_id() -> [u8; 4] {
     *b"A3F7"
@@ -85,7 +84,7 @@ pub use tricolor::{BLACK, RED, TriColor, WHITE};
 #[cfg(feature = "embassy")]
 use embassy_sync::blocking_mutex::{
     Mutex,
-    raw::{CriticalSectionRawMutex, ThreadModeRawMutex},
+    raw::CriticalSectionRawMutex,
 };
 #[cfg(feature = "embassy")]
 use embassy_sync::signal::Signal;
@@ -285,6 +284,34 @@ pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 /// Signals the meshcore task that tuning params changed; carries the new airtime_factor_x1000.
 #[cfg(feature = "embassy")]
 pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal::new();
+
+/// Tag stored while waiting for a path discovery response; cleared when received.
+#[cfg(feature = "embassy")]
+pub static PENDING_DISCOVERY_TAG: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<u32>>,
+> = Mutex::new(core::cell::Cell::new(None));
+
+/// Path discovery result pushed from the meshcore task to the BLE task.
+#[cfg(feature = "embassy")]
+pub struct DiscoveryResult {
+    pub pub_key: [u8; meshcore::PUB_KEY_SIZE],
+    /// Path-length byte for the outbound (return) path.
+    pub out_path_len_byte: u8,
+    /// Outbound path hash bytes.
+    pub out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+    /// Path-length byte for the inbound (relay) path.
+    pub in_path_len_byte: u8,
+    /// Inbound path hash bytes.
+    pub in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }>,
+}
+
+#[cfg(feature = "embassy")]
+pub static DISCOVERY_RESULT_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    DiscoveryResult,
+    2,
+> = embassy_sync::channel::Channel::new();
 
 /// Signals the meshcore task to transmit a self-advert.
 #[cfg(feature = "embassy")]
@@ -513,6 +540,38 @@ pub struct TxTelemReq {
 pub static TX_TELEM_REQ_CHANNEL: embassy_sync::channel::Channel<
     CriticalSectionRawMutex,
     TxTelemReq,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Request to send a path-discovery REQ packet over LoRa to a remote node.
+#[cfg(feature = "embassy")]
+pub struct TxDiscoveryReq {
+    pub pub_key: [u8; 32],
+    /// Tag used for correlating the discovery response.
+    pub tag: u32,
+}
+
+#[cfg(feature = "embassy")]
+pub static TX_DISCOVERY_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TxDiscoveryReq,
+    2,
+> = embassy_sync::channel::Channel::new();
+
+/// Raw control/discovery payload for `CMD_SEND_CONTROL_DATA` (0x37).
+///
+/// Carries the bytes starting from the `ctl_type` byte (i.e. everything after
+/// the command byte).  The meshcore task wraps these in a `PAYLOAD_TYPE_CONTROL`
+/// zero-hop direct packet and transmits it.
+#[cfg(feature = "embassy")]
+pub struct TxControlData {
+    pub payload: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }>,
+}
+
+#[cfg(feature = "embassy")]
+pub static TX_CONTROL_DATA_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    TxControlData,
     2,
 > = embassy_sync::channel::Channel::new();
 

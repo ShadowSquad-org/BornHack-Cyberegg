@@ -174,6 +174,12 @@ pub async fn run_meshcore_listener<'a>(
         while let Ok(req) = crate::TX_TELEM_REQ_CHANNEL.try_receive() {
             send_telem_request(&mut lora, req, identity).await;
         }
+        while let Ok(req) = crate::TX_DISCOVERY_CHANNEL.try_receive() {
+            send_discovery_request(&mut lora, req, identity).await;
+        }
+        while let Ok(req) = crate::TX_CONTROL_DATA_CHANNEL.try_receive() {
+            send_control_data(&mut lora, req).await;
+        }
         if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
             let mut name_buf = [0u8; settings::MAX_NODE_NAME];
             let name_len = settings::get_node_name(&mut name_buf).await;
@@ -961,7 +967,6 @@ async fn send_ack(
 ) {
     use meshcore::packet::{Message, PayloadType, RouteType};
     use meshcore::MAX_TRANS_UNIT;
-    use meshcore::payload::txt_msg;
 
     let ack_bytes = ack_hash.to_le_bytes();
 
@@ -1319,6 +1324,92 @@ async fn send_telem_request(
 }
 
 // ---------------------------------------------------------------------------
+// Path-discovery request transmission
+// ---------------------------------------------------------------------------
+
+/// Build and transmit a `PAYLOAD_TYPE_REQ` path-discovery request.
+///
+/// This forces a flood regardless of any stored path so the mesh network can
+/// discover repeaters between us and the target.  The C++ equivalent is
+/// `BaseChatMesh::sendRequest` called with `REQ_TYPE_GET_TELEMETRY_DATA` (0x03)
+/// and permission `~TELEM_PERM_BASE` (0xFE) to signal a path-discovery instead
+/// of a telemetry pull.
+///
+/// Plaintext layout (same as `sendRequest` multi-byte form):
+/// ```text
+/// [tag:4 LE][req_type:1 = 0x03][~perm:1 = 0xFE][0:3 reserved][random:4 zeros]
+/// ```
+async fn send_discovery_request(
+    lora: &mut SimpleLoRa<'_>,
+    req: crate::TxDiscoveryReq,
+    identity: &DeviceIdentity,
+) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+
+    // Discovery uses flags = 0x03 (REQ_TYPE_GET_TELEMETRY_DATA), same as telemetry,
+    // but the text body starts with 0xFE (~TELEM_PERM_BASE) to signal discovery intent.
+    // txt_msg::encrypt: flags = (attempt & 3) | (txt_type << 2) → attempt=3, txt_type=0.
+    // text = [0xFE, 0, 0, 0, 0, 0, 0, 0] (perm byte + 7 padding/random zeros).
+    const REQ_TYPE_DISCOVERY: u8 = 0x03;
+    let text: [u8; 8] = [0xFE, 0, 0, 0, 0, 0, 0, 0];
+
+    let (encrypted, _ack_hash) = match meshcore::payload::txt_msg::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &req.pub_key,
+        req.tag,
+        0,                    // txt_type = 0
+        REQ_TYPE_DISCOVERY,   // attempt → flags & 3 = 0x03
+        &text,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            defmt::warn!("send_discovery_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; meshcore::MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if let Err(e) = meshcore::payload::txt_msg::serialize(&encrypted, &mut payload_buf, &mut payload_len) {
+        defmt::warn!("send_discovery_req: serialize failed: {:?}", defmt::Debug2Format(&e));
+        return;
+    }
+
+    let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
+    let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
+
+    // Always flood for discovery — the whole point is to find new paths.
+    let msg = Message {
+        payload_type:   PayloadType::Req,
+        route:          RouteType::Flood,
+        version:        0,
+        transport_code: 0,
+        path_len_byte:  0,
+        path:           heapless::Vec::new(),
+        payload:        payload_vec,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(Some(req.tag)));
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_discovery_req: TX failed: {:?}", e);
+                crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
+            } else {
+                defmt::info!("Discovery req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B) [flood]",
+                    &req.pub_key[..6], req.tag, len);
+            }
+        }
+        Err(e) => {
+            defmt::warn!("send_discovery_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Trace-path receive handler
 // ---------------------------------------------------------------------------
 
@@ -1618,8 +1709,42 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
             }
         }
 
-        // PAYLOAD_TYPE_RESPONSE = 1 → login response embedded in the path packet.
+        // PAYLOAD_TYPE_RESPONSE = 1 → either a discovery response (tag-based) or a login response.
         if dec.extra_type == 1 {
+            // Check for a pending discovery request first (tag = extra[0..4]).
+            let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
+            if let Some(disc_tag) = pending_disc {
+                if dec.extra.len() >= 4 {
+                    let resp_tag = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+                    if resp_tag == disc_tag {
+                        crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
+
+                        let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+                        let _ = out_path.extend_from_slice(&dec.path);
+                        let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+                        // msg.path is not accessible here; we push empty (in_path not available in path_recv)
+                        // The C++ comment says dec.path = out_path (return route).
+                        // We store what we have: out_path from dec.path, in_path empty.
+
+                        let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                        pub_key.copy_from_slice(&c.pub_key);
+
+                        defmt::info!(
+                            "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
+                            &c.pub_key[..6], disc_tag, dec.path_len_byte,
+                        );
+
+                        let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
+                            pub_key,
+                            out_path_len_byte: dec.path_len_byte,
+                            out_path,
+                            in_path_len_byte: 0xFF,
+                            in_path,
+                        });
+                        return;
+                    }
+                }
+            }
             handle_path_login_response(&dec.extra, &c.pub_key);
         }
 
@@ -1676,4 +1801,49 @@ fn handle_path_login_response(extra: &[u8], sender_pub_key: &[u8; meshcore::PUB_
         acl_perms:     if success { acl_perms    } else { 0 },
         fw_ver_level:  if success { fw_ver_level } else { 0 },
     });
+}
+
+// ---------------------------------------------------------------------------
+// Control data transmission (CMD_SEND_CONTROL_DATA, 0x37)
+// ---------------------------------------------------------------------------
+
+/// Transmit a raw PAYLOAD_TYPE_CONTROL (0x0B) packet zero-hop (direct, path_len=0).
+///
+/// The `req.payload` slice starts with the `ctl_type` byte (e.g. 0x80 =
+/// CTL_TYPE_NODE_DISCOVER_REQ) and may carry additional bytes.  This mirrors
+/// `Mesh::createControlData` + `sendZeroHop` from the reference C firmware.
+async fn send_control_data(lora: &mut SimpleLoRa<'_>, req: crate::TxControlData) {
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::MAX_TRANS_UNIT;
+
+    let msg = Message {
+        payload_type:   PayloadType::Unknown(0x0B), // PAYLOAD_TYPE_CONTROL
+        route:          RouteType::Direct,           // zero-hop (path_len_byte = 0)
+        version:        0,
+        transport_code: 0,
+        path_len_byte:  0,
+        path:           heapless::Vec::new(),
+        payload:        req.payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("send_control_data: TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "send_control_data: sent {=usize}B ctl_type={=u8:#04x}",
+                    len,
+                    msg.payload[0],
+                );
+            }
+        }
+        Err(e) => {
+            defmt::warn!(
+                "send_control_data: serialize failed: {:?}",
+                defmt::Debug2Format(&e)
+            );
+        }
+    }
 }
