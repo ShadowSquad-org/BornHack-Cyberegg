@@ -27,7 +27,7 @@ use hello_graphics::{
 use hello_graphics::{
     board, draw_graphics,
     fw::button::run_buttons,
-    fw::buzzer::{Buzzer, buzzer_task, play as play_melody},
+    fw::buzzer::{Buzzer, buzzer_task},
     fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd},
     fw::nfct::run_nfct,
 };

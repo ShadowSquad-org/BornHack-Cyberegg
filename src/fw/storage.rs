@@ -1,23 +1,29 @@
-//! Generic QSPI flash layer backed by TicKV.
+//! QSPI flash layer: init, JEDEC verification, and ekv Flash trait implementation.
 //!
-//! Provides the low-level `QspiFlashController` that implements TicKV's
-//! `FlashController` trait, an `init_qspi()` helper that verifies the chip
-//! via JEDEC ID, and the `fnv1a` hash used to derive TicKV keys.
-//!
-//! All higher-level storage concerns (bonds, settings, …) live in their own
-//! modules and build on top of these primitives.
+//! Provides the `QspiFlash` type that implements `ekv::flash::Flash`, the
+//! `init_qspi()` helper that verifies the chip via JEDEC ID, and the interrupt
+//! binding used by both this module and callers.
 
 use core::cell::UnsafeCell;
 
 use embassy_nrf::{Peri, bind_interrupts, peripherals, qspi};
-use tickv::{ErrorCode, FlashController};
+use ekv::flash::PageID;
 
 // ---------------------------------------------------------------------------
 // Flash geometry
 // ---------------------------------------------------------------------------
 
-/// One erase sector on the ZD25WQ16 (4 KiB).  Also the TicKV region size.
-pub const REGION_SIZE: usize = 4096;
+/// One erase sector on the ZD25WQ16 (4 KiB). Also ekv's PAGE_SIZE.
+pub const PAGE_SIZE: usize = 4096;
+
+/// Flash chip capacity in bytes (ZD25WQ16CTIGT: 16 Mbit = 2 MiB).
+pub const FLASH_TOTAL_BYTES: usize = 2 * 1024 * 1024;
+
+/// Fraction of flash dedicated to the KV store (1/2 = 1 MiB).
+pub const KV_FLASH_BYTES: usize = FLASH_TOTAL_BYTES / 2;
+
+/// Number of 4 KiB pages in the KV store (256 pages = 1 MiB).
+pub const KV_PAGE_COUNT: usize = KV_FLASH_BYTES / PAGE_SIZE;
 
 // ---------------------------------------------------------------------------
 // Interrupt binding
@@ -28,129 +34,59 @@ bind_interrupts!(pub struct QspiIrqs {
 });
 
 // ---------------------------------------------------------------------------
-// Deterministic FNV-1a 64-bit hash (const-capable, no external dep)
+// Aligned staging buffer for QSPI DMA
 // ---------------------------------------------------------------------------
 
-pub const fn fnv1a(data: &[u8]) -> u64 {
-    const OFFSET: u64 = 14_695_981_039_346_656_037;
-    const PRIME: u64 = 1_099_511_628_211;
-    let mut h = OFFSET;
-    let mut i = 0;
-    while i < data.len() {
-        h ^= data[i] as u64;
-        h = h.wrapping_mul(PRIME);
-        i += 1;
-    }
-    h
-}
-
-// ---------------------------------------------------------------------------
-// Buffers
-// ---------------------------------------------------------------------------
-
-/// 4-byte-aligned buffer large enough for one flash region.
-/// Pass a `StaticCell<AlignedBuf>` to `TicKV::new()`.
+/// `Qspi::read` and `Qspi::write` require the data buffer pointer to be
+/// 4-byte aligned.  Slices coming from ekv may not satisfy this, so we
+/// always bounce through this staging area.
+///
+/// Safety: ekv's `Database` serialises all flash ops through its internal
+/// mutex, so only one flash operation runs at a time and this buffer is
+/// never accessed concurrently.
 #[repr(C, align(4))]
-pub struct AlignedBuf(pub [u8; REGION_SIZE]);
+struct AlignedBuf([u8; PAGE_SIZE]);
 
-/// 256-byte staging area for the write alignment fix (see `write()`).
-///
-/// Must hold the largest single TicKV object we ever write:
-///   TicKV overhead (11 header + 4 CRC = 15 B) + value + 3 B alignment prefix.
-///
-/// Largest current value: 148 B contact → 163 B TicKV object → 168 B padded.
-const WRITE_STAGING_BYTES: usize = 256;
-struct WriteStagingBuf(UnsafeCell<[u32; WRITE_STAGING_BYTES / 4]>);
-unsafe impl Sync for WriteStagingBuf {}
+struct StagingCell(UnsafeCell<AlignedBuf>);
+unsafe impl Sync for StagingCell {}
 
-static WRITE_STAGING: WriteStagingBuf =
-    WriteStagingBuf(UnsafeCell::new([0u32; WRITE_STAGING_BYTES / 4]));
+static STAGING: StagingCell = StagingCell(UnsafeCell::new(AlignedBuf([0u8; PAGE_SIZE])));
 
 // ---------------------------------------------------------------------------
-// QspiFlashController
+// QspiFlash — ekv Flash implementation
 // ---------------------------------------------------------------------------
 
-pub struct QspiFlashController {
-    /// Wrapped in UnsafeCell because `FlashController` takes `&self`.
-    /// Safety: only ever accessed from the single task that owns this struct.
-    pub qspi: UnsafeCell<qspi::Qspi<'static>>,
+pub struct QspiFlash {
+    pub qspi: qspi::Qspi<'static>,
 }
 
-// Safety: single-task access guaranteed by ownership.
-unsafe impl Send for QspiFlashController {}
-unsafe impl Sync for QspiFlashController {}
+impl ekv::flash::Flash for QspiFlash {
+    type Error = qspi::Error;
 
-impl QspiFlashController {
-    pub fn new(qspi: qspi::Qspi<'static>) -> Self {
-        Self { qspi: UnsafeCell::new(qspi) }
+    fn page_count(&self) -> usize {
+        KV_PAGE_COUNT
     }
 
-    fn qspi_mut(&self) -> &mut qspi::Qspi<'static> {
-        unsafe { &mut *self.qspi.get() }
-    }
-}
-
-impl<const R: usize> FlashController<R> for QspiFlashController {
-    fn read_region(
-        &self,
-        region_number: usize,
-        buf: &mut [u8; R],
-    ) -> Result<(), ErrorCode> {
-        let addr = (region_number * R) as u32;
-        self.qspi_mut()
-            .blocking_read(addr, buf)
-            .map_err(|_| ErrorCode::ReadFail)
+    async fn erase(&mut self, page_id: PageID) -> Result<(), Self::Error> {
+        let addr = (page_id.index() * PAGE_SIZE) as u32;
+        self.qspi.erase(addr).await
     }
 
-    fn write(&self, address: usize, buf: &[u8]) -> Result<(), ErrorCode> {
-        // nRF52840 QSPI DMA requires write address, pointer, and length to be
-        // 4-byte aligned. TicKV objects are 11 + value + 4 bytes and are not
-        // guaranteed to satisfy this, so we always go through a staging buffer.
-        //
-        // 1. Round address DOWN to 4-byte boundary; compute prefix length (0–3 B).
-        // 2. If prefix > 0, read those bytes from flash (must not alter them —
-        //    NOR flash can't flip 0 → 1 without an erase).
-        // 3. Copy `buf` after the prefix; pad trailer to next 4-byte boundary
-        //    with 0xFF (erased-flash value — TicKV reads padding as "empty").
-        // 4. Issue one aligned write of the padded staging slice.
-        let addr = address as u32;
-        let aligned_addr = addr & !3;
-        let prefix_len = (addr - aligned_addr) as usize;
-        let total = prefix_len + buf.len();
-        let padded_len = (total + 3) & !3;
-
-        // Safety: WRITE_STAGING accessed only from the owning task.
-        let staging_u32 = unsafe { &mut *WRITE_STAGING.0.get() };
-        let staging = unsafe {
-            core::slice::from_raw_parts_mut(
-                staging_u32.as_mut_ptr() as *mut u8,
-                WRITE_STAGING_BYTES,
-            )
-        };
-        assert!(
-            padded_len <= WRITE_STAGING_BYTES,
-            "TicKV write exceeds staging buffer"
-        );
-
-        if prefix_len > 0 {
-            self.qspi_mut()
-                .blocking_read(aligned_addr, &mut staging[..4])
-                .map_err(|_| ErrorCode::WriteFail)?;
-        }
-
-        staging[prefix_len..total].copy_from_slice(buf);
-        staging[total..padded_len].fill(0xFF);
-
-        self.qspi_mut()
-            .blocking_write(aligned_addr, &staging[..padded_len])
-            .map_err(|_| ErrorCode::WriteFail)
+    async fn read(&mut self, page_id: PageID, offset: usize, data: &mut [u8]) -> Result<(), Self::Error> {
+        let addr = (page_id.index() * PAGE_SIZE + offset) as u32;
+        // Safety: single-task access guaranteed by ekv's internal mutex.
+        let buf = unsafe { &mut (*STAGING.0.get()).0 };
+        self.qspi.read(addr, &mut buf[..data.len()]).await?;
+        data.copy_from_slice(&buf[..data.len()]);
+        Ok(())
     }
 
-    fn erase_region(&self, region_number: usize) -> Result<(), ErrorCode> {
-        let addr = (region_number * R) as u32;
-        self.qspi_mut()
-            .blocking_erase(addr)
-            .map_err(|_| ErrorCode::EraseFail)
+    async fn write(&mut self, page_id: PageID, offset: usize, data: &[u8]) -> Result<(), Self::Error> {
+        let addr = (page_id.index() * PAGE_SIZE + offset) as u32;
+        // Safety: single-task access guaranteed by ekv's internal mutex.
+        let buf = unsafe { &mut (*STAGING.0.get()).0 };
+        buf[..data.len()].copy_from_slice(data);
+        self.qspi.write(addr, &buf[..data.len()]).await
     }
 }
 
@@ -176,7 +112,7 @@ pub fn init_qspi<'d>(
     // rather than quad I/O — quad requires the QE status-register bit which we
     // do not configure.  Single-SPI is adequate for infrequent KV store access.
     let mut cfg = qspi::Config::default();
-    cfg.capacity = 2 * 1024 * 1024;
+    cfg.capacity = FLASH_TOTAL_BYTES as u32;
     cfg.read_opcode = qspi::ReadOpcode::FASTREAD;
     cfg.write_opcode = qspi::WriteOpcode::PP;
 

@@ -9,6 +9,9 @@ runner = "probe-rs run --chip nRF52840_xxAA"
 
 [env]
 DEFMT_LOG = "info,hello_graphics::fw::kv=warn,hello_graphics::fw::bonds=warn,hello_graphics::fw::ble=warn,hello_graphics::fw::battery=off,trouble_host=warn,nrf_mpsl=warn,nrf_sdc=warn"
+# Diagnostic: 64 buffers (× 251 B ≈ 15.7 KiB) to determine if the
+# OutOfMemory is pool exhaustion (fixes it) or a leak (still fails).
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "64"
 
 [alias]
 sim = "run --bin simulator --features simulator"

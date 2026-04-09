@@ -32,7 +32,7 @@ async fn load_channels() -> heapless::Vec<LoadedChannel, { channels::NUM_CHANNEL
         if let Some((name, key)) = channels::get(i).await {
             let hash = hash_from_key(&key);
             let name_str = core::str::from_utf8(&name).unwrap_or("?").trim_end_matches('\0');
-            defmt::info!("  channel slot {=u8}: hash={=u8} name={=str}", i, hash, name_str);
+            defmt::debug!("  channel slot {=u8}: hash={=u8} name={=str}", i, hash, name_str);
             let _ = v.push(LoadedChannel { slot_idx: i, name, key, hash });
         }
     }
@@ -146,13 +146,13 @@ pub async fn run_meshcore_listener<'a>(
         if crate::CHANNELS_CHANGED_SIGNAL.signaled() {
             crate::CHANNELS_CHANGED_SIGNAL.reset();
             loaded_channels = load_channels().await;
-            defmt::info!("MeshCore: reloaded {} channel(s) from KV", loaded_channels.len());
+            defmt::debug!("MeshCore: reloaded {} channel(s) from KV", loaded_channels.len());
         }
 
         // Update TX duty-cycle budget if tuning params changed.
         if let Some(af_x1000) = crate::TUNING_CHANGED_SIGNAL.try_take() {
             lora.init_budget(af_x1000);
-            defmt::info!("TX budget updated: af={=u32}.{=u32:03}", af_x1000 / 1000, af_x1000 % 1000);
+            defmt::debug!("TX budget updated: af={=u32}.{=u32:03}", af_x1000 / 1000, af_x1000 % 1000);
         }
 
         // Drain any already-queued outgoing messages before entering RX.
@@ -189,25 +189,35 @@ pub async fn run_meshcore_listener<'a>(
         // Race: receive the next LoRa packet OR a new TX request arrives.
         // This keeps TX latency to the radio air-time only, instead of up to
         // the full 15-second receive_packet timeout.
-        use embassy_futures::select::{Either3, select3};
-        let rx_result = match select3(
-            lora.receive_packet(&mut raw),
-            crate::TX_MSG_CHANNEL.receive(),
-            crate::TX_PM_CHANNEL.receive(),
+        use embassy_futures::select::{Either, Either3, select, select3};
+        let rx_result = match select(
+            select3(
+                lora.receive_packet(&mut raw),
+                crate::TX_MSG_CHANNEL.receive(),
+                crate::TX_PM_CHANNEL.receive(),
+            ),
+            crate::TX_CONTROL_DATA_CHANNEL.receive(),
         ).await {
-            Either3::Second(tx_req) => {
+            Either::Second(ctl_req) => {
+                send_control_data(&mut lora, ctl_req).await;
+                continue;
+            }
+            Either::First(Either3::Second(tx_req)) => {
                 send_grp_txt(&mut lora, &loaded_channels, tx_req).await;
                 continue;
             }
-            Either3::Third(pm_req) => {
+            Either::First(Either3::Third(pm_req)) => {
                 send_txt_msg(&mut lora, pm_req, identity).await;
                 continue;
             }
-            Either3::First(result) => result,
+            Either::First(Either3::First(result)) => result,
         };
 
         match rx_result {
-            Ok(None) => { /* CRC error or non-data IRQ — already re-armed */ }
+            Ok(None) => { /* channel idle or CRC error — next CAD cycle on next loop */ }
+            Err(e) => {
+                defmt::warn!("receive_packet error: {:?}", e);
+            }
 
             Ok(Some((len, rssi, snr_x4))) => {
                 // Update radio stats snapshot for CMD_GET_STATS / STATS_TYPE_RADIO.
@@ -241,7 +251,7 @@ pub async fn run_meshcore_listener<'a>(
 
                 match meshcore::packet::deserialize(frame) {
                     Err(_) => {
-                        defmt::info!(
+                        defmt::debug!(
                             "MeshCore [raw {=usize}B {=i16}dBm]: {=[u8]}",
                             len,
                             rssi,
@@ -252,6 +262,47 @@ pub async fn run_meshcore_listener<'a>(
                     Ok(msg) => {
                         update_health!(|h| h.lora.set_ok("Packet received."));
                         use meshcore::packet::{PayloadType, RouteType};
+
+                        defmt::debug!(
+                            "RX: route={=u8} type={=u8} tc={=u16:#06x} payload={=usize}B",
+                            msg.route.to_u8(),
+                            msg.payload_type.to_u8(),
+                            msg.transport_code,
+                            msg.payload.len(),
+                        );
+
+                        // Region filter: if we have a flood-scope key and this is a
+                        // TransportFlood packet, verify the transport code.  A mismatch
+                        // means the packet belongs to a different region — drop it silently.
+                        if matches!(msg.route, RouteType::TransportFlood) {
+                            let key = crate::FLOOD_SCOPE_KEY.lock(|c| c.get());
+                            defmt::debug!(
+                                "TransportFlood pkt: type={=u8} tc={=u16:#06x} key_set={=bool}",
+                                msg.payload_type.to_u8(),
+                                msg.transport_code,
+                                key.is_some(),
+                            );
+                            if let Some(key) = key {
+                                let expected = meshcore::packet::calc_transport_code(
+                                    &key,
+                                    msg.payload_type.to_u8(),
+                                    &msg.payload,
+                                );
+                                defmt::debug!(
+                                    "TransportFlood region check: got={=u16:#06x} expected={=u16:#06x}",
+                                    msg.transport_code, expected,
+                                );
+                                if msg.transport_code != expected {
+                                    defmt::info!(
+                                        "TransportFlood region mismatch (got {=u16:#06x}, expected {=u16:#06x}) — dropped",
+                                        msg.transport_code, expected
+                                    );
+                                    continue;
+                                }
+                            }
+                            // No key set → wildcard: accept all TransportFlood packets.
+                        }
+
                         // Mirror the original firmware: flood routes carry the wire-encoded
                         // path_len_byte (hash_size_code<<6 | hop_count); direct routes
                         // signal 0xFF (no path built up by relays).
@@ -269,7 +320,7 @@ pub async fn run_meshcore_listener<'a>(
                             PayloadType::Path => handle_path_recv(&msg.payload, rssi, identity).await,
                             PayloadType::Unknown(0x0B) => {
                                 // PAYLOAD_TYPE_CONTROL — forward to BLE as PUSH_CODE_CONTROL_DATA (0x8E).
-                                defmt::info!(
+                                defmt::debug!(
                                     "MeshCore control [{=usize}B {=i16}dBm ctl={=u8:#04x}]: {=[u8]:x}",
                                     len,
                                     rssi,
@@ -286,7 +337,7 @@ pub async fn run_meshcore_listener<'a>(
                                 });
                             }
                             other => {
-                                defmt::info!(
+                                defmt::debug!(
                                     "MeshCore type={=u8} [{=usize}B {=i16}dBm]: {=[u8]:x}",
                                     other.to_u8(),
                                     len,
@@ -299,10 +350,6 @@ pub async fn run_meshcore_listener<'a>(
                 }
             }
 
-            Err(e) => {
-                defmt::error!("LoRa RX error: {:?}", e);
-                health_err!(lora, "LoRa RX error");
-            }
         }
     }
 }
@@ -325,7 +372,7 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
     let ch = match channels.iter().find(|c| c.hash == grp.channel_hash) {
         Some(c) => c,
         None => {
-            defmt::info!(
+            defmt::debug!(
                 "MeshCore GrpTxt [hash={=u8} {=i16}dBm] no matching channel (have: {=[u8]})",
                 grp.channel_hash,
                 rssi,
@@ -408,7 +455,7 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
                 rssi,
                 text:          queued_text,
             }).await;
-            defmt::info!("msg_queue: {} message(s) waiting", msg_queue::count());
+            defmt::debug!("msg_queue: {} message(s) waiting", msg_queue::count());
             crate::MESSAGES_WAITING_SIGNAL.signal(());
         }
         Err(_) => {
@@ -497,6 +544,19 @@ async fn log_advert(
 
     let store = contacts::ContactStore::new();
 
+    // Persist contact to flash so GET_CONTACTS sync works.
+    let contact = contacts::Contact::from_advert(
+        a.pub_key,
+        name_str.as_bytes(),
+        a.role.to_u8(),
+        a.timestamp,
+        lat,
+        lon,
+    );
+    if let Err(e) = store.add_or_update(&contact).await {
+        defmt::warn!("contacts: add_or_update failed: {:?}", e);
+    }
+
     // Update routing path for this contact if it arrived via flood.
     if path_len_byte != contacts::OUT_PATH_UNKNOWN && !path.is_empty() {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
@@ -538,7 +598,6 @@ async fn log_txt_msg(
 
     // Only process messages addressed to us (dest_hash = first byte of our pub_key).
     if msg.dest_hash != identity.pub_key[0] {
-        defmt::debug!("TxtMsg: dest_hash={=u8:#04x} not ours, ignoring", msg.dest_hash);
         return;
     }
 
@@ -552,7 +611,6 @@ async fn log_txt_msg(
         if found_count >= count { break; }
         if let Some(c) = store.read_slot(idx).await {
             found_count += 1;
-            // Quick hash pre-filter.
             if c.pub_key[0] != msg.src_hash { continue; }
             if txt_msg::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_ok() {
                 if let Ok((dec, ack_hash)) = txt_msg::decrypt(&identity.sec_key, &c.pub_key, &msg) {
@@ -568,6 +626,18 @@ async fn log_txt_msg(
             defmt::warn!("TxtMsg: received but could not decrypt (sender unknown or MAC fail) [{=i16}dBm]", rssi);
         }
         Some((sender, dec, ack_hash)) => {
+            // Check if this is our own message echoed back by a flood relay.
+            // The shared secret is symmetric, so our own ciphertext decrypts
+            // successfully against the contact we sent it to.  Detect this by
+            // comparing the ack_hash against our pending outgoing ACK.
+            let is_own_echo = crate::PENDING_ACK.lock(|cell| {
+                cell.get().map_or(false, |pending| pending.ack_hash == ack_hash)
+            });
+            if is_own_echo {
+                defmt::debug!("TxtMsg: ack_hash={=u32:#010x} matches PENDING_ACK — ignoring own echo", ack_hash);
+                return;
+            }
+
             let text = core::str::from_utf8(&dec.text).unwrap_or("<invalid utf-8>");
             defmt::info!(
                 "TxtMsg from {=[u8]:02x} [{=i16}dBm ts={=u32} type={=u8}]: {=str}",
@@ -644,6 +714,28 @@ async fn log_txt_msg(
 }
 
 // ---------------------------------------------------------------------------
+// Flood-scope helpers
+// ---------------------------------------------------------------------------
+
+/// Return the route type and transport code to use for an outgoing flood packet.
+///
+/// When a flood-scope key is set (via `SetFloodScope` / 0x36), returns
+/// `(TransportFlood, hmac_code)` so that regional repeaters can verify and
+/// forward only packets belonging to their region.
+///
+/// When no key is set, returns `(Flood, 0)` — unscoped, accepted by all nodes.
+fn flood_route(payload_type_u8: u8, payload: &[u8]) -> (meshcore::packet::RouteType, u16) {
+    use meshcore::packet::RouteType;
+    crate::FLOOD_SCOPE_KEY.lock(|cell| match cell.get() {
+        Some(key) => {
+            let code = meshcore::packet::calc_transport_code(&key, payload_type_u8, payload);
+            (RouteType::TransportFlood, code)
+        }
+        None => (RouteType::Flood, 0),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Channel message transmission
 // ---------------------------------------------------------------------------
 
@@ -657,7 +749,7 @@ async fn send_grp_txt(
     req: crate::TxChannelMsg,
 ) {
     use meshcore::payload::grp_txt;
-    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::packet::{Message, PayloadType};
     use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
 
     // Resolve the channel key from the in-RAM table (kept current via CHANNELS_CHANGED_SIGNAL).
@@ -706,11 +798,12 @@ async fn send_grp_txt(
     let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
     let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
 
+    let (route, transport_code) = flood_route(PayloadType::GrpTxt.to_u8(), &msg_payload);
     let msg = Message {
         payload_type:   PayloadType::GrpTxt,
-        route:          RouteType::Flood,
+        route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
@@ -768,13 +861,13 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
         _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
     };
 
-    let (encrypted, _expected_ack) = match txt_msg::encrypt(
+    let (encrypted, expected_ack) = match txt_msg::encrypt(
         &identity.sec_key,
         &identity.pub_key,
         &req.recipient_pub_key,
         req.timestamp,
-        0, // txt_type = plain
-        0, // attempt
+        req.txt_type,
+        req.attempt,
         &req.text,
     ) {
         Ok(e) => e,
@@ -794,11 +887,15 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
     let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
     let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
 
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::TxtMsg.to_u8(), &msg_payload),
+        r => (r, 0),
+    };
     let msg = Message {
         payload_type:   PayloadType::TxtMsg,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte,
         path:           path_bytes,
         payload:        msg_payload,
@@ -811,15 +908,16 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
                 defmt::warn!("send_txt_msg: TX failed: {:?}", e);
             } else {
                 defmt::info!(
-                    "TxtMsg sent: to={=[u8]:02x} route={=str} len={=usize}B ack={=u32:#010x}",
+                    "TxtMsg sent: to={=[u8]:02x} attempt={=u8} route={=str} len={=usize}B ack={=u32:#010x}",
                     &req.recipient_pub_key[..6],
+                    req.attempt,
                     if route == RouteType::Direct { "direct" } else { "flood" },
-                    len, _expected_ack,
+                    len, expected_ack,
                 );
                 // Record pending ACK so we can compute round-trip time when the mesh ACKs back.
                 crate::PENDING_ACK.lock(|cell| {
                     cell.set(Some(crate::PendingAck {
-                        ack_hash: _expected_ack,
+                        ack_hash: expected_ack,
                         sent_at:  embassy_time::Instant::now(),
                     }));
                 });
@@ -880,16 +978,16 @@ pub async fn send_advert(
     let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
     let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
 
-    let route = match mode {
-        AdvertMode::Flood   => RouteType::Flood,
-        AdvertMode::ZeroHop => RouteType::Direct, // path_len=0 → zero-hop direct
+    let (route, transport_code) = match mode {
+        AdvertMode::Flood   => flood_route(PayloadType::Advert.to_u8(), &msg_payload),
+        AdvertMode::ZeroHop => (RouteType::Direct, 0u16), // path_len=0 → zero-hop direct
     };
 
     let msg = Message {
         payload_type:   PayloadType::Advert,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
@@ -930,7 +1028,7 @@ pub async fn send_pm(
     timestamp: u32,
 ) {
     use meshcore::payload::txt_msg;
-    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::packet::{Message, PayloadType};
     use meshcore::{MAX_PAYLOAD_SIZE, MAX_TRANS_UNIT};
 
     let (msg, expected_ack) = match txt_msg::encrypt(
@@ -958,11 +1056,12 @@ pub async fn send_pm(
 
     // TxtMsg uses Direct route so the full path to the recipient is embedded.
     // For now we send as Flood — the recipient will filter on dest_pub_key.
+    let (route, transport_code) = flood_route(PayloadType::TxtMsg.to_u8(), &msg_payload);
     let packet = Message {
         payload_type:   PayloadType::TxtMsg,
-        route:          RouteType::Flood,
+        route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        msg_payload,
@@ -1016,12 +1115,16 @@ async fn send_ack(
         }
         _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
     };
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::Ack.to_u8(), &payload),
+        r => (r, 0),
+    };
 
     let msg = Message {
         payload_type:   PayloadType::Ack,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte,
         path:           path_bytes,
         payload,
@@ -1167,11 +1270,15 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
         _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
     };
 
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::AnonReq.to_u8(), &payload),
+        r => (r, 0),
+    };
     let msg = Message {
         payload_type:   PayloadType::AnonReq,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte,
         path:           path_bytes,
         payload,
@@ -1233,12 +1340,16 @@ async fn send_status_request(
         }
         _ => (RouteType::Flood, 0u8, heapless::Vec::new()),
     };
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::AnonReq.to_u8(), &payload),
+        r => (r, 0),
+    };
 
     let msg = Message {
         payload_type:   PayloadType::AnonReq,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte,
         path:           path_bytes,
         payload,
@@ -1327,11 +1438,15 @@ async fn send_telem_request(
     let mut payload_vec: heapless::Vec<u8, { meshcore::MAX_PAYLOAD_SIZE }> = heapless::Vec::new();
     let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
 
+    let (route, transport_code) = match route {
+        RouteType::Flood => flood_route(PayloadType::Req.to_u8(), &payload_vec),
+        r => (r, 0),
+    };
     let msg = Message {
         payload_type:   PayloadType::Req,
         route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte,
         path:           path_bytes,
         payload:        payload_vec,
@@ -1376,7 +1491,7 @@ async fn send_discovery_request(
     req: crate::TxDiscoveryReq,
     identity: &DeviceIdentity,
 ) {
-    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::packet::{Message, PayloadType};
     use meshcore::MAX_TRANS_UNIT;
 
     // Discovery uses flags = 0x03 (REQ_TYPE_GET_TELEMETRY_DATA), same as telemetry,
@@ -1413,11 +1528,12 @@ async fn send_discovery_request(
     let _ = payload_vec.extend_from_slice(&payload_buf[..payload_len]);
 
     // Always flood for discovery — the whole point is to find new paths.
+    let (route, transport_code) = flood_route(PayloadType::Req.to_u8(), &payload_vec);
     let msg = Message {
         payload_type:   PayloadType::Req,
-        route:          RouteType::Flood,
+        route,
         version:        0,
-        transport_code: 0,
+        transport_code,
         path_len_byte:  0,
         path:           heapless::Vec::new(),
         payload:        payload_vec,
@@ -1739,6 +1855,17 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
             if let Err(e) = store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
                 defmt::warn!("Path recv: path update failed: {:?}", e);
             }
+        }
+
+        // PAYLOAD_TYPE_ACK = 3 → ACK piggybacked on a Path response.
+        if dec.extra_type == 3 && dec.extra.len() >= 4 {
+            let ack_crc = u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+            defmt::info!(
+                "Path recv: ACK from {=[u8]:02x} ack_crc={=u32:#010x}",
+                &c.pub_key[..6], ack_crc,
+            );
+            handle_ack_recv(&dec.extra[..4], rssi);
+            return;
         }
 
         // PAYLOAD_TYPE_RESPONSE = 1 → either a discovery response (tag-based) or a login response.

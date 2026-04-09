@@ -31,6 +31,7 @@ embassy-nrf = { version = "0.9.0", features = [
     "gpiote",
     "unstable-pac",
     "time",
+    "qspi-multiwrite-flash",
 ], optional = true }
 embassy-executor = { version = "0.9", features = [
     "arch-cortex-m",
@@ -62,11 +63,22 @@ nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f3632
 trouble-host = { version = "0.6", features = [
     "defmt",
     "security",
+    # HCI flow control: the host tells the controller how many RX buffers
+    # it has, preventing the controller from sending more ACL data than
+    # the packet pool can absorb.  Without this the controller fires
+    # packets as fast as it can during TX bursts, starving the shared
+    # pool and causing OutOfMemory on the RX path.
+    "controller-host-flow-control",
+    # trouble-host 0.6.0 has a bug: the controller-host-flow-control
+    # feature configures HostBufferSize but the SetControllerToHostFlowControl
+    # command is commented out, so the controller still sends ACL data
+    # freely.  Larger pool gives the HCI runner more headroom during bursts.
+    "default-packet-pool-size-32",
 ], optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
-tickv = { version = "2.0", optional = true }
 meshcore = { path = "./vendor/meshcore", optional = true }
 meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
+ekv = { git = "https://github.com/embassy-rs/ekv.git", rev = "a7d0ce35", optional = true }
 
 
 [package.metadata.tools]
@@ -117,7 +129,7 @@ embassy = [
     "nrf-sdc",
     "trouble-host",
     "rand_core",
-    "tickv",
+    "ekv",
     "meshcore",
     "meshcore-companion",
 ]

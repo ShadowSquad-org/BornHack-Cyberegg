@@ -193,7 +193,7 @@ pub async fn init(
     CACHED_MV.store(mv, Ordering::Relaxed);
     CACHED_PCT.store(mv_to_pct(mv), Ordering::Relaxed);
 
-    defmt::info!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
+    defmt::debug!("Battery: {} mV ({}%)", mv, mv_to_pct(mv));
 
     if mv < VBAT_MIN_MV {
         defmt::warn!("Battery voltage too low: {} mV", mv);

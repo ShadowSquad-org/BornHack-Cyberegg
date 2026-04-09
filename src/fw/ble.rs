@@ -213,15 +213,14 @@ pub struct CompanionContext {
     pub pub_key: [u8; 32],
 }
 
-/// Send `data` as a single BLE notification.
+/// Outbox capacity for pending BLE notifications.
 ///
-/// With ATT MTU 247 (negotiated after connection) up to 244 bytes fit in one
-/// notification — larger than any response we produce (max 128 B).  Sending
-/// as one frame matches the MeshCore reference firmware which does a single
-/// `bleuart.write(buf, len)` and lets the BLE stack handle fragmentation.
-///
-/// A 2-second timeout prevents a dropped connection from causing a permanent
-/// hang inside the GATT write handler.
+/// Sized so that burst sequences (e.g. ADD_UPDATE_CONTACT → ContactStart +
+/// Contact + ContactEnd = 3 entries) plus a few push events don't overflow.
+/// The select loop drains one entry per connection interval (~7.5–90 ms), so
+/// this rarely fills up in practice.
+const OUTBOX_CAP: usize = 8;
+
 /// A pre-serialised notification payload ready to hand to `tx.notify`.
 type OutboxEntry = ([u8; companion::MAX_RESPONSE_LEN], usize);
 
@@ -229,18 +228,96 @@ type OutboxEntry = ([u8; companion::MAX_RESPONSE_LEN], usize);
 ///
 /// Keeping this in `.bss` rather than on the BLE task stack avoids a ~4 KiB
 /// stack allocation that was overflowing and corrupting embassy-sync internals.
-static OUTBOX_STORAGE: StaticCell<heapless::Deque<OutboxEntry, 4>> = StaticCell::new();
+static OUTBOX_STORAGE: StaticCell<heapless::Deque<OutboxEntry, OUTBOX_CAP>> = StaticCell::new();
 
 /// Encode a [`companion::Response`] and push it onto the outbox.
-/// Drops the entry with a warning if the outbox is full.
-fn enqueue_notify(
-    outbox: &mut heapless::Deque<OutboxEntry, 4>,
-    response: &companion::Response<'_>,
+///
+/// If the outbox is full the oldest (unsent) entry is dropped to make room.
+/// This avoids the previous blocking drain that exhausted the BLE packet pool,
+/// causing `OutOfMemory` errors in the HCI runner.
+fn outbox_push(
+    outbox: &mut heapless::Deque<OutboxEntry, OUTBOX_CAP>,
+    response: &companion::Response,
 ) {
     let mut entry: OutboxEntry = ([0u8; companion::MAX_RESPONSE_LEN], 0);
     entry.1 = companion::encode(response, &mut entry.0);
     if outbox.push_back(entry).is_err() {
-        defmt::warn!("companion: outbox full, dropping notification");
+        defmt::warn!("BLE: outbox full — dropping oldest notification");
+        outbox.pop_front();
+        let _ = outbox.push_back(entry);
+    }
+}
+
+/// Events pushed to the BLE task from the radio and system channels.
+enum PushEvent {
+    MessagesWaiting,
+    RawPacket(crate::RawLoRaPkt),
+    Advert(crate::AdvertBleNotif),
+    TraceResult(crate::TraceResult),
+    LoginResult(crate::LoginResult),
+    StatusResult(crate::StatusResult),
+    AckEvent(crate::AckEvent),
+    TelemResult(crate::TelemResult),
+    DiscoveryResult(crate::DiscoveryResult),
+    ControlData(crate::ControlDataPkt),
+}
+
+/// Wait for any push event from radio/system channels.
+///
+/// Uses a balanced binary tree of [`embassy_futures::select::select`] calls
+/// for fairer polling across all ten sources.  The previous deeply-nested
+/// right-leaning tree starved later channels (telemetry, discovery, control).
+async fn wait_push_event() -> PushEvent {
+    use embassy_futures::select::{Either, select};
+
+    match select(
+        select(
+            select(
+                crate::MESSAGES_WAITING_SIGNAL.wait(),
+                crate::RAW_PKT_CHANNEL.receive(),
+            ),
+            select(
+                crate::ADVERT_BLE_CHANNEL.receive(),
+                crate::TRACE_RESULT_CHANNEL.receive(),
+            ),
+        ),
+        select(
+            select(
+                crate::LOGIN_RESULT_CHANNEL.receive(),
+                crate::STATUS_RESULT_CHANNEL.receive(),
+            ),
+            select(
+                select(
+                    crate::ACK_EVENT_CHANNEL.receive(),
+                    crate::TELEM_RESULT_CHANNEL.receive(),
+                ),
+                select(
+                    crate::DISCOVERY_RESULT_CHANNEL.receive(),
+                    crate::CONTROL_DATA_PKT_CHANNEL.receive(),
+                ),
+            ),
+        ),
+    )
+    .await
+    {
+        Either::First(Either::First(Either::First(()))) => PushEvent::MessagesWaiting,
+        Either::First(Either::First(Either::Second(pkt))) => PushEvent::RawPacket(pkt),
+        Either::First(Either::Second(Either::First(adv))) => PushEvent::Advert(adv),
+        Either::First(Either::Second(Either::Second(tr))) => PushEvent::TraceResult(tr),
+        Either::Second(Either::First(Either::First(lg))) => PushEvent::LoginResult(lg),
+        Either::Second(Either::First(Either::Second(st))) => PushEvent::StatusResult(st),
+        Either::Second(Either::Second(Either::First(Either::First(ak)))) => {
+            PushEvent::AckEvent(ak)
+        }
+        Either::Second(Either::Second(Either::First(Either::Second(tm)))) => {
+            PushEvent::TelemResult(tm)
+        }
+        Either::Second(Either::Second(Either::Second(Either::First(dc)))) => {
+            PushEvent::DiscoveryResult(dc)
+        }
+        Either::Second(Either::Second(Either::Second(Either::Second(ct)))) => {
+            PushEvent::ControlData(ct)
+        }
     }
 }
 
@@ -351,7 +428,8 @@ async fn nus_peripheral_loop<C>(
     let name_str = unsafe { core::str::from_utf8_unchecked(&name) };
 
     // Initialise static outbox storage once — cleared on each new connection.
-    let outbox: &mut heapless::Deque<OutboxEntry, 4> = OUTBOX_STORAGE.init(heapless::Deque::new());
+    let outbox: &mut heapless::Deque<OutboxEntry, OUTBOX_CAP> =
+        OUTBOX_STORAGE.init(heapless::Deque::new());
 
     let mut adv_buf = [0u8; 31];
     let adv_len = AdStructure::encode_slice(
@@ -432,7 +510,7 @@ async fn nus_peripheral_loop<C>(
             crate::BOOST_RX_CHANGED_SIGNAL.reset();
             let enabled = crate::BOOSTED_RX_GAIN.load(core::sync::atomic::Ordering::Relaxed);
             match settings::set_boost_rx(enabled).await {
-                Ok(()) => defmt::info!("settings: boost_rx={} persisted", enabled),
+                Ok(()) => defmt::debug!("settings: boost_rx={} persisted", enabled),
                 Err(e) => defmt::warn!("settings: boost_rx persist failed: {:?}", e),
             }
         }
@@ -441,7 +519,7 @@ async fn nus_peripheral_loop<C>(
             crate::TZ_CHANGED_SIGNAL.reset();
             let offset = crate::TIMEZONE_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
             match settings::set_timezone(offset).await {
-                Ok(()) => defmt::info!("settings: timezone={} persisted", offset),
+                Ok(()) => defmt::debug!("settings: timezone={} persisted", offset),
                 Err(e) => defmt::warn!("settings: timezone persist failed: {:?}", e),
             }
         }
@@ -510,119 +588,113 @@ async fn nus_peripheral_loop<C>(
         // waiting for an L2CAP TX credit.
         outbox.clear();
 
-        // Lazy contact streaming state: (next slot index to probe, contacts
-        // remaining to send).  Populated when GET_CONTACTS is received and
-        // drained one KV read per loop iteration.
-        let mut contacts_stream: Option<(usize, u16)> = None;
+        // Lazy contact streaming state: (next slot index, remaining count,
+        // most recent lastmod seen).  Populated when GET_CONTACTS is received
+        // and drained one KV read per loop iteration.
+        let mut contacts_stream: Option<(usize, u16, u32)> = None;
 
-        loop {
-            use embassy_futures::select::{Either, Either6, select, select6};
+        'connection: loop {
+            use embassy_futures::select::{Either, select};
 
             // ---------------------------------------------------------------
-            // Lazy contact streaming: emit one slot per iteration into outbox.
+            // Lazy contact streaming: emit one slot per iteration into
+            // the outbox, but only when there is room.  This prevents
+            // contact streaming from starving the event loop — if the
+            // outbox is full we simply skip this iteration and let the
+            // select drain a notification first.
             // ---------------------------------------------------------------
-            if let Some((ref mut slot, ref mut remaining)) = contacts_stream {
-                if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
-                    enqueue_notify(outbox, &companion::Response::ContactEnd);
-                    defmt::info!("companion: GET_CONTACTS complete");
-                    contacts_stream = None;
-                } else {
-                    let c = contacts::ContactStore::new().read_slot(*slot).await;
-                    *slot += 1;
-                    if let Some(c) = c {
-                        let mut prefix = [0u8; 6];
-                        prefix.copy_from_slice(&c.pub_key[..6]);
-                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
-                        enqueue_notify(
-                            outbox,
-                            &companion::Response::Contact(companion::response::Contact {
-                                pub_key_prefix: prefix,
-                                flags: c.flags,
-                                last_seen: c.last_advert_ts,
-                                name: &c.name[..name_end],
-                            }),
-                        );
-                        *remaining = remaining.saturating_sub(1);
+            if let Some((ref mut slot, ref mut remaining, ref mut most_recent_lastmod)) = contacts_stream {
+                if outbox.is_empty() {
+                    if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
+                        outbox_push(outbox, &companion::Response::ContactEnd { lastmod: *most_recent_lastmod });
+                        defmt::debug!("companion: GET_CONTACTS complete");
+                        contacts_stream = None;
+                    } else {
+                        let c = contacts::ContactStore::new().read_slot(*slot).await;
+                        *slot += 1;
+                        if let Some(c) = c {
+                            if c.lastmod > *most_recent_lastmod {
+                                *most_recent_lastmod = c.lastmod;
+                            }
+                            let name_end =
+                                c.name.iter().position(|&b| b == 0).unwrap_or(32);
+                            outbox_push(
+                                outbox,
+                                &companion::Response::ContactDetails(
+                                    companion::response::NewAdvert {
+                                        pub_key: &c.pub_key,
+                                        adv_type: c.node_type,
+                                        flags: c.flags,
+                                        out_path_len: c.out_path_len,
+                                        out_path: &c.out_path,
+                                        name: &c.name[..name_end],
+                                        last_advert_timestamp: c.last_advert_ts,
+                                        gps_lat: c.gps_lat,
+                                        gps_lon: c.gps_lon,
+                                        lastmod: c.lastmod,
+                                    },
+                                ),
+                            );
+                            *remaining = remaining.saturating_sub(1);
+                        }
                     }
                 }
             }
 
             // ---------------------------------------------------------------
-            // Race: drain outbox front vs handle incoming events.
-            // If the outbox is empty we just wait for events.
+            // Wait for the next event.
+            //
+            // If the outbox has a pending notification we race its
+            // transmission against incoming events so that we never
+            // block event processing waiting for L2CAP TX credit.
+            // Both branches produce the same `Either<Gatt, PushEvent>`
+            // type via the labelled block, eliminating the old
+            // duplicated select tree.
             // ---------------------------------------------------------------
-            let incoming = if let Some((buf, len)) = outbox.front().copied() {
-                let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
-                let _ = vec.extend_from_slice(&buf[..len.min(244)]);
-                match select(
-                    server.nus.tx.notify(&gatt_conn, &vec),
-                    select6(
-                        gatt_conn.next(),
-                        crate::MESSAGES_WAITING_SIGNAL.wait(),
-                        crate::RAW_PKT_CHANNEL.receive(),
-                        crate::ADVERT_BLE_CHANNEL.receive(),
-                        crate::TRACE_RESULT_CHANNEL.receive(),
-                        select(
-                            crate::LOGIN_RESULT_CHANNEL.receive(),
-                            select(
-                                crate::STATUS_RESULT_CHANNEL.receive(),
-                                select(
-                                    crate::ACK_EVENT_CHANNEL.receive(),
-                                    select(
-                                        crate::TELEM_RESULT_CHANNEL.receive(),
-                                        select(
-                                            crate::DISCOVERY_RESULT_CHANNEL.receive(),
-                                            crate::CONTROL_DATA_PKT_CHANNEL.receive(),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                )
-                .await
-                {
-                    Either::First(r) => {
-                        if let Err(e) = r {
-                            defmt::warn!("companion: notify failed: {:?}", defmt::Debug2Format(&e));
+            let event = 'event: {
+                if let Some((buf, len)) = outbox.front().copied() {
+                    defmt::debug!(
+                        "BLE: notify outbox={} contacts_active={} len={}",
+                        outbox.len(),
+                        contacts_stream.is_some(),
+                        len,
+                    );
+                    let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
+                    let _ = vec.extend_from_slice(&buf[..len.min(244)]);
+                    match select(
+                        server.nus.tx.notify(&gatt_conn, &vec),
+                        select(gatt_conn.next(), wait_push_event()),
+                    )
+                    .await
+                    {
+                        Either::First(r) => {
+                            if let Err(e) = r {
+                                defmt::warn!(
+                                    "companion: notify failed: {:?}",
+                                    defmt::Debug2Format(&e)
+                                );
+                            }
+                            outbox.pop_front();
+                            // Yield so the HCI runner can process the packet
+                            // we just handed off before we try to send more.
+                            embassy_futures::yield_now().await;
+                            continue 'connection;
                         }
-                        outbox.pop_front();
-                        continue;
+                        Either::Second(ev) => {
+                            defmt::warn!("BLE: event preempted pending notify");
+                            break 'event ev;
+                        }
                     }
-                    Either::Second(ev) => ev,
+                } else {
+                    break 'event select(gatt_conn.next(), wait_push_event()).await;
                 }
-            } else {
-                select6(
-                    gatt_conn.next(),
-                    crate::MESSAGES_WAITING_SIGNAL.wait(),
-                    crate::RAW_PKT_CHANNEL.receive(),
-                    crate::ADVERT_BLE_CHANNEL.receive(),
-                    crate::TRACE_RESULT_CHANNEL.receive(),
-                    select(
-                        crate::LOGIN_RESULT_CHANNEL.receive(),
-                        select(
-                            crate::STATUS_RESULT_CHANNEL.receive(),
-                            select(
-                                crate::ACK_EVENT_CHANNEL.receive(),
-                                select(
-                                    crate::TELEM_RESULT_CHANNEL.receive(),
-                                    select(
-                                        crate::DISCOVERY_RESULT_CHANNEL.receive(),
-                                        crate::CONTROL_DATA_PKT_CHANNEL.receive(),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                )
-                .await
             };
 
-            match incoming {
+            match event {
                 // -----------------------------------------------------------
                 // GATT event
                 // -----------------------------------------------------------
-                Either6::First(event) => match event {
+                Either::First(event) => match event {
                     GattConnectionEvent::Disconnected { reason } => {
                         defmt::info!(
                             "BLE: disconnected (reason {:?})",
@@ -677,7 +749,33 @@ async fn nus_peripheral_loop<C>(
                                 continue;
                             }
 
-                            let data = write.data();
+                            // Copy the payload to a stack buffer and acknowledge
+                            // the ATT write *immediately*.  The previous code
+                            // deferred accept() until after command processing,
+                            // which included async flash reads.  That delay
+                            // exceeded the BLE connection interval (~90 ms),
+                            // causing the central to retransmit every write and
+                            // the firmware to process each command twice.
+                            let mut cmd_buf = [0u8; 244];
+                            let cmd_len = write.data().len().min(244);
+                            cmd_buf[..cmd_len]
+                                .copy_from_slice(&write.data()[..cmd_len]);
+                            match write.accept() {
+                                Ok(reply) => reply.send().await,
+                                Err(e) => {
+                                    defmt::warn!(
+                                        "companion: write.accept() failed: {:?}",
+                                        defmt::Debug2Format(&e)
+                                    );
+                                    continue;
+                                }
+                            }
+                            let data = &cmd_buf[..cmd_len];
+                            defmt::debug!(
+                                "companion: cmd=0x{:02x} outbox={}",
+                                data[0],
+                                outbox.len(),
+                            );
 
                             // Pre-pop for SYNC_NEXT_MESSAGE (0x0A) before building the
                             // response, so the owned message outlives the match.
@@ -749,7 +847,7 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::DeviceQuery(ver)) => {
-                                    defmt::info!("companion: DEVICE_QUERY ver={=u8}", ver);
+                                    defmt::debug!("companion: DEVICE_QUERY ver={=u8}", ver);
                                     companion::Response::DeviceInfo(companion::DeviceInfo {
                                         fw_version: 10,
                                         // Protocol encodes capacity as (actual ÷ 2); u8 max = 255
@@ -773,7 +871,7 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::GetBattery) => {
                                     let mv = crate::fw::battery::read_mv();
                                     let pct = crate::fw::battery::read_pct();
-                                    defmt::info!(
+                                    defmt::debug!(
                                         "companion: GET_BATT → BATTERY {} mV {}%",
                                         mv,
                                         pct
@@ -793,7 +891,7 @@ async fn nus_peripheral_loop<C>(
                                         }
                                         match msg.kind {
                                             msg_queue::MsgKind::Private => {
-                                                defmt::info!(
+                                                defmt::debug!(
                                                     "companion: SYNC_NEXT_MESSAGE → private from={=[u8]:02x} ts={=u32} rssi={=i16} ({=u16} remaining)",
                                                     msg.sender_prefix,
                                                     msg.timestamp,
@@ -817,7 +915,7 @@ async fn nus_peripheral_loop<C>(
                                                 )
                                             }
                                             msg_queue::MsgKind::Channel => {
-                                                defmt::info!(
+                                                defmt::debug!(
                                                     "companion: SYNC_NEXT_MESSAGE → ch={=u8} ts={=u32} rssi={=i16} ({=u16} remaining)",
                                                     msg.channel_idx,
                                                     msg.timestamp,
@@ -842,15 +940,15 @@ async fn nus_peripheral_loop<C>(
                                         }
                                     }
                                     None => {
-                                        defmt::info!("companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS");
+                                        defmt::debug!("companion: SYNC_NEXT_MESSAGE → NO_MORE_MSGS");
                                         companion::Response::NoMoreMsgs
                                     }
                                 },
 
                                 Ok(companion::cmd::Command::GetContacts) => {
                                     if contacts_count > 0 {
-                                        contacts_stream = Some((0, contacts_count));
-                                        companion::Response::ContactStart
+                                        contacts_stream = Some((0, contacts_count, 0u32));
+                                        companion::Response::ContactStart { count: contacts_count as u32 }
                                     } else {
                                         companion::Response::NoMoreMsgs
                                     }
@@ -993,7 +1091,7 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                     crate::set_wall_clock(ts);
-                                    defmt::info!("companion: SET_DEVICE_TIME unix={}", ts);
+                                    defmt::debug!("companion: SET_DEVICE_TIME unix={}", ts);
                                     companion::Response::Ok
                                 }
 
@@ -1054,6 +1152,8 @@ async fn nus_peripheral_loop<C>(
                                                     recipient_pub_key: c.pub_key,
                                                     timestamp,
                                                     text: v,
+                                                    txt_type,
+                                                    attempt,
                                                 },
                                             ) {
                                                 Ok(()) => {
@@ -1135,13 +1235,14 @@ async fn nus_peripheral_loop<C>(
                                 }
 
                                 Ok(companion::cmd::Command::SetFloodScope(key)) => {
+                                    crate::FLOOD_SCOPE_KEY.lock(|cell| cell.set(key));
                                     match key {
                                         Some(k) => defmt::info!(
                                             "companion: SET_FLOOD_SCOPE key={:02X} → OK",
                                             k
                                         ),
                                         None => {
-                                            defmt::info!("companion: SET_FLOOD_SCOPE (clear) → OK")
+                                            defmt::debug!("companion: SET_FLOOD_SCOPE (clear) → OK")
                                         }
                                     }
                                     companion::Response::Ok
@@ -1552,15 +1653,32 @@ async fn nus_peripheral_loop<C>(
                                 }
                             };
 
-                            // Acknowledge the write then queue the response notification.
-                            match write.accept() {
-                                Ok(reply) => reply.send().await,
-                                Err(e) => defmt::warn!(
-                                    "companion: write.accept() failed: {:?}",
-                                    defmt::Debug2Format(&e)
-                                ),
+                            outbox_push(outbox, &response);
+
+                            // Send the response notification immediately.  Without
+                            // this, the event loop races notify against gatt_conn.next()
+                            // and incoming writes always win (they're already buffered),
+                            // so notifications pile up while the packet pool fills with
+                            // un-consumed RX packets.  trouble-host 0.6.0's
+                            // controller-host-flow-control is broken (enable command
+                            // is commented out), so back-pressure must come from us.
+                            while let Some((buf, len)) = outbox.front().copied() {
+                                let mut vec: heapless::Vec<u8, 244> = heapless::Vec::new();
+                                let _ = vec.extend_from_slice(&buf[..len.min(244)]);
+                                match server.nus.tx.notify(&gatt_conn, &vec).await {
+                                    Ok(()) => {
+                                        outbox.pop_front();
+                                    }
+                                    Err(e) => {
+                                        defmt::warn!(
+                                            "companion: inline notify failed: {:?}",
+                                            defmt::Debug2Format(&e)
+                                        );
+                                        outbox.pop_front(); // discard to avoid infinite loop
+                                        break;
+                                    }
+                                }
                             }
-                            enqueue_notify(outbox, &response);
 
                             // Apply any pending settings changes (after response is sent
                             // so the borrow on node_name via `response` has ended).
@@ -1568,7 +1686,7 @@ async fn nus_peripheral_loop<C>(
                                 node_name[..settings::MAX_NODE_NAME].copy_from_slice(&new_name);
                                 node_name_len = len;
                                 match settings::set_node_name(&node_name[..len]).await {
-                                    Ok(()) => defmt::info!("companion: node_name persisted"),
+                                    Ok(()) => defmt::debug!("companion: node_name persisted"),
                                     Err(e) => {
                                         defmt::warn!("companion: node_name persist failed: {:?}", e)
                                     }
@@ -1590,7 +1708,7 @@ async fn nus_peripheral_loop<C>(
                             if let Some(new_pos) = pending_position {
                                 position = new_pos;
                                 match settings::set_position(position).await {
-                                    Ok(()) => defmt::info!("companion: position persisted"),
+                                    Ok(()) => defmt::debug!("companion: position persisted"),
                                     Err(e) => {
                                         defmt::warn!("companion: position persist failed: {:?}", e)
                                     }
@@ -1599,7 +1717,7 @@ async fn nus_peripheral_loop<C>(
                             if let Some(new_other) = pending_other {
                                 other_params = new_other;
                                 match settings::set_other_params(other_params).await {
-                                    Ok(()) => defmt::info!("companion: other params persisted"),
+                                    Ok(()) => defmt::debug!("companion: other params persisted"),
                                     Err(e) => defmt::warn!(
                                         "companion: other params persist failed: {:?}",
                                         e
@@ -1624,8 +1742,8 @@ async fn nus_peripheral_loop<C>(
                                         prefix.copy_from_slice(&contact.pub_key[..6]);
                                         let name_end =
                                             contact.name.iter().position(|&b| b == 0).unwrap_or(32);
-                                        enqueue_notify(outbox, &companion::Response::ContactStart);
-                                        enqueue_notify(
+                                        outbox_push(outbox, &companion::Response::ContactStart { count: 1 });
+                                        outbox_push(
                                             outbox,
                                             &companion::Response::Contact(
                                                 companion::response::Contact {
@@ -1636,7 +1754,7 @@ async fn nus_peripheral_loop<C>(
                                                 },
                                             ),
                                         );
-                                        enqueue_notify(outbox, &companion::Response::ContactEnd);
+                                        outbox_push(outbox, &companion::Response::ContactEnd { lastmod: contact.lastmod });
                                     }
                                     Err(e) => defmt::warn!(
                                         "companion: ADD_UPDATE_CONTACT store failed: {:?}",
@@ -1652,98 +1770,85 @@ async fn nus_peripheral_loop<C>(
                 },
 
                 // -----------------------------------------------------------
-                // New messages arrived while connected — push 0x83 to app.
+                // Push events from radio / system channels.
                 // -----------------------------------------------------------
-                Either6::Second(()) => {
-                    defmt::debug!(
-                        "BLE: {} message(s) waiting, sending 0x83",
-                        msg_queue::count()
-                    );
-                    enqueue_notify(outbox, &companion::Response::MessagesWaiting);
-                }
+                Either::Second(push) => match push {
+                    PushEvent::MessagesWaiting => {
+                        defmt::debug!(
+                            "BLE: {} message(s) waiting, sending 0x83",
+                            msg_queue::count()
+                        );
+                        outbox_push(outbox, &companion::Response::MessagesWaiting);
+                    }
 
-                // -----------------------------------------------------------
-                // Raw LoRa packet received — push 0x88 to app.
-                // -----------------------------------------------------------
-                Either6::Third(pkt) => {
-                    defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
-                    enqueue_notify(
-                        outbox,
-                        &companion::Response::LogRxData {
-                            snr_x4: pkt.snr_x4,
-                            rssi: pkt.rssi,
-                            data: &pkt.data[..pkt.len],
-                        },
-                    );
-                }
+                    PushEvent::RawPacket(pkt) => {
+                        defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
+                        outbox_push(
+                            outbox,
+                            &companion::Response::LogRxData {
+                                snr_x4: pkt.snr_x4,
+                                rssi: pkt.rssi,
+                                data: &pkt.data[..pkt.len],
+                            },
+                        );
+                    }
 
-                // -----------------------------------------------------------
-                // Advert received — push 0x8A (NewAdvert) to app.
-                // -----------------------------------------------------------
-                Either6::Fourth(notif) => {
-                    defmt::debug!("BLE: advert from {:02x}, pushing 0x8A", &notif.pub_key[..6]);
-                    let out_path = [0u8; 64];
-                    enqueue_notify(
-                        outbox,
-                        &companion::Response::NewAdvert(companion::response::NewAdvert {
-                            pub_key: &notif.pub_key,
-                            adv_type: notif.adv_type,
-                            flags: 0,
-                            out_path_len: 0xFF,
-                            out_path: &out_path,
-                            name: &notif.name,
-                            last_advert_timestamp: notif.timestamp,
-                            gps_lat: notif.lat,
-                            gps_lon: notif.lon,
-                            lastmod: 0,
-                        }),
-                    );
-                }
+                    PushEvent::Advert(notif) => {
+                        defmt::debug!("BLE: advert from {:02x}, pushing 0x8A", &notif.pub_key[..6]);
+                        let out_path = [0u8; 64];
+                        outbox_push(
+                            outbox,
+                            &companion::Response::NewAdvert(companion::response::NewAdvert {
+                                pub_key: &notif.pub_key,
+                                adv_type: notif.adv_type,
+                                flags: 0,
+                                out_path_len: 0xFF,
+                                out_path: &out_path,
+                                name: &notif.name,
+                                last_advert_timestamp: notif.timestamp,
+                                gps_lat: notif.lat,
+                                gps_lon: notif.lon,
+                                lastmod: 0,
+                            }),
+                        );
+                    }
 
-                // -----------------------------------------------------------
-                // Trace-path result — push 0x89 (PUSH_CODE_TRACE_DATA) to app.
-                // -----------------------------------------------------------
-                Either6::Fifth(trace) => {
-                    let mut _dbg_buf = [0u8; companion::MAX_RESPONSE_LEN];
-                    let _dbg_len = companion::encode(
-                        &companion::Response::TraceData {
-                            path_len: trace.path_len,
-                            flags: trace.flags,
-                            tag: trace.tag,
-                            auth_code: trace.auth_code,
-                            path_hashes: &trace.path_hashes,
-                            path_snrs: &trace.path_snrs,
-                            final_snr: trace.final_snr,
-                        },
-                        &mut _dbg_buf,
-                    );
-                    defmt::info!(
-                        "BLE: trace result tag={=u32:#010x} path_len={=u8}, pushing 0x89 ({=usize}B): {=[u8]:02x}",
-                        trace.tag,
-                        trace.path_len,
-                        _dbg_len,
-                        &_dbg_buf[.._dbg_len],
-                    );
-                    enqueue_notify(
-                        outbox,
-                        &companion::Response::TraceData {
-                            path_len: trace.path_len,
-                            flags: trace.flags,
-                            tag: trace.tag,
-                            auth_code: trace.auth_code,
-                            path_hashes: &trace.path_hashes,
-                            path_snrs: &trace.path_snrs,
-                            final_snr: trace.final_snr,
-                        },
-                    );
-                }
+                    PushEvent::TraceResult(trace) => {
+                        let mut _dbg_buf = [0u8; companion::MAX_RESPONSE_LEN];
+                        let _dbg_len = companion::encode(
+                            &companion::Response::TraceData {
+                                path_len: trace.path_len,
+                                flags: trace.flags,
+                                tag: trace.tag,
+                                auth_code: trace.auth_code,
+                                path_hashes: &trace.path_hashes,
+                                path_snrs: &trace.path_snrs,
+                                final_snr: trace.final_snr,
+                            },
+                            &mut _dbg_buf,
+                        );
+                        defmt::info!(
+                            "BLE: trace result tag={=u32:#010x} path_len={=u8}, pushing 0x89 ({=usize}B): {=[u8]:02x}",
+                            trace.tag,
+                            trace.path_len,
+                            _dbg_len,
+                            &_dbg_buf[.._dbg_len],
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::TraceData {
+                                path_len: trace.path_len,
+                                flags: trace.flags,
+                                tag: trace.tag,
+                                auth_code: trace.auth_code,
+                                path_hashes: &trace.path_hashes,
+                                path_snrs: &trace.path_snrs,
+                                final_snr: trace.final_snr,
+                            },
+                        );
+                    }
 
-                // -----------------------------------------------------------
-                // Login result — push 0x85 (success) or 0x86 (fail) to app.
-                // Status result — push 0x87 to app.
-                // -----------------------------------------------------------
-                Either6::Sixth(either) => match either {
-                    Either::First(login) => {
+                    PushEvent::LoginResult(login) => {
                         let mut prefix = [0u8; 6];
                         prefix.copy_from_slice(&login.pub_key[..6]);
                         if login.success {
@@ -1751,7 +1856,7 @@ async fn nus_peripheral_loop<C>(
                                 "BLE: login OK from {:02x}, pushing 0x85",
                                 &login.pub_key[..6]
                             );
-                            enqueue_notify(
+                            outbox_push(
                                 outbox,
                                 &companion::Response::LoginSuccess {
                                     is_admin: login.is_admin,
@@ -1766,7 +1871,7 @@ async fn nus_peripheral_loop<C>(
                                 "BLE: login FAIL from {:02x}, pushing 0x86",
                                 &login.pub_key[..6]
                             );
-                            enqueue_notify(
+                            outbox_push(
                                 outbox,
                                 &companion::Response::LoginFail {
                                     pub_key_prefix: prefix,
@@ -1774,97 +1879,94 @@ async fn nus_peripheral_loop<C>(
                             );
                         }
                     }
-                    Either::Second(either2) => match either2 {
-                        Either::First(status) => {
-                            let mut prefix = [0u8; 6];
-                            prefix.copy_from_slice(&status.pub_key[..6]);
-                            defmt::info!(
-                                "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
-                                &status.pub_key[..6],
-                                status.uptime_secs,
-                                status.battery_mv,
-                            );
-                            enqueue_notify(
-                                outbox,
-                                &companion::Response::StatusResponse {
-                                    pub_key_prefix: prefix,
-                                    uptime_secs: status.uptime_secs,
-                                    battery_mv: status.battery_mv,
-                                },
-                            );
-                        }
-                        Either::Second(either3) => match either3 {
-                            Either::First(ack) => {
-                                defmt::info!(
-                                    "BLE: ACK ack_crc={=u32:#010x} trip={=u32}ms, pushing 0x82",
-                                    ack.ack_crc,
-                                    ack.trip_time_ms,
-                                );
-                                enqueue_notify(
-                                    outbox,
-                                    &companion::Response::Ack(companion::Ack {
-                                        ack_crc: ack.ack_crc,
-                                        trip_time_ms: ack.trip_time_ms,
-                                    }),
-                                );
-                            }
-                            Either::Second(either4) => match either4 {
-                                Either::First(telem) => {
-                                    let mut prefix = [0u8; 6];
-                                    prefix.copy_from_slice(&telem.pub_key[..6]);
-                                    defmt::info!(
-                                        "BLE: telem from {:02x} lpp={=usize}B, pushing 0x8B",
-                                        &telem.pub_key[..6],
-                                        telem.lpp.len(),
-                                    );
-                                    enqueue_notify(
-                                        outbox,
-                                        &companion::Response::TelemetryResponse {
-                                            pub_key_prefix: prefix,
-                                            lpp_data: &telem.lpp,
-                                        },
-                                    );
-                                }
-                                Either::Second(disc_or_ctl) => match disc_or_ctl {
-                                Either::First(disc) => {
-                                    let mut prefix = [0u8; 6];
-                                    prefix.copy_from_slice(&disc.pub_key[..6]);
-                                    defmt::info!(
-                                        "BLE: discovery from {:02x} out_path_len={=u8}, pushing 0x8D",
-                                        &disc.pub_key[..6],
-                                        disc.out_path_len_byte,
-                                    );
-                                    enqueue_notify(
-                                        outbox,
-                                        &companion::Response::PathDiscoveryResponse {
-                                            pub_key_prefix: prefix,
-                                            out_path_len_byte: disc.out_path_len_byte,
-                                            out_path: &disc.out_path,
-                                            in_path_len_byte: disc.in_path_len_byte,
-                                            in_path: &disc.in_path,
-                                        },
-                                    );
-                                }
-                                Either::Second(ctl) => {
-                                    defmt::info!(
-                                        "BLE: control pkt ctl={=u8:#04x} {=usize}B, pushing 0x8E",
-                                        ctl.payload.first().copied().unwrap_or(0),
-                                        ctl.payload.len(),
-                                    );
-                                    enqueue_notify(
-                                        outbox,
-                                        &companion::Response::PushControlData {
-                                            snr_x4:   ctl.snr_x4,
-                                            rssi:     ctl.rssi,
-                                            path_len: ctl.path_len,
-                                            payload:  &ctl.payload,
-                                        },
-                                    );
-                                }
-                                }, // end disc_or_ctl
+
+                    PushEvent::StatusResult(status) => {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&status.pub_key[..6]);
+                        defmt::info!(
+                            "BLE: status from {:02x} uptime={=u32}s batt={=u16}mV, pushing 0x87",
+                            &status.pub_key[..6],
+                            status.uptime_secs,
+                            status.battery_mv,
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::StatusResponse {
+                                pub_key_prefix: prefix,
+                                uptime_secs: status.uptime_secs,
+                                battery_mv: status.battery_mv,
                             },
-                        },
-                    },
+                        );
+                    }
+
+                    PushEvent::AckEvent(ack) => {
+                        defmt::info!(
+                            "BLE: ACK ack_crc={=u32:#010x} trip={=u32}ms, pushing 0x82",
+                            ack.ack_crc,
+                            ack.trip_time_ms,
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::Ack(companion::Ack {
+                                ack_crc: ack.ack_crc,
+                                trip_time_ms: ack.trip_time_ms,
+                            }),
+                        );
+                    }
+
+                    PushEvent::TelemResult(telem) => {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&telem.pub_key[..6]);
+                        defmt::info!(
+                            "BLE: telem from {:02x} lpp={=usize}B, pushing 0x8B",
+                            &telem.pub_key[..6],
+                            telem.lpp.len(),
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::TelemetryResponse {
+                                pub_key_prefix: prefix,
+                                lpp_data: &telem.lpp,
+                            },
+                        );
+                    }
+
+                    PushEvent::DiscoveryResult(disc) => {
+                        let mut prefix = [0u8; 6];
+                        prefix.copy_from_slice(&disc.pub_key[..6]);
+                        defmt::info!(
+                            "BLE: discovery from {:02x} out_path_len={=u8}, pushing 0x8D",
+                            &disc.pub_key[..6],
+                            disc.out_path_len_byte,
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::PathDiscoveryResponse {
+                                pub_key_prefix: prefix,
+                                out_path_len_byte: disc.out_path_len_byte,
+                                out_path: &disc.out_path,
+                                in_path_len_byte: disc.in_path_len_byte,
+                                in_path: &disc.in_path,
+                            },
+                        );
+                    }
+
+                    PushEvent::ControlData(ctl) => {
+                        defmt::info!(
+                            "BLE: control pkt ctl={=u8:#04x} {=usize}B, pushing 0x8E",
+                            ctl.payload.first().copied().unwrap_or(0),
+                            ctl.payload.len(),
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::PushControlData {
+                                snr_x4: ctl.snr_x4,
+                                rssi: ctl.rssi,
+                                path_len: ctl.path_len,
+                                payload: &ctl.payload,
+                            },
+                        );
+                    }
                 },
             }
         }

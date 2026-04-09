@@ -549,7 +549,7 @@ impl ContactStore {
             // hundreds of slots takes several seconds and would otherwise starve it.
             for idx in MAX_CONTACTS..old_cap {
                 let key = slot_key(idx);
-                defmt::info!("contacts: deleting orphaned slot {} {}", idx, key.as_str());
+                defmt::debug!("contacts: deleting orphaned slot {} {}", idx, key.as_str());
                 match self.kv.delete(key.as_str()).await {
                     Ok(()) => {}
                     Err(e) => {
@@ -585,7 +585,7 @@ impl ContactStore {
                 defmt::warn!("contacts: migrate(shrink) meta write failed: {:?}", e);
             }
         }
-        defmt::info!("contacts: migration complete");
+        defmt::debug!("contacts: migration complete");
     }
 
     // -----------------------------------------------------------------------

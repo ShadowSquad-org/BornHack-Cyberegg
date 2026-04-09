@@ -109,39 +109,115 @@ The firmware implements the [MeshCore companion protocol](https://docs.meshcore.
 
 ## Setup
 
-Clone with submodules:
+### Prerequisites
+
+You need:
+
+- **Rust** (stable) with the embedded target
+- **probe-rs** for SWD flashing and RTT logging
+- **arm-none-eabi-gcc** toolchain (for `arm-none-eabi-size` and `arm-none-eabi-objcopy`)
+- **make**
+- **dfu-util** (optional, for USB DFU flashing)
+
+### Linux (Ubuntu / Debian)
+
+```bash
+# System packages
+sudo apt install build-essential gcc-arm-none-eabi libsdl2-dev dfu-util libudev-dev pkg-config
+
+# Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add thumbv7em-none-eabihf
+
+# probe-rs
+cargo install probe-rs-tools
+
+# udev rules for SWD debug probes (J-Link, ST-Link, CMSIS-DAP, etc.)
+curl -o /tmp/69-probe-rs.rules https://probe.rs/files/69-probe-rs.rules
+sudo cp /tmp/69-probe-rs.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Linux (Arch)
+
+```bash
+sudo pacman -S base-devel arm-none-eabi-gcc sdl2 dfu-util
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add thumbv7em-none-eabihf
+cargo install probe-rs-tools
+```
+
+### Windows
+
+Install the following:
+
+1. **Rust**: download from <https://rustup.rs> and run the installer. Then:
+
+   ```powershell
+   rustup target add thumbv7em-none-eabihf
+   ```
+
+1. **ARM toolchain**: download the GNU Arm Embedded Toolchain from <https://developer.arm.com/downloads/-/gnu-rm> and add it to your PATH.
+
+1. **probe-rs**:
+
+   ```powershell
+   cargo install probe-rs-tools
+   ```
+
+1. **make**: install via [chocolatey](https://chocolatey.org/) (`choco install make`) or use the make bundled with Git for Windows.
+
+1. **SDL2** (simulator only): download SDL2 development libraries from <https://github.com/libsdl-org/SDL/releases> and set the `LIBRARY_PATH` environment variable.
+
+1. **WinUSB driver**: probe-rs needs WinUSB for your debug probe. Use [Zadig](https://zadig.akeo.ie/) to install the WinUSB driver for your probe (J-Link, ST-Link, CMSIS-DAP).
+
+### Clone
 
 ```bash
 git clone --recursive <your-repo-url>
-```
-
-Install the Rust embedded target:
-
-```bash
-rustup target add thumbv7em-none-eabihf
+cd cyberegg/embedded_graphics/hello-graphics
 ```
 
 ## Build
 
-### Simulator
-
-The simulator requires SDL2:
+### Firmware (nRF52840)
 
 ```bash
-# Debian / Ubuntu
-sudo apt install libsdl2-dev
-
-# Fedora
-sudo dnf install SDL2-devel
-
-# Arch Linux
-sudo pacman -S sdl2
-
-# macOS
-brew install sdl2
+make fw              # Debug build
+make fw-release      # Release build (optimised for size)
 ```
 
-Build and run:
+Both print the flash and RAM usage after building. The release build uses full LTO and `opt-level = "z"` for minimum binary size.
+
+### Flash firmware
+
+Connect a debug probe (J-Link, ST-Link, or CMSIS-DAP) to the badge SWD header, then:
+
+```bash
+make flash           # Build + flash debug firmware via SWD
+make flash-release   # Build + flash release firmware via SWD
+```
+
+For USB DFU flashing (hold the execute button while powering on to enter DFU mode):
+
+```bash
+make dfu-flash           # Debug
+make dfu-flash-release   # Release
+```
+
+### Debug (VS Code + probe-rs)
+
+Open the project in VS Code and press **F5**. The `cargo fw` build runs automatically before flashing. RTT log output appears in the terminal.
+
+To attach a log monitor to an already-running device:
+
+```bash
+make monitor
+```
+
+### Simulator
+
+The simulator requires SDL2 (see platform setup above). Build and run:
 
 ```bash
 make sim
@@ -161,33 +237,53 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | Backspace  | Cancel button  | Cancel / close modal           |
 | Escape     | —              | Quit simulator                 |
 
-### Firmware (nRF52840)
+### All make targets
 
-```bash
-make fw
-```
-
-### Flash firmware
-
-```bash
-make flash
-```
-
-### Debug (VS Code + probe-rs)
-
-Open the project in VS Code and press **F5**. The `cargo fw` build runs automatically before flashing.
-
-### Other targets
-
-| Command              | Description                        |
-| -------------------- | ---------------------------------- |
-| `make fw-release`    | Release build                      |
-| `make flash-release` | Flash release build                |
-| `make monitor`       | Attach RTT log monitor (app)       |
-| `make bl`            | Build bootloader                   |
-| `make bl-flash`      | Full-chip erase + flash bootloader |
-| `make dfu-flash`     | Flash app over USB DFU             |
+| Command                  | Description                              |
+| ------------------------ | ---------------------------------------- |
+| `make fw`                | Build debug firmware                     |
+| `make fw-release`        | Build release firmware                   |
+| `make flash`             | Build + flash debug firmware (SWD)       |
+| `make flash-release`     | Build + flash release firmware (SWD)     |
+| `make dfu-flash`         | Build + flash debug firmware (USB DFU)   |
+| `make dfu-flash-release` | Build + flash release firmware (USB DFU) |
+| `make sim`               | Build and run the SDL2 simulator         |
+| `make monitor`           | Attach RTT log monitor to running device |
+| `make bl`                | Build bootloader                         |
+| `make bl-flash`          | Full-chip erase + flash bootloader       |
 
 ## Python balance simulator
 
 See [`simulation_py/README.md`](simulation_py/README.md) for the Bornpets game balance simulator.
+
+## Recent fixes
+
+- **P2P receive**: incoming private messages now work. Fixed a `src_hash` collision that caused messages from contacts sharing the same `pub_key[0]` to be dropped as flood echoes.
+- **P2P echo suppression**: own outgoing messages reflected by flood relays are no longer shown as new incoming messages. Detection uses `PENDING_ACK` hash matching.
+- **Path-embedded ACKs**: ACKs piggybacked inside Path packets (`extra_type=3`) are now extracted and processed, matching the reference firmware behavior.
+- **Flash error handling**: the ekv flash trait implementation now propagates QSPI errors instead of panicking, allowing ekv to recover from partial writes after power loss.
+- **Dependency deduplication**: eliminated duplicate `embassy-time` (0.4 + 0.5) by bumping vendor/ssd1675 to embassy-time 0.5.
+
+## Known issues
+
+### TODO
+
+- Investigate more space efficient SD-card storage method
+- Check if sx126x vendored crate is really needed, using another crate might be better
+- Add block sender (p2p and channel)
+- Check messages accepted when not in contact list
+
+### Meshcore missing / broken features
+
+- Connecting a blank client to the companion, the Contact list is not synchronized
+- Administration of repeaters does not work
+- Login on repeaters is flaky
+- Get repeater status not working
+- Login on room servers is not working
+- Room server support is absent (not support?)
+- Discover routes are not reported in the frontend with contacts when adverts are received
+- P2P ACK display in the companion app is unreliable (ACKs are received and processed but not always shown)
+
+### Untested
+
+- 2/3byte path support in messages

@@ -457,6 +457,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "ekv"
+version = "1.0.0"
+source = "git+https://github.com/embassy-rs/ekv.git?rev=a7d0ce35#a7d0ce35b7d989f621575d838d211e546a54d2eb"
+dependencies = [
+ "embassy-sync",
+ "heapless 0.8.0",
+]
+
+[[package]]
 name = "elliptic-curve"
 version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -485,7 +494,7 @@ dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
  "embassy-sync",
- "embassy-time 0.5.0",
+ "embassy-time",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -560,7 +569,7 @@ dependencies = [
  "embassy-embedded-hal",
  "embassy-hal-internal",
  "embassy-sync",
- "embassy-time 0.5.0",
+ "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "embassy-usb-driver",
@@ -590,22 +599,6 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "heapless 0.8.0",
-]
-
-[[package]]
-name = "embassy-time"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f820157f198ada183ad62e0a66f554c610cdcd1a9f27d4b316358103ced7a1f8"
-dependencies = [
- "cfg-if",
- "critical-section",
- "document-features",
- "embassy-time-driver",
- "embedded-hal 0.2.7",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
- "futures-util",
 ]
 
 [[package]]
@@ -984,11 +977,12 @@ dependencies = [
  "cortex-m-rt",
  "defmt 1.0.1",
  "defmt-rtt",
+ "ekv",
  "embassy-executor",
  "embassy-futures",
  "embassy-nrf",
  "embassy-sync",
- "embassy-time 0.5.0",
+ "embassy-time",
  "embedded-graphics",
  "embedded-graphics-simulator",
  "embedded-hal 1.0.0",
@@ -1003,7 +997,6 @@ dependencies = [
  "ssd1675",
  "static_cell",
  "sx126x",
- "tickv",
  "trouble-host",
 ]
 
@@ -1645,7 +1638,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 name = "ssd1675"
 version = "0.6.0"
 dependencies = [
- "embassy-time 0.4.0",
+ "embassy-time",
  "embedded-graphics",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -1726,12 +1719,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tickv"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830b5b0040c9bcd8866f00bdeabc39c6f426ccb81bf31821a8302b524b1c952b"
-
-[[package]]
 name = "trouble-host"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1743,7 +1730,7 @@ dependencies = [
  "defmt 1.0.1",
  "embassy-futures",
  "embassy-sync",
- "embassy-time 0.5.0",
+ "embassy-time",
  "embedded-io 0.7.1",
  "futures",
  "heapless 0.9.2",

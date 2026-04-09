@@ -180,9 +180,9 @@ async fn probe_lut(
     }
     cs_out.set_high();
 
-    defmt::info!("Display OTP LUT (107 bytes):");
+    defmt::debug!("Display OTP LUT (107 bytes):");
     for (i, chunk) in lut.chunks(10).enumerate() {
-        defmt::info!("  [{=usize:03}] {:02x}", i * 10, chunk);
+        defmt::debug!("  [{=usize:03}] {:02x}", i * 10, chunk);
     }
 
     lut
@@ -213,7 +213,7 @@ pub async fn init_epd<'a>(
 ) -> Result<EpdGfx<'a>, Infallible> {
     let temp_celsius = temperature.unwrap_or(20);
     let temp_raw: u16 = ((temp_celsius) as i32 * 16) as u16;
-    defmt::info!(
+    defmt::debug!(
         "EPD: temperature {} °C (raw 0x{:04x})",
         temp_celsius,
         temp_raw

@@ -390,6 +390,10 @@ pub struct TxPrivateMsg {
     pub recipient_pub_key: [u8; meshcore::PUB_KEY_SIZE],
     pub timestamp: u32,
     pub text: heapless::Vec<u8, { fw::msg_queue::MAX_TEXT }>,
+    /// Text type (0 = plain, 1 = CLI data, 2 = signed).
+    pub txt_type: u8,
+    /// Retry attempt counter (0 = first send). Affects the ACK hash.
+    pub attempt: u8,
 }
 
 /// Queue from the BLE companion task to the meshcore task for outgoing private messages.
@@ -545,6 +549,7 @@ pub static ACK_EVENT_CHANNEL: embassy_sync::channel::Channel<
 
 /// Tracks the most recently sent P2P message, used to compute ACK round-trip time.
 #[cfg(feature = "embassy")]
+#[derive(Clone, Copy)]
 pub struct PendingAck {
     pub ack_hash: u32,
     pub sent_at: embassy_time::Instant,
@@ -619,6 +624,18 @@ pub static CONTROL_DATA_PKT_CHANNEL: embassy_sync::channel::Channel<
     ControlDataPkt,
     4,
 > = embassy_sync::channel::Channel::new();
+
+/// 16-byte transport key for region-scoped flood packets (SetFloodScope / 0x36).
+///
+/// When `Some`, all outgoing flood packets are tagged with a per-packet HMAC-SHA256
+/// code derived from this key, and incoming `TransportFlood` packets whose code
+/// does not match are silently dropped.  `None` means unscoped — all flood packets
+/// are sent and received without region filtering (equivalent to transport_codes = {0,0}).
+#[cfg(feature = "embassy")]
+pub static FLOOD_SCOPE_KEY: Mutex<
+    CriticalSectionRawMutex,
+    core::cell::Cell<Option<[u8; 16]>>,
+> = Mutex::new(core::cell::Cell::new(None));
 
 /// Tag stored while waiting for a telemetry response; cleared when received.
 #[cfg(feature = "embassy")]

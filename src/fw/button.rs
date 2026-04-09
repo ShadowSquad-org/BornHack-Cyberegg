@@ -68,7 +68,7 @@ pub async fn run_buttons(
 
         match index {
             0 => {
-                defmt::info!("Cancel");
+                defmt::debug!("Cancel");
                 if on_game {
                     dispatch(GameBtn::Cancel);
                 } else {
@@ -78,7 +78,7 @@ pub async fn run_buttons(
                 update_button_health!(btn_can, cancel);
             }
             1 => {
-                defmt::info!("Execute");
+                defmt::debug!("Execute");
                 if on_game {
                     dispatch(GameBtn::Execute);
                 }
@@ -87,7 +87,7 @@ pub async fn run_buttons(
                 update_button_health!(btn_exe, execute);
             }
             2 => {
-                defmt::info!("Up");
+                defmt::debug!("Up");
                 if on_game {
                     dispatch(GameBtn::Up);
                 } else {
@@ -97,7 +97,7 @@ pub async fn run_buttons(
                 update_button_health!(joy_up, up);
             }
             3 => {
-                defmt::info!("Down");
+                defmt::debug!("Down");
                 if on_game {
                     dispatch(GameBtn::Down);
                 } else {
@@ -107,7 +107,7 @@ pub async fn run_buttons(
                 update_button_health!(joy_down, down);
             }
             4 => {
-                defmt::info!("Left");
+                defmt::debug!("Left");
                 if on_game {
                     dispatch(GameBtn::Left);
                 } else {
@@ -117,7 +117,7 @@ pub async fn run_buttons(
                 update_button_health!(joy_left, left);
             }
             5 => {
-                defmt::info!("Right");
+                defmt::debug!("Right");
                 if on_game {
                     // dispatch returns false when the cursor is at the grid edge.
                     let consumed = dispatch(GameBtn::Right);
@@ -131,7 +131,7 @@ pub async fn run_buttons(
                 update_button_health!(joy_right, right);
             }
             6 => {
-                defmt::info!("Fire");
+                defmt::debug!("Fire");
                 if on_game {
                     dispatch(GameBtn::Fire);
                 } else {

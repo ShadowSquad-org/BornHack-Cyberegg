@@ -1,9 +1,9 @@
-//! Async-safe key-value store backed by TicKV on external QSPI flash.
+//! Async-safe key-value store backed by ekv on external QSPI flash.
 //!
-//! One TicKV instance lives behind an async Mutex so multiple tasks can share
-//! it safely.  Callers obtain a [`KvNamespace`] handle; all keys are prefixed
-//! with `"<namespace>:"` before hashing so stores from different modules never
-//! collide even if they use the same key string.
+//! One ekv `Database` instance lives as a `'static` singleton; all tasks can
+//! call it concurrently because `Database` manages its own internal mutex.
+//! Callers obtain a [`KvNamespace`] handle; all keys are prefixed with
+//! `"<namespace>:"` so stores from different modules never collide.
 //!
 //! # Usage
 //!
@@ -13,39 +13,19 @@
 //!
 //! // From any async task — free to create on demand, zero cost:
 //! let store = kv::namespace("game");
-//! store.set("health", &[100u8]).await?;
+//! store.set("health", &[100u8], true).await?;
 //!
 //! let mut buf = [0u8; 4];
 //! let n = store.get("health", &mut buf).await?;
 //! ```
 
 use embassy_nrf::{Peri, peripherals, qspi};
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::once_lock::OnceLock;
+use ekv::{Config, Database, MountError};
 use static_cell::StaticCell;
-use tickv::{ErrorCode, TicKV};
 
-use crate::fw::storage::{
-    AlignedBuf, QspiFlashController, QspiIrqs, REGION_SIZE, fnv1a, init_qspi,
-};
-
-// ---------------------------------------------------------------------------
-// Flash layout
-// ---------------------------------------------------------------------------
-
-/// Number of 4 KiB TicKV regions reserved for the KV store (512 KiB total).
-///
-/// The flash chip is 2 MiB; 512 KiB is reserved for the KV store with the
-/// remainder available for game assets and future use.
-///
-/// The erase-all recovery path (triggered on a MAIN_KEY version bump) erases
-/// one region at a time while feeding the 5-second watchdog between each
-/// sector, so even at 200 ms/sector the watchdog never expires.
-const NUM_REGIONS: usize = 128;
-
-/// Seed key that identifies this firmware's KV schema version.
-/// Change this string when the on-flash layout becomes incompatible with an
-/// older firmware; the store will be erased and re-initialised on next boot.
-const MAIN_KEY: u64 = fnv1a(b"cyberaegg_kv_v1");
+use crate::fw::storage::{KV_PAGE_COUNT, QspiFlash, QspiIrqs, init_qspi};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -57,121 +37,29 @@ pub enum KvError {
     /// Returned by `set(..., update: false)` when the key already exists.
     KeyExists,
     StoreFull,
-    WriteFail,
-    ReadFail,
-    EraseFail,
+    Corrupted,
     NotInitialised,
     BufferTooSmall,
+    KeyTooLong,
     Other,
 }
 
-impl From<ErrorCode> for KvError {
-    fn from(e: ErrorCode) -> Self {
-        match e {
-            ErrorCode::KeyNotFound => KvError::NotFound,
-            ErrorCode::BufferTooSmall(_) => KvError::BufferTooSmall,
-            ErrorCode::FlashFull | ErrorCode::RegionFull => KvError::StoreFull,
-            ErrorCode::WriteFail => KvError::WriteFail,
-            ErrorCode::ReadFail => KvError::ReadFail,
-            ErrorCode::EraseFail => KvError::EraseFail,
-            _ => KvError::Other,
-        }
-    }
+// ---------------------------------------------------------------------------
+// Singleton Database
+// ---------------------------------------------------------------------------
+
+type Db = Database<QspiFlash, CriticalSectionRawMutex>;
+
+static DB_CELL: StaticCell<Db> = StaticCell::new();
+static DB: OnceLock<&'static Db> = OnceLock::new();
+
+fn get_db() -> Result<&'static Db, KvError> {
+    DB.try_get().copied().ok_or(KvError::NotInitialised)
 }
 
 // ---------------------------------------------------------------------------
-// KvStore — thin wrapper around TicKV
+// Initialisation
 // ---------------------------------------------------------------------------
-
-struct KvStore {
-    tickv: TicKV<'static, QspiFlashController, REGION_SIZE>,
-}
-
-// Safety: KvStore is only accessed through the async Mutex, never concurrently.
-unsafe impl Send for KvStore {}
-
-impl KvStore {
-    fn get(&mut self, key: u64, buf: &mut [u8]) -> Result<usize, KvError> {
-        match self.tickv.get_key(key, buf) {
-            Ok((_code, len)) => Ok(len),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    fn exists(&mut self, key: u64) -> bool {
-        !matches!(
-            self.tickv.get_key(key, &mut []),
-            Err(ErrorCode::KeyNotFound)
-        )
-    }
-
-    fn set(&mut self, key: u64, data: &[u8], update: bool) -> Result<(), KvError> {
-        // Probe existence: get_key with a zero-length buffer returns KeyNotFound
-        // only when the key is absent; any other result means the key exists.
-        let exists = self.exists(key);
-
-        if exists && !update {
-            return Err(KvError::KeyExists);
-        }
-
-        // Invalidate any existing entry before appending the new one.
-        if exists {
-            match self.tickv.invalidate_key(key) {
-                Ok(_) | Err(ErrorCode::KeyNotFound) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        self.tickv
-            .append_key(key, data)
-            .map(|_| ())
-            .map_err(Into::into)
-    }
-
-    fn delete(&mut self, key: u64) -> Result<(), KvError> {
-        match self.tickv.invalidate_key(key) {
-            Ok(_) | Err(ErrorCode::KeyNotFound) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Singleton
-// ---------------------------------------------------------------------------
-
-static STORE: Mutex<CriticalSectionRawMutex, Option<KvStore>> = Mutex::new(None);
-
-/// Erase every region in the KV store using the supplied `KvStore`.
-///
-/// Feeds watchdog channel 0 between sectors so the 5-second WDT never expires.
-fn erase_all_regions(store: &KvStore) {
-    for r in 0..NUM_REGIONS {
-        let _ = <QspiFlashController as tickv::FlashController<REGION_SIZE>>::erase_region(
-            &store.tickv.controller,
-            r,
-        );
-        embassy_nrf::pac::WDT
-            .rr(0)
-            .write(|w| w.set_rr(embassy_nrf::pac::wdt::vals::Rr::RELOAD));
-    }
-}
-
-/// Erase all KV store regions and trigger a system reset.
-///
-/// Call when persistent flash corruption is detected at runtime (e.g. a write
-/// that should always succeed returns `KvError::Other`). The firmware restarts
-/// with a clean store on the next boot.
-pub async fn wipe_and_reset() -> ! {
-    defmt::error!(
-        "KV: flash corruption — wiping {} regions and resetting",
-        NUM_REGIONS
-    );
-    let guard = STORE.lock().await;
-    if let Some(store) = guard.as_ref() {
-        erase_all_regions(store);
-    }
-    cortex_m::peripheral::SCB::sys_reset()
-}
 
 /// Initialise the KV store.  Call once from the main task before spawning
 /// any task that uses [`namespace()`].
@@ -192,62 +80,75 @@ pub async fn init<'d>(
     // Safety: init() is called from main() which never returns, so 'static is valid.
     let qspi: qspi::Qspi<'static> = unsafe { core::mem::transmute(qspi) };
 
-    static TICKV_BUF: StaticCell<AlignedBuf> = StaticCell::new();
-    let buf = TICKV_BUF.init(AlignedBuf([0u8; REGION_SIZE]));
+    let flash = QspiFlash { qspi };
 
-    let store = KvStore {
-        tickv: TicKV::new(
-            QspiFlashController::new(qspi),
-            &mut buf.0,
-            NUM_REGIONS * REGION_SIZE,
-        ),
-    };
+    let mut config = Config::default();
+    // Random seed for wear leveling.  We use a fixed value since we don't have
+    // an RNG available at init time; any non-zero constant is fine.
+    config.random_seed = 0xDEAD_BEEF;
 
-    match store.tickv.initialise(MAIN_KEY) {
-        Ok(_) | Err(ErrorCode::KeyNotFound) => {}
-        Err(e) => {
-            // Any error — schema version mismatch or corrupt data — is unrecoverable
-            // without a clean erase. Wipe all regions and reset; next boot starts fresh.
-            defmt::error!(
-                "KV store init error ({:?}) — erasing {} regions and resetting",
-                defmt::Debug2Format(&e),
-                NUM_REGIONS,
+    let db = DB_CELL.init(Database::new(flash, config));
+
+    match db.mount().await {
+        Ok(()) => {}
+        Err(MountError::Corrupted) => {
+            defmt::warn!(
+                "KV: store corrupted or not formatted — formatting {} pages",
+                KV_PAGE_COUNT
             );
-            erase_all_regions(&store);
+            db.format().await.ok();
+            if db.mount().await.is_err() {
+                defmt::error!("KV: mount after format failed — resetting");
+                cortex_m::peripheral::SCB::sys_reset();
+            }
+        }
+        Err(MountError::Flash(_)) => {
+            defmt::error!("KV: flash error during mount — resetting");
             cortex_m::peripheral::SCB::sys_reset();
         }
     }
 
-    *STORE.lock().await = Some(store);
-    defmt::info!(
-        "KV store ready ({} KiB, {} regions × {} KiB)",
-        NUM_REGIONS * REGION_SIZE / 1024,
-        NUM_REGIONS,
-        REGION_SIZE / 1024,
-    );
+    DB.init(db).ok();
+
+    defmt::info!("KV store ready ({} KiB, {} pages × 4 KiB)", KV_PAGE_COUNT * 4, KV_PAGE_COUNT);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Erase and reset
+// ---------------------------------------------------------------------------
+
+/// Format the KV store and trigger a system reset.
+///
+/// Call when persistent flash corruption is detected at runtime.  The firmware
+/// restarts with a clean store on the next boot.
+pub async fn wipe_and_reset() -> ! {
+    defmt::error!("KV: wiping store and resetting");
+    if let Ok(db) = get_db() {
+        db.format().await.ok();
+    }
+    cortex_m::peripheral::SCB::sys_reset()
 }
 
 // ---------------------------------------------------------------------------
 // Namespaced key derivation
 // ---------------------------------------------------------------------------
 
-/// Hash `"<namespace>:<key>"` in one FNV-1a pass with no heap allocation.
-fn namespaced_key(namespace: &str, key: &str) -> u64 {
-    const OFFSET: u64 = 14_695_981_039_346_656_037;
-    const PRIME: u64 = 1_099_511_628_211;
-    let mut h = OFFSET;
-    for &b in namespace.as_bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(PRIME);
+/// Build `"<namespace>:<key>"` as a stack-allocated byte string.
+///
+/// Maximum combined length is 63 bytes (namespace + ':' + key ≤ 63).
+/// Returns `None` if the combined key would exceed that limit.
+fn namespaced_key<'a>(namespace: &str, key: &str, buf: &'a mut [u8; 64]) -> Option<&'a [u8]> {
+    let total = namespace.len() + 1 + key.len();
+    if total > 63 {
+        return None;
     }
-    h ^= b':' as u64;
-    h = h.wrapping_mul(PRIME);
-    for &b in key.as_bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    h
+    let nb = namespace.as_bytes();
+    let kb = key.as_bytes();
+    buf[..nb.len()].copy_from_slice(nb);
+    buf[nb.len()] = b':';
+    buf[nb.len() + 1..nb.len() + 1 + kb.len()].copy_from_slice(kb);
+    Some(&buf[..total])
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +157,7 @@ fn namespaced_key(namespace: &str, key: &str) -> u64 {
 
 /// A lightweight namespaced handle to the KV store.
 ///
-/// All keys are transparently prefixed with `"<namespace>:"` before hashing,
+/// All keys are transparently prefixed with `"<namespace>:"` before storage,
 /// so modules never step on each other's keys.  Cheap to copy and recreate —
 /// just a pointer to a static string.
 ///
@@ -270,61 +171,99 @@ impl KvNamespace {
     /// Read the value for `key` into `buf`.
     /// Returns the number of bytes written on success.
     pub async fn get(&self, key: &str, buf: &mut [u8]) -> Result<usize, KvError> {
-        STORE
-            .lock()
-            .await
-            .as_mut()
-            .ok_or(KvError::NotInitialised)?
-            .get(namespaced_key(self.prefix, key), buf)
+        let mut kbuf = [0u8; 64];
+        let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
+        let db = get_db()?;
+        let rtx = db.read_transaction().await;
+        match rtx.read(k, buf).await {
+            Ok(n) => Ok(n),
+            Err(ekv::ReadError::KeyNotFound) => Err(KvError::NotFound),
+            Err(ekv::ReadError::BufferTooSmall) => Err(KvError::BufferTooSmall),
+            Err(ekv::ReadError::KeyTooBig) => Err(KvError::KeyTooLong),
+            Err(ekv::ReadError::Corrupted) => Err(KvError::Corrupted),
+            Err(ekv::ReadError::Flash(_)) => Err(KvError::Other),
+        }
     }
 
     /// Write `data` under `key`.
     ///
-    /// - `update: true`  — create the record if absent, overwrite if it exists.
+    /// - `update: true`  — create if absent, overwrite if it exists.
     /// - `update: false` — create only; returns [`KvError::KeyExists`] if the
     ///                     key is already present.
     pub async fn set(&self, key: &str, data: &[u8], update: bool) -> Result<(), KvError> {
-        STORE
-            .lock()
-            .await
-            .as_mut()
-            .ok_or(KvError::NotInitialised)?
-            .set(namespaced_key(self.prefix, key), data, update)
+        let mut kbuf = [0u8; 64];
+        let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
+        let db = get_db()?;
+
+        if !update {
+            // Check existence first; return KeyExists if found.
+            let rtx = db.read_transaction().await;
+            match rtx.read(k, &mut []).await {
+                Ok(_) | Err(ekv::ReadError::BufferTooSmall) => return Err(KvError::KeyExists),
+                Err(ekv::ReadError::KeyNotFound) => {}
+                Err(_) => {}
+            }
+        }
+
+        let mut wtx = db.write_transaction().await;
+        match wtx.write(k, data).await {
+            Ok(()) => {}
+            Err(ekv::WriteError::Full) => return Err(KvError::StoreFull),
+            Err(ekv::WriteError::Corrupted) => return Err(KvError::Corrupted),
+            Err(_) => return Err(KvError::Other),
+        }
+        match wtx.commit().await {
+            Ok(()) => Ok(()),
+            Err(ekv::CommitError::Corrupted) => Err(KvError::Corrupted),
+            Err(_) => Err(KvError::Other),
+        }
     }
 
     /// Delete the value for `key`.  Returns `Ok(())` even if the key did not exist.
     pub async fn delete(&self, key: &str) -> Result<(), KvError> {
-        STORE
-            .lock()
-            .await
-            .as_mut()
-            .ok_or(KvError::NotInitialised)?
-            .delete(namespaced_key(self.prefix, key))
+        let mut kbuf = [0u8; 64];
+        let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
+        let db = get_db()?;
+        let mut wtx = db.write_transaction().await;
+        match wtx.delete(k).await {
+            Ok(()) => {}
+            Err(ekv::WriteError::Corrupted) => return Err(KvError::Corrupted),
+            Err(_) => return Err(KvError::Other),
+        }
+        match wtx.commit().await {
+            Ok(()) => Ok(()),
+            Err(ekv::CommitError::Corrupted) => Err(KvError::Corrupted),
+            Err(_) => Err(KvError::Other),
+        }
     }
 
+    /// Returns `true` if the key exists in the store.
     pub async fn exists(&self, key: &str) -> Result<bool, KvError> {
-        Ok(STORE
-            .lock()
-            .await
-            .as_mut()
-            .ok_or(KvError::NotInitialised)?
-            .exists(namespaced_key(self.prefix, key)))
+        let mut kbuf = [0u8; 64];
+        let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
+        let db = get_db()?;
+        let rtx = db.read_transaction().await;
+        match rtx.read(k, &mut []).await {
+            Ok(_) | Err(ekv::ReadError::BufferTooSmall) => Ok(true),
+            Err(ekv::ReadError::KeyNotFound) => Ok(false),
+            Err(ekv::ReadError::Corrupted) => Err(KvError::Corrupted),
+            Err(_) => Err(KvError::Other),
+        }
     }
 }
 
 /// Obtain a namespaced handle to the KV store.
 ///
-/// This is free to call at any time — it creates a zero-cost handle with no
-/// allocation.  The KV store must be initialised with [`init()`] before any
-/// operations are issued through the returned handle.
+/// Free to call at any time — creates a zero-cost handle with no allocation.
+/// The KV store must be initialised with [`init()`] before any operations
+/// are issued through the returned handle.
 pub fn namespace(prefix: &'static str) -> KvNamespace {
     KvNamespace { prefix }
 }
 
 /// Write a known value and read it back to confirm the KV store is functional.
 ///
-/// Call once at startup after [`init()`].  Logs `KV smoke test OK` on success
-/// or a warning describing the failure if the store is broken.
+/// Call once at startup after [`init()`].
 pub async fn smoke_test() {
     const MAGIC: [u8; 4] = [0xCA, 0xFE, 0xBA, 0xBE];
     let kv = namespace("_test");

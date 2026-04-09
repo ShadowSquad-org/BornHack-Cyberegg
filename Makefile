@@ -11,10 +11,12 @@ FLASH_BASE = 0x0000D000
 # Build the app firmware (debug)
 fw:
 	cargo fw
+	@arm-none-eabi-size $(ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 
 # Build the app firmware (release)
 fw-release:
 	cargo fw-release
+	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 
 # Build and flash the debug firmware via SWD
 flash:
