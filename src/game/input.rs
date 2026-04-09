@@ -24,6 +24,31 @@ pub enum GameBtn {
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
+/// Try to handle a button press if the game screen is active.
+///
+/// `button_index` maps to hardware buttons: 0=Cancel, 1=Execute, 2=Up,
+/// 3=Down, 4=Left, 5=Right, 6=Fire.
+///
+/// Returns `true` if the game consumed the event. Returns `false` if the
+/// game screen is not active or the event should be forwarded to the menu.
+pub fn try_dispatch(button_index: u8) -> bool {
+    use crate::DISPLAY_STATE;
+    if DISPLAY_STATE.lock(|f| f.borrow().active_screen()) != crate::SCREEN_GAME {
+        return false;
+    }
+    let btn = match button_index {
+        0 => GameBtn::Cancel,
+        1 => GameBtn::Execute,
+        2 => GameBtn::Up,
+        3 => GameBtn::Down,
+        4 => GameBtn::Left,
+        5 => GameBtn::Right,
+        6 => GameBtn::Fire,
+        _ => return false,
+    };
+    dispatch(btn)
+}
+
 /// Route a button press on the game screen.
 ///
 /// Returns `true` if the game layer consumed the event.

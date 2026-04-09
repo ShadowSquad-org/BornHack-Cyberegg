@@ -1,5 +1,4 @@
 use crate::{DISPLAY_STATE, update_health};
-use crate::game::input::{GameBtn, dispatch};
 use embassy_nrf::gpio::Input;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 
@@ -64,82 +63,35 @@ pub async fn run_buttons(
             continue;
         }
 
-        let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == 0;
+        // Let the game handle the button first (if the game feature is active
+        // and the game screen is showing).  If it returns false the menu handles it.
+        #[cfg(feature = "game")]
+        let consumed_by_game = crate::game::input::try_dispatch(index as u8);
+        #[cfg(not(feature = "game"))]
+        let consumed_by_game = false;
+
+        if !consumed_by_game {
+            match index {
+                0 => DISPLAY_STATE.lock(|f| f.borrow_mut().on_cancel()),
+                // Execute has no role in the menu currently.
+                1 => {}
+                2 => DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up()),
+                3 => DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down()),
+                4 => DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left()),
+                5 => DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right()),
+                6 => DISPLAY_STATE.lock(|f| f.borrow_mut().fire()),
+                _ => {}
+            }
+        }
 
         match index {
-            0 => {
-                defmt::debug!("Cancel");
-                if on_game {
-                    dispatch(GameBtn::Cancel);
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().on_cancel());
-                }
-                btn_sender.send(0);
-                update_button_health!(btn_can, cancel);
-            }
-            1 => {
-                defmt::debug!("Execute");
-                if on_game {
-                    dispatch(GameBtn::Execute);
-                }
-                // Execute has no role in the non-game menu currently.
-                btn_sender.send(1);
-                update_button_health!(btn_exe, execute);
-            }
-            2 => {
-                defmt::debug!("Up");
-                if on_game {
-                    dispatch(GameBtn::Up);
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up());
-                }
-                btn_sender.send(2);
-                update_button_health!(joy_up, up);
-            }
-            3 => {
-                defmt::debug!("Down");
-                if on_game {
-                    dispatch(GameBtn::Down);
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down());
-                }
-                btn_sender.send(3);
-                update_button_health!(joy_down, down);
-            }
-            4 => {
-                defmt::debug!("Left");
-                if on_game {
-                    dispatch(GameBtn::Left);
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left());
-                }
-                btn_sender.send(4);
-                update_button_health!(joy_left, left);
-            }
-            5 => {
-                defmt::debug!("Right");
-                if on_game {
-                    // dispatch returns false when the cursor is at the grid edge.
-                    let consumed = dispatch(GameBtn::Right);
-                    if !consumed {
-                        DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
-                    }
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right());
-                }
-                btn_sender.send(5);
-                update_button_health!(joy_right, right);
-            }
-            6 => {
-                defmt::debug!("Fire");
-                if on_game {
-                    dispatch(GameBtn::Fire);
-                } else {
-                    DISPLAY_STATE.lock(|f| f.borrow_mut().fire());
-                }
-                btn_sender.send(6);
-                update_button_health!(joy_fire, fire);
-            }
+            0 => { btn_sender.send(0); update_button_health!(btn_can, cancel); }
+            1 => { btn_sender.send(1); update_button_health!(btn_exe, execute); }
+            2 => { btn_sender.send(2); update_button_health!(joy_up, up); }
+            3 => { btn_sender.send(3); update_button_health!(joy_down, down); }
+            4 => { btn_sender.send(4); update_button_health!(joy_left, left); }
+            5 => { btn_sender.send(5); update_button_health!(joy_right, right); }
+            6 => { btn_sender.send(6); update_button_health!(joy_fire, fire); }
             _ => unreachable!(),
         }
     }

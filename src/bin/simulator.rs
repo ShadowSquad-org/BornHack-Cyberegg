@@ -65,7 +65,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                 SimulatorEvent::Quit => break 'running,
                 SimulatorEvent::KeyDown { keycode, .. } => {
                     let active =
-                        hello_graphics::with_display_state!(|s: &std::cell::Ref<'_, DisplayState<6>>| {
+                        hello_graphics::with_display_state!(|s: &std::cell::Ref<'_, DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>>| {
                             s.active_screen()
                         });
                     match keycode {
@@ -74,7 +74,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 dispatch(GameBtn::Up);
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.menu_up());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.menu_up());
                             }
                             need_redraw = true;
                         }
@@ -82,7 +82,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 dispatch(GameBtn::Down);
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.menu_down());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.menu_down());
                             }
                             need_redraw = true;
                         }
@@ -90,7 +90,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 dispatch(GameBtn::Left);
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.screen_left());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.screen_left());
                             }
                             need_redraw = true;
                         }
@@ -98,12 +98,12 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 let consumed = dispatch(GameBtn::Right);
                                 if !consumed {
-                                    with_display_state_mut!(|s: &mut DisplayState<6>| {
+                                    with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| {
                                         s.screen_right()
                                     });
                                 }
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.screen_right());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.screen_right());
                             }
                             need_redraw = true;
                         }
@@ -111,7 +111,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 dispatch(GameBtn::Fire);
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.fire());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.fire());
                             }
                             need_redraw = true;
                         }
@@ -119,7 +119,7 @@ fn main() -> Result<(), core::convert::Infallible> {
                             if active == 0 {
                                 dispatch(GameBtn::Cancel);
                             } else {
-                                with_display_state_mut!(|s: &mut DisplayState<6>| s.on_cancel());
+                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.on_cancel());
                             }
                             need_redraw = true;
                         }

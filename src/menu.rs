@@ -144,30 +144,74 @@ impl ScreenState {
 // ── Top-level display state ───────────────────────────────────────────────────
 
 /// `M` screens, each with their own item list and cursor.
-/// Left/right switches screens; up/down moves within the current screen.
+/// Left/right switches screens, skipping disabled ones.
+/// Up/down moves within the current screen's menu.
 pub struct DisplayState<const M: usize> {
     active_screen: u8,
     screens: [ScreenState; M],
+    enabled: [bool; M],
 }
 
 #[allow(dead_code)]
 impl<const M: usize> DisplayState<M> {
-    pub const fn new(screens: [ScreenState; M]) -> Self {
+    pub const fn new(screens: [ScreenState; M], enabled: [bool; M]) -> Self {
+        // Start on the first enabled screen (or 0 if none enabled).
+        let mut first = 0u8;
+        while (first as usize) < M {
+            if enabled[first as usize] { break; }
+            first += 1;
+        }
+        if first as usize >= M { first = 0; }
         Self {
-            active_screen: 0,
+            active_screen: first,
             screens,
+            enabled,
+        }
+    }
+
+    /// Enable or disable a screen at runtime.  If the currently active
+    /// screen becomes disabled, jumps to the nearest enabled screen.
+    pub fn set_enabled(&mut self, screen: u8, on: bool) {
+        if (screen as usize) < M {
+            self.enabled[screen as usize] = on;
+        }
+        if !self.enabled[self.active_screen as usize] {
+            if let Some(s) = self.next_enabled_right(self.active_screen)
+                .or_else(|| self.next_enabled_left(self.active_screen))
+            {
+                self.active_screen = s;
+            }
+        }
+    }
+
+    fn next_enabled_right(&self, from: u8) -> Option<u8> {
+        let mut s = from as usize + 1;
+        while s < M {
+            if self.enabled[s] { return Some(s as u8); }
+            s += 1;
+        }
+        None
+    }
+
+    fn next_enabled_left(&self, from: u8) -> Option<u8> {
+        if from == 0 { return None; }
+        let mut s = from as usize - 1;
+        loop {
+            if self.enabled[s] { return Some(s as u8); }
+            if s == 0 { return None; }
+            s -= 1;
         }
     }
 
     pub fn screen_left(&mut self) {
-        if self.active_screen > 0 {
-            self.active_screen -= 1;
+        if let Some(s) = self.next_enabled_left(self.active_screen) {
+            self.active_screen = s;
         }
     }
 
     pub fn screen_right(&mut self) {
-        if (self.active_screen as usize) + 1 < M {
-            self.active_screen += 1;
+        if let Some(s) = self.next_enabled_right(self.active_screen) {
+            self.active_screen = s;
         }
     }
 
@@ -369,6 +413,7 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     },
 ];
 
+#[cfg(feature = "game")]
 static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "BornPets",
     kind: MenuItemKind::Action(|| {}),
@@ -415,33 +460,53 @@ static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
 
 // ── DISPLAY_STATE ─────────────────────────────────────────────────────────────
 
+pub const SCREEN_COUNT: usize = 6;
+
+// The game screen placeholder when the feature is disabled — never navigated to.
+#[cfg(not(feature = "game"))]
+static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "BornPets",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
+#[cfg(feature = "game")]
+const GAME_ENABLED: bool = true;
+#[cfg(not(feature = "game"))]
+const GAME_ENABLED: bool = false;
+
 #[cfg(feature = "embassy")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
 #[cfg(feature = "embassy")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<6>>> =
-    Mutex::new(RefCell::new(DisplayState::new([
-        ScreenState::new(&GAME_ITEMS),
-        ScreenState::new(&MAIN_ITEMS),
-        ScreenState::new(&PM_ITEMS),
-        ScreenState::new(&LORA_ITEMS),
-        ScreenState::new(&ADVERT_ITEMS),
-        ScreenState::new(&BADGERCORN_ITEMS),
-    ])));
+pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>> =
+    Mutex::new(RefCell::new(DisplayState::new(
+        [
+            ScreenState::new(&GAME_ITEMS),
+            ScreenState::new(&MAIN_ITEMS),
+            ScreenState::new(&PM_ITEMS),
+            ScreenState::new(&LORA_ITEMS),
+            ScreenState::new(&ADVERT_ITEMS),
+            ScreenState::new(&BADGERCORN_ITEMS),
+        ],
+        [GAME_ENABLED, true, true, true, true, true],
+    )));
 
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
 #[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<6>>> =
-    Mutex::new(RefCell::new(DisplayState::new([
-        ScreenState::new(&GAME_ITEMS),
-        ScreenState::new(&MAIN_ITEMS),
-        ScreenState::new(&PM_ITEMS),
-        ScreenState::new(&LORA_ITEMS),
-        ScreenState::new(&ADVERT_ITEMS),
-        ScreenState::new(&BADGERCORN_ITEMS),
-    ])));
+pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<SCREEN_COUNT>>> =
+    Mutex::new(RefCell::new(DisplayState::new(
+        [
+            ScreenState::new(&GAME_ITEMS),
+            ScreenState::new(&MAIN_ITEMS),
+            ScreenState::new(&PM_ITEMS),
+            ScreenState::new(&LORA_ITEMS),
+            ScreenState::new(&ADVERT_ITEMS),
+            ScreenState::new(&BADGERCORN_ITEMS),
+        ],
+        [GAME_ENABLED, true, true, true, true, true],
+    )));
 
 // ── Scrolling menu renderer ───────────────────────────────────────────────────
 

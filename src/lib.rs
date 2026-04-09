@@ -11,6 +11,7 @@ pub enum ScreenError {
 
 #[cfg(feature = "embassy")]
 pub mod fw;
+#[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
 use core::cell::{Ref, RefCell};
@@ -707,6 +708,8 @@ macro_rules! with_display_state_mut {
 static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
 // Screen indices — keep in sync with the DisplayState array in menu.rs.
+// The game screen is always at index 0 but disabled when the game feature is off.
+// Navigation automatically skips disabled screens.
 pub const SCREEN_GAME:       u8 = 0;
 pub const SCREEN_MAIN:       u8 = 1;
 pub const SCREEN_PM:         u8 = 2;
@@ -719,8 +722,9 @@ pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resu
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let active = with_display_state!(|state: &Ref<'_, DisplayState<6>>| state.active_screen());
+    let active = with_display_state!(|state: &Ref<'_, DisplayState<{ menu::SCREEN_COUNT }>>| state.active_screen());
     match active {
+        #[cfg(feature = "game")]
         SCREEN_GAME => game::draw_screen_game(display, game::nav::get_nav()),
         SCREEN_MAIN => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
@@ -848,7 +852,7 @@ where
         .map(|_| ())
     })?;
 
-    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<6>>| {
+    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<{ menu::SCREEN_COUNT }>>| {
         let screen = state.current_screen();
         (screen.current_items(), screen.current_pos())
     });
