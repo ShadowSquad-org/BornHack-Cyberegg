@@ -193,6 +193,12 @@ pub static PM_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// Active BLE pairing passkey (6-digit, 0–999999). `u32::MAX` means no pairing in progress.
 pub static BLE_PASSKEY: AtomicU32 = AtomicU32::new(u32::MAX);
 
+/// Set to `true` while a BLE companion is connected, `false` on disconnect.
+pub static BLE_CONNECTED: AtomicBool = AtomicBool::new(false);
+
+/// Set to `true` when an unread PM arrives; cleared when the PM screen is viewed.
+pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
+
 /// Fired by the BLE task whenever the pairing passkey changes (new passkey or cleared).
 #[cfg(feature = "embassy")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -700,20 +706,30 @@ macro_rules! with_display_state_mut {
 // Position of the animated circle
 static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
+// Screen indices — keep in sync with the DisplayState array in menu.rs.
+pub const SCREEN_GAME:       u8 = 0;
+pub const SCREEN_MAIN:       u8 = 1;
+pub const SCREEN_PM:         u8 = 2;
+pub const SCREEN_CHANNEL:    u8 = 3;
+pub const SCREEN_ADVERT:     u8 = 4;
+pub const SCREEN_BADGERCORN: u8 = 5;
+
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let active = with_display_state!(|state: &Ref<'_, DisplayState<5>>| state.active_screen());
+    let active = with_display_state!(|state: &Ref<'_, DisplayState<6>>| state.active_screen());
     match active {
-        0 => game::draw_screen_game(display, game::nav::get_nav()),
-        1 => draw_screen_main(display, health_str, bat_prc),
+        SCREEN_GAME => game::draw_screen_game(display, game::nav::get_nav()),
+        SCREEN_MAIN => draw_screen_main(display, health_str, bat_prc),
         #[cfg(feature = "embassy")]
-        2 => draw_screen_lora(display, bat_prc),
+        SCREEN_PM => draw_screen_pm(display, bat_prc),
         #[cfg(feature = "embassy")]
-        3 => draw_screen_advert(display, bat_prc),
-        // Screen 4 (badgercorn) is rendered via blit() in embassy.rs — nothing to draw here.
+        SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
+        #[cfg(feature = "embassy")]
+        SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
+        // SCREEN_BADGERCORN is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 
@@ -832,7 +848,7 @@ where
         .map(|_| ())
     })?;
 
-    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<5>>| {
+    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<6>>| {
         let screen = state.current_screen();
         (screen.current_items(), screen.current_pos())
     });
@@ -899,7 +915,7 @@ where
 }
 
 #[cfg(feature = "embassy")]
-fn draw_screen_lora<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
+fn draw_screen_pm<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -908,6 +924,9 @@ where
     let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
+    // Header bar: "Direct Message" + battery
+    Text::with_text_style("Direct Message", Point::new(4, 14), style_bold, bottom)
+        .draw(display)?;
     let bat_text = format!(4; "{}%", bat_prc).unwrap();
     Text::with_text_style(
         &bat_text,
@@ -919,12 +938,15 @@ where
             .build(),
     )
     .draw(display)?;
+    Rectangle::new(Point::new(0, 16), Size::new(152, 1))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
 
-    LAST_LORA_MSG.lock(|cell| -> Result<(), D::Error> {
+    LAST_PM.lock(|cell| -> Result<(), D::Error> {
         match *cell.borrow() {
             None => {
                 Text::with_text_style(
-                    "No messages",
+                    "No private messages",
                     display.bounding_box().center(),
                     style_msg,
                     TextStyleBuilder::new()
@@ -935,21 +957,86 @@ where
                 .draw(display)?;
             }
             Some(ref msg) => {
-                // Row 1: channel name (bold)
-                Text::with_text_style(msg.channel.as_str(), Point::new(4, 14), style_bold, bottom)
-                    .draw(display)?;
-
-                // Row 2: sender nickname (bold)
-                Text::with_text_style(msg.sender.as_str(), Point::new(4, 28), style_bold, bottom)
+                // Sender name (bold)
+                Text::with_text_style(msg.sender_name.as_str(), Point::new(4, 30), style_bold, bottom)
                     .draw(display)?;
 
                 // Divider
-                Rectangle::new(Point::new(0, 30), Size::new(152, 1))
+                Rectangle::new(Point::new(0, 32), Size::new(152, 1))
                     .into_styled(PrimitiveStyle::with_fill(BLACK))
                     .draw(display)?;
 
-                // Rows 3+: message text wrapped at 21 chars, 14px per line
-                draw_wrapped(display, msg.text.as_str(), 4, 44, 14, 21, style_msg)?;
+                // Message text wrapped
+                draw_wrapped(display, msg.text.as_str(), 4, 46, 14, 21, style_msg)?;
+
+                // RSSI at bottom
+                let rssi_text = format!(16; "{} dBm", msg.rssi).unwrap();
+                Text::with_text_style(&rssi_text, Point::new(4, 152), style_rssi, bottom)
+                    .draw(display)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(feature = "embassy")]
+fn draw_screen_lora<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
+
+    // Header bar: "Channel" + battery
+    Text::with_text_style("Channel", Point::new(4, 14), style_bold, bottom)
+        .draw(display)?;
+    let bat_text = format!(4; "{}%", bat_prc).unwrap();
+    Text::with_text_style(
+        &bat_text,
+        Point::new(148, 14),
+        style_msg,
+        TextStyleBuilder::new()
+            .baseline(Baseline::Bottom)
+            .alignment(Alignment::Right)
+            .build(),
+    )
+    .draw(display)?;
+    Rectangle::new(Point::new(0, 16), Size::new(152, 1))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+
+    LAST_LORA_MSG.lock(|cell| -> Result<(), D::Error> {
+        match *cell.borrow() {
+            None => {
+                Text::with_text_style(
+                    "No channel messages",
+                    display.bounding_box().center(),
+                    style_msg,
+                    TextStyleBuilder::new()
+                        .baseline(Baseline::Middle)
+                        .alignment(Alignment::Center)
+                        .build(),
+                )
+                .draw(display)?;
+            }
+            Some(ref msg) => {
+                // Channel name (bold)
+                Text::with_text_style(msg.channel.as_str(), Point::new(4, 30), style_bold, bottom)
+                    .draw(display)?;
+
+                // Sender nickname (bold)
+                Text::with_text_style(msg.sender.as_str(), Point::new(4, 44), style_bold, bottom)
+                    .draw(display)?;
+
+                // Divider
+                Rectangle::new(Point::new(0, 46), Size::new(152, 1))
+                    .into_styled(PrimitiveStyle::with_fill(BLACK))
+                    .draw(display)?;
+
+                // Message text wrapped
+                draw_wrapped(display, msg.text.as_str(), 4, 60, 14, 21, style_msg)?;
 
                 // RSSI and SNR at bottom
                 let rssi_text = format!(24; "{} dBm / {} dB", msg.rssi, msg.snr_x4 / 4).unwrap();

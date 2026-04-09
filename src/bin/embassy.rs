@@ -21,7 +21,8 @@ use hello_graphics::fw::kv;
 use hello_graphics::fw::meshcore::run_meshcore_listener;
 use hello_graphics::fw::settings;
 use hello_graphics::{
-    ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, MINUTE_TICK,
+    ADVERT_SIGNAL, BLE_PAIRING_SIGNAL, DISPLAY_STATE, LORA_MSG_SIGNAL, MINUTE_TICK, PM_SIGNAL,
+    SCREEN_BADGERCORN, SCREEN_MAIN, SCREEN_PM, SCREEN_CHANNEL, SCREEN_ADVERT,
     health_err, unix_now, with_health,
 };
 use hello_graphics::{
@@ -240,7 +241,7 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(battery_task(battery_monitor));
     spawner.must_spawn(minute_tick_task());
 
-    // White light blink indicating we can enter the main loop
+    // White light blink indicating we can enter the main loop.
     led_red.set_low();
     led_green.set_low();
     led_blue.set_low();
@@ -250,13 +251,22 @@ async fn main(spawner: Spawner) {
     led_blue.set_high();
     Timer::after_millis(200).await;
 
+    // Hand the LED pins to the LED driver task.
+    use hello_graphics::fw::led;
+    spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
+
     defmt::info!("Entering main loop...");
     let main_loop = async {
         loop {
             let _ = display.clear(Color::White);
             // Snapshot active screen once; used for rendering and event filtering below.
             let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
-            if active_screen == 4 {
+            // Clear the unread PM indicator and stop the blue LED when the PM screen is viewed.
+            if active_screen == SCREEN_PM {
+                hello_graphics::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
+                led::set_led(&led::LED_BLUE, led::LedState::Off);
+            }
+            if active_screen == SCREEN_BADGERCORN {
                 display.blit(Some(BADGERCORN_DATA), None);
             } else {
                 let health_str = with_health!(|f| f.to_string());
@@ -274,7 +284,8 @@ async fn main(spawner: Spawner) {
             // controller may be mid-refresh, but the hardware reset at the top
             // of the next iteration will abort it and reinitialise the controller.
             // If the update finishes first, we wait for the next event normally.
-            use embassy_futures::select::{Either, Either4, select, select4};
+            use embassy_futures::select::{Either, Either3, select, select3};
+
             let update_completed = matches!(
                 select(
                     async {
@@ -285,54 +296,37 @@ async fn main(spawner: Spawner) {
                     async {
                         loop {
                             match select(
-                                select4(
-                                    button_rcvr.changed(),
-                                    LORA_MSG_SIGNAL.wait(),
-                                    ADVERT_SIGNAL.wait(),
-                                    BLE_PAIRING_SIGNAL.wait(),
-                                ),
-                                MINUTE_TICK.wait(),
-                            )
-                            .await
-                            {
-                                Either::First(Either4::First(_)) => break,
-                                Either::First(Either4::Second(_)) if active_screen == 2 => break,
-                                Either::First(Either4::Third(_)) if active_screen == 3 => break,
-                                Either::First(Either4::Fourth(_)) => break,
-                                Either::Second(_) if active_screen == 1 => break,
+                                select3(button_rcvr.changed(), BLE_PAIRING_SIGNAL.wait(), MINUTE_TICK.wait()),
+                                select3(PM_SIGNAL.wait(), LORA_MSG_SIGNAL.wait(), ADVERT_SIGNAL.wait()),
+                            ).await {
+                                Either::First(Either3::First(_))  => break,
+                                Either::First(Either3::Second(_)) => break,
+                                Either::First(Either3::Third(_))  if active_screen == SCREEN_MAIN    => break,
+                                Either::Second(Either3::First(_))  if active_screen == SCREEN_PM      => break,
+                                Either::Second(Either3::Second(_)) if active_screen == SCREEN_CHANNEL => break,
+                                Either::Second(Either3::Third(_))  if active_screen == SCREEN_ADVERT  => break,
                                 _ => {}
                             }
                         }
                     },
-                )
-                .await,
+                ).await,
                 Either::First(_)
             );
 
-            led_red.set_low();
-            Timer::after_millis(50).await;
-            led_red.set_high();
+            led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
 
             if update_completed {
-                // Update finished cleanly — wait for the next event before redrawing.
-                // Signal-driven redraws only fire when the relevant screen is active.
                 loop {
                     match select(
-                        select4(
-                            button_rcvr.changed(),
-                            LORA_MSG_SIGNAL.wait(),
-                            ADVERT_SIGNAL.wait(),
-                            BLE_PAIRING_SIGNAL.wait(),
-                        ),
-                        MINUTE_TICK.wait(),
-                    )
-                    .await
-                    {
-                        Either::First(Either4::First(_)) => break,
-                        Either::First(Either4::Second(_)) if active_screen == 2 => break,
-                        Either::First(Either4::Third(_)) if active_screen == 3 => break,
-                        Either::First(Either4::Fourth(_)) => break,
-                        Either::Second(_) if active_screen == 1 => break,
+                        select3(button_rcvr.changed(), BLE_PAIRING_SIGNAL.wait(), MINUTE_TICK.wait()),
+                        select3(PM_SIGNAL.wait(), LORA_MSG_SIGNAL.wait(), ADVERT_SIGNAL.wait()),
+                    ).await {
+                        Either::First(Either3::First(_))  => break,
+                        Either::First(Either3::Second(_)) => break,
+                        Either::First(Either3::Third(_))  if active_screen == SCREEN_MAIN    => break,
+                        Either::Second(Either3::First(_))  if active_screen == SCREEN_PM      => break,
+                        Either::Second(Either3::Second(_)) if active_screen == SCREEN_CHANNEL => break,
+                        Either::Second(Either3::Third(_))  if active_screen == SCREEN_ADVERT  => break,
                         _ => {}
                     }
                 }

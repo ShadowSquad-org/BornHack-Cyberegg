@@ -13,6 +13,7 @@ pub mod epd;
 pub mod health;
 pub mod iso14443;
 pub mod kv;
+pub mod led;
 pub mod nfct;
 pub mod storage;
 pub mod meshcore;

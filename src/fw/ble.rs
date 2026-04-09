@@ -559,6 +559,7 @@ async fn nus_peripheral_loop<C>(
         };
 
         defmt::info!("BLE: connected");
+        crate::BLE_CONNECTED.store(true, core::sync::atomic::Ordering::Relaxed);
 
         // Enable bonding so the security manager hands us the LTK after pairing
         // and sets the bonding bit in the local AuthReq.  Without this,
@@ -701,6 +702,7 @@ async fn nus_peripheral_loop<C>(
                             defmt::Debug2Format(&reason)
                         );
                         crate::BLE_PASSKEY.store(u32::MAX, Ordering::Relaxed);
+                        crate::BLE_CONNECTED.store(false, Ordering::Relaxed);
                         crate::BLE_PAIRING_SIGNAL.signal(());
                         break;
                     }

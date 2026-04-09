@@ -701,13 +701,22 @@ async fn log_txt_msg(
                 let _ = text_str.push_str(text);
                 crate::LAST_PM.lock(|cell| {
                     *cell.borrow_mut() = Some(crate::LastPm {
-                        sender_name: display_name,
-                        text: text_str,
+                        sender_name: display_name.clone(),
+                        text: text_str.clone(),
                         timestamp: dec.timestamp,
                         rssi,
                     });
                 });
                 crate::PM_SIGNAL.signal(());
+                crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
+
+                // Blue LED blink when BLE is not connected.
+                if !crate::BLE_CONNECTED.load(core::sync::atomic::Ordering::Relaxed) {
+                    crate::fw::led::set_led(
+                        &crate::fw::led::LED_BLUE,
+                        crate::fw::led::LedState::Blink,
+                    );
+                }
             }
         }
     }

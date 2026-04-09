@@ -393,6 +393,11 @@ static MAIN_ITEMS: [MenuItem; 4] = [
     },
 ];
 
+static PM_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "PM",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
 static LORA_ITEMS: [MenuItem; 1] = [MenuItem {
     label: || "LoRa",
     kind: MenuItemKind::Action(|| {}),
@@ -414,10 +419,11 @@ static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
 
 #[cfg(feature = "embassy")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<5>>> =
+pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<6>>> =
     Mutex::new(RefCell::new(DisplayState::new([
         ScreenState::new(&GAME_ITEMS),
         ScreenState::new(&MAIN_ITEMS),
+        ScreenState::new(&PM_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
         ScreenState::new(&BADGERCORN_ITEMS),
@@ -427,10 +433,11 @@ pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<5>>> =
 use std::sync::Mutex;
 
 #[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<5>>> =
+pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<6>>> =
     Mutex::new(RefCell::new(DisplayState::new([
         ScreenState::new(&GAME_ITEMS),
         ScreenState::new(&MAIN_ITEMS),
+        ScreenState::new(&PM_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
         ScreenState::new(&BADGERCORN_ITEMS),
