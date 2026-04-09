@@ -107,9 +107,20 @@ opt-level = "z"
 # default = ["simulator"]
 # default = ["embassy"]
 game = []
+mesh = [
+    "sx126x",
+    "nrf-mpsl",
+    "nrf-sdc",
+    "trouble-host",
+    "rand_core",
+    "ekv",
+    "meshcore",
+    "meshcore-companion",
+]
 simulator = ["embedded-graphics-simulator", "heapless", "game"]
 embassy = [
     "game",
+    "mesh",
     "cortex-m",
     "cortex-m-rt",
     "defmt",
@@ -126,14 +137,6 @@ embassy = [
     "panic-probe",
     "ssd1675",
     "static_cell",
-    "sx126x",
-    "nrf-mpsl",
-    "nrf-sdc",
-    "trouble-host",
-    "rand_core",
-    "ekv",
-    "meshcore",
-    "meshcore-companion",
 ]
 
 # [workspace]
