@@ -3,8 +3,8 @@ extern crate embedded_graphics as eg;
 extern crate embedded_graphics_simulator as simulator;
 
 use hello_graphics::{
-    DISPLAY_STATE, DisplayState, TriColor, draw_graphics,
-    game::input::{GameBtn, dispatch},
+    DISPLAY_STATE, TriColor, draw_graphics,
+    menu::ButtonId,
     with_display_state_mut,
 };
 
@@ -42,6 +42,21 @@ impl OriginDimensions for TriColorDisplay<'_> {
     }
 }
 
+/// Map SDL keycode to ButtonId.
+fn key_to_button(k: Keycode) -> Option<ButtonId> {
+    match k {
+        Keycode::Up        => Some(ButtonId::Up),
+        Keycode::Down      => Some(ButtonId::Down),
+        Keycode::Left      => Some(ButtonId::Left),
+        Keycode::Right     => Some(ButtonId::Right),
+        Keycode::Return    => Some(ButtonId::Fire),
+        Keycode::Space     => Some(ButtonId::Fire),
+        Keycode::Backspace => Some(ButtonId::Cancel),
+        Keycode::E         => Some(ButtonId::Execute),
+        _                  => None,
+    }
+}
+
 fn main() -> Result<(), core::convert::Infallible> {
     let mut display: SimulatorDisplay<Rgb888> = SimulatorDisplay::new(Size::new(152, 152));
     let mut window = Window::new("BornPets simulator", &OutputSettings::default());
@@ -64,72 +79,10 @@ fn main() -> Result<(), core::convert::Infallible> {
             match event {
                 SimulatorEvent::Quit => break 'running,
                 SimulatorEvent::KeyDown { keycode, .. } => {
-                    let active =
-                        hello_graphics::with_display_state!(|s: &std::cell::Ref<'_, DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>>| {
-                            s.active_screen()
-                        });
-                    match keycode {
-                        Keycode::Escape => break 'running,
-                        Keycode::Up => {
-                            if active == 0 {
-                                dispatch(GameBtn::Up);
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.menu_up());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::Down => {
-                            if active == 0 {
-                                dispatch(GameBtn::Down);
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.menu_down());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::Left => {
-                            if active == 0 {
-                                dispatch(GameBtn::Left);
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.screen_left());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::Right => {
-                            if active == 0 {
-                                let consumed = dispatch(GameBtn::Right);
-                                if !consumed {
-                                    with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| {
-                                        s.screen_right()
-                                    });
-                                }
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.screen_right());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::Return => {
-                            if active == 0 {
-                                dispatch(GameBtn::Fire);
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.fire());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::Backspace => {
-                            if active == 0 {
-                                dispatch(GameBtn::Cancel);
-                            } else {
-                                with_display_state_mut!(|s: &mut DisplayState<{ hello_graphics::menu::SCREEN_COUNT }>| s.on_cancel());
-                            }
-                            need_redraw = true;
-                        }
-                        Keycode::E => {
-                            if active == 0 {
-                                dispatch(GameBtn::Execute);
-                            }
-                            need_redraw = true;
-                        }
-                        _ => {}
+                    if keycode == Keycode::Escape { break 'running; }
+                    if let Some(btn) = key_to_button(keycode) {
+                        handle_button(btn);
+                        need_redraw = true;
                     }
                 }
                 _ => {}
@@ -138,4 +91,16 @@ fn main() -> Result<(), core::convert::Infallible> {
     }
 
     Ok(())
+}
+
+/// Route a button press: game first (if active), then menu.
+fn handle_button(btn: ButtonId) {
+    #[cfg(feature = "game")]
+    {
+        let on_game = hello_graphics::with_display_state!(|s| s.active_screen()) == hello_graphics::SCREEN_GAME;
+        if on_game && hello_graphics::game::input::dispatch(btn) {
+            return;
+        }
+    }
+    with_display_state_mut!(|s| s.dispatch_button(btn));
 }

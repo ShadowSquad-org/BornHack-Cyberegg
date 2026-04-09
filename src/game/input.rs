@@ -1,88 +1,42 @@
 //! BornPets game-screen input routing.
 //!
 //! [`dispatch`] is the single entry point for all button events while the game
-//! screen (screen 0) is active.  It decides whether a modal is open or not,
-//! and routes accordingly.  Returning `false` tells the caller that the event
-//! was not consumed by the game layer and should be forwarded to the global
-//! [`DisplayState`] (e.g. to switch screens).
+//! screen is active.  It decides whether a modal is open or not, and routes
+//! accordingly.  Returning `false` tells the caller that the event was not
+//! consumed by the game layer and should be forwarded to the menu.
 
+use crate::menu::ButtonId;
 use super::modal;
 use super::nav::{get_nav, nav_down, nav_left, nav_right, nav_up, NavResult};
-
-// ── Button enum ───────────────────────────────────────────────────────────────
-
-/// Hardware button / joystick direction, abstracted away from GPIO indices.
-pub enum GameBtn {
-    Cancel,
-    Execute,
-    Up,
-    Down,
-    Left,
-    Right,
-    Fire,
-}
-
-// ── Dispatch ──────────────────────────────────────────────────────────────────
-
-/// Try to handle a button press if the game screen is active.
-///
-/// `button_index` maps to hardware buttons: 0=Cancel, 1=Execute, 2=Up,
-/// 3=Down, 4=Left, 5=Right, 6=Fire.
-///
-/// Returns `true` if the game consumed the event. Returns `false` if the
-/// game screen is not active or the event should be forwarded to the menu.
-pub fn try_dispatch(button_index: u8) -> bool {
-    use crate::DISPLAY_STATE;
-    if DISPLAY_STATE.lock(|f| f.borrow().active_screen()) != crate::SCREEN_GAME {
-        return false;
-    }
-    let btn = match button_index {
-        0 => GameBtn::Cancel,
-        1 => GameBtn::Execute,
-        2 => GameBtn::Up,
-        3 => GameBtn::Down,
-        4 => GameBtn::Left,
-        5 => GameBtn::Right,
-        6 => GameBtn::Fire,
-        _ => return false,
-    };
-    dispatch(btn)
-}
 
 /// Route a button press on the game screen.
 ///
 /// Returns `true` if the game layer consumed the event.
-/// Returns `false` if the caller should forward to `DisplayState`
-/// (only possible for `Right` at the grid edge, which advances to the next
-/// screen, and `Cancel` / `Execute` while no modal is open).
-pub fn dispatch(btn: GameBtn) -> bool {
+/// Returns `false` if the caller should forward to the menu
+/// (e.g. `Right` at the grid edge to advance to the next screen).
+pub fn dispatch(btn: ButtonId) -> bool {
     if modal::is_open() {
-        // All input goes to the modal while it is active.
         match btn {
-            GameBtn::Cancel             => modal::close(),
-            GameBtn::Up                 => modal::cursor_up(),
-            GameBtn::Down               => modal::cursor_down(),
-            GameBtn::Fire | GameBtn::Execute => modal::activate(),
-            GameBtn::Left | GameBtn::Right   => {}  // ignored in modal
+            ButtonId::Cancel             => modal::close(),
+            ButtonId::Up                 => modal::cursor_up(),
+            ButtonId::Down               => modal::cursor_down(),
+            ButtonId::Fire | ButtonId::Execute => modal::activate(),
+            ButtonId::Left | ButtonId::Right   => {}
         }
         true
     } else {
         match btn {
-            GameBtn::Up    => { nav_up();   true }
-            GameBtn::Down  => { nav_down(); true }
-            GameBtn::Left  => { nav_left(); true }
-            GameBtn::Right => {
-                // At the right edge: signal the caller to move to the next screen.
-                matches!(nav_right(), NavResult::Moved)
-            }
-            GameBtn::Fire | GameBtn::Execute => {
+            ButtonId::Up    => { nav_up();   true }
+            ButtonId::Down  => { nav_down(); true }
+            ButtonId::Left  => { nav_left(); true }
+            ButtonId::Right => matches!(nav_right(), NavResult::Moved),
+            ButtonId::Fire | ButtonId::Execute => {
                 let nav  = get_nav();
                 let kind = modal::kind_for_icon(nav.row, nav.col);
                 modal::open(kind);
                 true
             }
-            // Cancel with no modal open: nothing to do on the game screen.
-            GameBtn::Cancel => true,
+            ButtonId::Cancel => true,
         }
     }
 }

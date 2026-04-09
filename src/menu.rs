@@ -10,6 +10,56 @@ use embedded_graphics::{
 
 use crate::{BLACK, TriColor, WHITE};
 
+// ── Screen identifiers ──────────────────────────────────────────────────────
+
+/// Screen identifiers — array index into `DisplayState`.
+/// Adding or reordering a variant automatically adjusts indices.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ScreenId {
+    Game       = 0,
+    Main       = 1,
+    Pm         = 2,
+    Channel    = 3,
+    Advert     = 4,
+    Badgercorn = 5,
+}
+
+impl ScreenId {
+    pub const fn index(self) -> u8 { self as u8 }
+    pub const COUNT: usize = 6;
+}
+
+// ── Button identifiers ──────────────────────────────────────────────────────
+
+/// Hardware button / joystick direction.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ButtonId {
+    Cancel  = 0,
+    Execute = 1,
+    Up      = 2,
+    Down    = 3,
+    Left    = 4,
+    Right   = 5,
+    Fire    = 6,
+}
+
+impl ButtonId {
+    pub fn from_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(Self::Cancel),
+            1 => Some(Self::Execute),
+            2 => Some(Self::Up),
+            3 => Some(Self::Down),
+            4 => Some(Self::Left),
+            5 => Some(Self::Right),
+            6 => Some(Self::Fire),
+            _ => None,
+        }
+    }
+}
+
 // ── Item kinds ────────────────────────────────────────────────────────────────
 
 pub enum MenuItemKind {
@@ -243,6 +293,20 @@ impl<const M: usize> DisplayState<M> {
         self.current_screen_mut().on_cancel();
     }
 
+    /// Dispatch a button press to the menu layer.
+    /// Called when the game layer did not consume the event.
+    pub fn dispatch_button(&mut self, btn: ButtonId) {
+        match btn {
+            ButtonId::Cancel  => self.on_cancel(),
+            ButtonId::Execute => {} // no menu role
+            ButtonId::Up      => self.menu_up(),
+            ButtonId::Down    => self.menu_down(),
+            ButtonId::Left    => self.screen_left(),
+            ButtonId::Right   => self.screen_right(),
+            ButtonId::Fire    => self.fire(),
+        }
+    }
+
     pub fn get_current_menu_item(&self) -> Option<&'static str> {
         self.current_screen().get_current_label()
     }
@@ -460,7 +524,7 @@ static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
 
 // ── DISPLAY_STATE ─────────────────────────────────────────────────────────────
 
-pub const SCREEN_COUNT: usize = 6;
+pub const SCREEN_COUNT: usize = ScreenId::COUNT;
 
 // The game screen placeholder when the feature is disabled — never navigated to.
 #[cfg(not(feature = "game"))]

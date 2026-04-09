@@ -1,4 +1,5 @@
 use crate::{DISPLAY_STATE, update_health};
+use crate::menu::ButtonId;
 use embassy_nrf::gpio::Input;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Sender, watch::Watch};
 
@@ -36,63 +37,54 @@ pub async fn run_buttons(
         ])
         .await;
 
+        let Some(btn) = ButtonId::from_index(index) else { continue };
+
         // Only act on button-down (active low).
-        let is_low = match index {
-            0 => btn_can.is_low(),
-            1 => btn_exe.is_low(),
-            2 => joy_up.is_low(),
-            3 => joy_down.is_low(),
-            4 => joy_left.is_low(),
-            5 => joy_right.is_low(),
-            6 => joy_fire.is_low(),
-            _ => false,
+        let is_low = match btn {
+            ButtonId::Cancel  => btn_can.is_low(),
+            ButtonId::Execute => btn_exe.is_low(),
+            ButtonId::Up      => joy_up.is_low(),
+            ButtonId::Down    => joy_down.is_low(),
+            ButtonId::Left    => joy_left.is_low(),
+            ButtonId::Right   => joy_right.is_low(),
+            ButtonId::Fire    => joy_fire.is_low(),
         };
 
-        if !is_low {
-            // Update health diagnostics on any edge, then skip the action.
-            match index {
-                0 => update_button_health!(btn_can, cancel),
-                1 => update_button_health!(btn_exe, execute),
-                2 => update_button_health!(joy_up, up),
-                3 => update_button_health!(joy_down, down),
-                4 => update_button_health!(joy_left, left),
-                5 => update_button_health!(joy_right, right),
-                6 => update_button_health!(joy_fire, fire),
-                _ => {}
-            }
-            continue;
-        }
+        // Update health diagnostics on every edge.
+        update_health_for(btn, &btn_can, &btn_exe, &joy_up, &joy_down, &joy_left, &joy_right, &joy_fire);
 
-        // Let the game handle the button first (if the game feature is active
-        // and the game screen is showing).  If it returns false the menu handles it.
-        #[cfg(feature = "game")]
-        let consumed_by_game = crate::game::input::try_dispatch(index as u8);
-        #[cfg(not(feature = "game"))]
-        let consumed_by_game = false;
+        if is_low {
+            // Let the game handle the button first when its screen is active.
+            #[cfg(feature = "game")]
+            let consumed = {
+                let on_game = DISPLAY_STATE.lock(|f| f.borrow().active_screen()) == crate::SCREEN_GAME;
+                on_game && crate::game::input::dispatch(btn)
+            };
+            #[cfg(not(feature = "game"))]
+            let consumed = false;
 
-        if !consumed_by_game {
-            match index {
-                0 => DISPLAY_STATE.lock(|f| f.borrow_mut().on_cancel()),
-                // Execute has no role in the menu currently.
-                1 => {}
-                2 => DISPLAY_STATE.lock(|f| f.borrow_mut().menu_up()),
-                3 => DISPLAY_STATE.lock(|f| f.borrow_mut().menu_down()),
-                4 => DISPLAY_STATE.lock(|f| f.borrow_mut().screen_left()),
-                5 => DISPLAY_STATE.lock(|f| f.borrow_mut().screen_right()),
-                6 => DISPLAY_STATE.lock(|f| f.borrow_mut().fire()),
-                _ => {}
+            if !consumed {
+                DISPLAY_STATE.lock(|f| f.borrow_mut().dispatch_button(btn));
             }
         }
 
-        match index {
-            0 => { btn_sender.send(0); update_button_health!(btn_can, cancel); }
-            1 => { btn_sender.send(1); update_button_health!(btn_exe, execute); }
-            2 => { btn_sender.send(2); update_button_health!(joy_up, up); }
-            3 => { btn_sender.send(3); update_button_health!(joy_down, down); }
-            4 => { btn_sender.send(4); update_button_health!(joy_left, left); }
-            5 => { btn_sender.send(5); update_button_health!(joy_right, right); }
-            6 => { btn_sender.send(6); update_button_health!(joy_fire, fire); }
-            _ => unreachable!(),
-        }
+        btn_sender.send(index as u8);
+    }
+}
+
+fn update_health_for(
+    btn: ButtonId,
+    btn_can: &Input<'_>, btn_exe: &Input<'_>,
+    joy_up: &Input<'_>, joy_down: &Input<'_>,
+    joy_left: &Input<'_>, joy_right: &Input<'_>, joy_fire: &Input<'_>,
+) {
+    match btn {
+        ButtonId::Cancel  => update_button_health!(btn_can, cancel),
+        ButtonId::Execute => update_button_health!(btn_exe, execute),
+        ButtonId::Up      => update_button_health!(joy_up, up),
+        ButtonId::Down    => update_button_health!(joy_down, down),
+        ButtonId::Left    => update_button_health!(joy_left, left),
+        ButtonId::Right   => update_button_health!(joy_right, right),
+        ButtonId::Fire    => update_button_health!(joy_fire, fire),
     }
 }

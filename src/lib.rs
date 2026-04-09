@@ -14,7 +14,7 @@ pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
-use core::cell::{Ref, RefCell};
+use core::cell::RefCell;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
 use core::result::{Result, Result::Ok};
@@ -667,62 +667,76 @@ pub static TELEM_RESULT_CHANNEL: embassy_sync::channel::Channel<
 > = embassy_sync::channel::Channel::new();
 
 // Macro for embassy - immutable access
+/// Access the shared `DisplayState` immutably.
+/// Usage: `with_display_state!(|s| s.active_screen())`
 #[cfg(feature = "embassy")]
 #[macro_export]
 macro_rules! with_display_state {
     ($f:expr) => {
-        DISPLAY_STATE.lock(|cell| $f(&cell.borrow()))
+        DISPLAY_STATE.lock(|cell| {
+            let state = cell.borrow();
+            let f: &dyn Fn(&$crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
+            f(&state)
+        })
     };
 }
 
-// Macro for embassy - mutable access
+/// Access the shared `DisplayState` mutably.
+/// Usage: `with_display_state_mut!(|s| s.dispatch_button(btn))`
 #[cfg(feature = "embassy")]
 #[macro_export]
 macro_rules! with_display_state_mut {
     ($f:expr) => {
-        DISPLAY_STATE.lock(|cell| $f(&mut cell.borrow_mut()))
+        DISPLAY_STATE.lock(|cell| {
+            let mut state = cell.borrow_mut();
+            let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
+            f(&mut state)
+        })
     };
 }
 
-// Macro for simulator - immutable access
 #[cfg(feature = "simulator")]
 #[macro_export]
 macro_rules! with_display_state {
     ($f:expr) => {{
         let guard = DISPLAY_STATE.lock().unwrap();
-        $f(&guard.borrow())
+        let state = guard.borrow();
+        let f: &dyn Fn(&$crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
+        f(&state)
     }};
 }
 
-// Macro for simulator - mutable access
 #[cfg(feature = "simulator")]
 #[macro_export]
 macro_rules! with_display_state_mut {
     ($f:expr) => {{
         let guard = DISPLAY_STATE.lock().unwrap();
-        $f(&mut guard.borrow_mut())
+        let mut state = guard.borrow_mut();
+        let f: &dyn Fn(&mut $crate::menu::DisplayState<{ $crate::menu::SCREEN_COUNT }>) -> _ = &$f;
+        f(&mut state)
     }};
 }
 
 // Position of the animated circle
 static CIRCLE_POS: AtomicU32 = AtomicU32::new(0);
 
-// Screen indices — keep in sync with the DisplayState array in menu.rs.
+// Re-export screen indices from ScreenId for convenience.
 // The game screen is always at index 0 but disabled when the game feature is off.
 // Navigation automatically skips disabled screens.
-pub const SCREEN_GAME:       u8 = 0;
-pub const SCREEN_MAIN:       u8 = 1;
-pub const SCREEN_PM:         u8 = 2;
-pub const SCREEN_CHANNEL:    u8 = 3;
-pub const SCREEN_ADVERT:     u8 = 4;
-pub const SCREEN_BADGERCORN: u8 = 5;
+pub use menu::ScreenId;
+pub const SCREEN_GAME:       u8 = ScreenId::Game       as u8;
+pub const SCREEN_MAIN:       u8 = ScreenId::Main       as u8;
+pub const SCREEN_PM:         u8 = ScreenId::Pm         as u8;
+pub const SCREEN_CHANNEL:    u8 = ScreenId::Channel    as u8;
+pub const SCREEN_ADVERT:     u8 = ScreenId::Advert     as u8;
+pub const SCREEN_BADGERCORN: u8 = ScreenId::Badgercorn as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let active = with_display_state!(|state: &Ref<'_, DisplayState<{ menu::SCREEN_COUNT }>>| state.active_screen());
+    let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]
         SCREEN_GAME => game::draw_screen_game(display, game::nav::get_nav()),
@@ -852,7 +866,7 @@ where
         .map(|_| ())
     })?;
 
-    let (items, pos) = with_display_state!(|state: &Ref<'_, DisplayState<{ menu::SCREEN_COUNT }>>| {
+    let (items, pos) = with_display_state!(|state| {
         let screen = state.current_screen();
         (screen.current_items(), screen.current_pos())
     });
