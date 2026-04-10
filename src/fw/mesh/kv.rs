@@ -19,13 +19,12 @@
 //! let n = store.get("health", &mut buf).await?;
 //! ```
 
-use embassy_nrf::{Peri, peripherals, qspi};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::once_lock::OnceLock;
 use ekv::{Config, Database, MountError};
 use static_cell::StaticCell;
 
-use super::storage::{KV_PAGE_COUNT, QspiFlash, QspiIrqs, init_qspi};
+use super::storage::{KV_PAGE_COUNT, SharedFlash};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -48,7 +47,7 @@ pub enum KvError {
 // Singleton Database
 // ---------------------------------------------------------------------------
 
-type Db = Database<QspiFlash, CriticalSectionRawMutex>;
+type Db = Database<SharedFlash, CriticalSectionRawMutex>;
 
 static DB_CELL: StaticCell<Db> = StaticCell::new();
 static DB: OnceLock<&'static Db> = OnceLock::new();
@@ -61,30 +60,12 @@ fn get_db() -> Result<&'static Db, KvError> {
 // Initialisation
 // ---------------------------------------------------------------------------
 
-/// Initialise the KV store.  Call once from the main task before spawning
-/// any task that uses [`namespace()`].
-///
-/// Returns `Err([u8; 3])` with the raw JEDEC ID bytes if the QSPI flash chip
-/// cannot be reached (all-0xFF = no device, all-0x00 = bus fault).
-pub async fn init<'d>(
-    qspi_periph: Peri<'d, peripherals::QSPI>,
-    sck: Peri<'d, peripherals::P0_21>,
-    csn: Peri<'d, peripherals::P0_25>,
-    io0: Peri<'d, peripherals::P0_20>,
-    io1: Peri<'d, peripherals::P0_24>,
-    io2: Peri<'d, peripherals::P0_22>,
-    io3: Peri<'d, peripherals::P0_23>,
-) -> Result<(), [u8; 3]> {
-    let qspi = init_qspi(qspi_periph, QspiIrqs, sck, csn, io0, io1, io2, io3)?;
-
-    // Safety: init() is called from main() which never returns, so 'static is valid.
-    let qspi: qspi::Qspi<'static> = unsafe { core::mem::transmute(qspi) };
-
-    let flash = QspiFlash { qspi };
+/// Initialise the KV store.  Call once from the main task after
+/// [`crate::fw::flash::init`] has been called.
+pub async fn init() {
+    let flash = SharedFlash;
 
     let mut config = Config::default();
-    // Random seed for wear leveling.  We use a fixed value since we don't have
-    // an RNG available at init time; any non-zero constant is fine.
     config.random_seed = 0xDEAD_BEEF;
 
     let db = DB_CELL.init(Database::new(flash, config));
@@ -111,7 +92,6 @@ pub async fn init<'d>(
     DB.init(db).ok();
 
     defmt::info!("KV store ready ({} KiB, {} pages × 4 KiB)", KV_PAGE_COUNT * 4, KV_PAGE_COUNT);
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

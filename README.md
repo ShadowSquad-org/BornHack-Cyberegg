@@ -182,20 +182,32 @@ cd cyberegg/embedded_graphics/hello-graphics
 
 ### Firmware (nRF52840)
 
+The firmware can be built in three configurations:
+
+| Variant                    | Game | Mesh (LoRa/BLE) | Use case                                             |
+| -------------------------- | ---- | --------------- | ---------------------------------------------------- |
+| Full (`make fw`)           | yes  | yes             | Production — everything enabled                      |
+| Game only (`make fw-game`) | yes  | no              | Game development when full build exceeds flash       |
+| Mesh only (`make fw-mesh`) | no   | yes             | Mesh/radio development when full build exceeds flash |
+
 ```bash
-make fw              # Debug build
-make fw-release      # Release build (optimised for size)
+make fw              # Full debug build (game + mesh)
+make fw-release      # Full release build (optimised for size)
+make fw-game         # Game only (no mesh)
+make fw-mesh         # Mesh only (no game)
 ```
 
-Both print the flash and RAM usage after building. The release build uses full LTO and `opt-level = "z"` for minimum binary size.
+All print flash and RAM usage after building. Release builds use full LTO and `opt-level = "z"` for minimum binary size.
 
 ### Flash firmware
 
 Connect a debug probe (J-Link, ST-Link, or CMSIS-DAP) to the badge SWD header, then:
 
 ```bash
-make flash           # Build + flash debug firmware via SWD
-make flash-release   # Build + flash release firmware via SWD
+make flash              # Build + flash full debug firmware (SWD)
+make flash-release      # Build + flash full release firmware (SWD)
+make flash-game         # Build + flash game-only debug firmware (SWD)
+make flash-mesh         # Build + flash mesh-only debug firmware (SWD)
 ```
 
 For USB DFU flashing (hold the execute button while powering on to enter DFU mode):
@@ -239,18 +251,24 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 
 ### All make targets
 
-| Command                  | Description                              |
-| ------------------------ | ---------------------------------------- |
-| `make fw`                | Build debug firmware                     |
-| `make fw-release`        | Build release firmware                   |
-| `make flash`             | Build + flash debug firmware (SWD)       |
-| `make flash-release`     | Build + flash release firmware (SWD)     |
-| `make dfu-flash`         | Build + flash debug firmware (USB DFU)   |
-| `make dfu-flash-release` | Build + flash release firmware (USB DFU) |
-| `make sim`               | Build and run the SDL2 simulator         |
-| `make monitor`           | Attach RTT log monitor to running device |
-| `make bl`                | Build bootloader                         |
-| `make bl-flash`          | Full-chip erase + flash bootloader       |
+| Command                  | Description                               |
+| ------------------------ | ----------------------------------------- |
+| `make fw`                | Build full debug firmware (game + mesh)   |
+| `make fw-release`        | Build full release firmware               |
+| `make fw-game`           | Build game-only debug firmware            |
+| `make fw-game-release`   | Build game-only release firmware          |
+| `make fw-mesh`           | Build mesh-only debug firmware            |
+| `make fw-mesh-release`   | Build mesh-only release firmware          |
+| `make flash`             | Build + flash full debug firmware (SWD)   |
+| `make flash-release`     | Build + flash full release firmware (SWD) |
+| `make flash-game`        | Build + flash game-only firmware (SWD)    |
+| `make flash-mesh`        | Build + flash mesh-only firmware (SWD)    |
+| `make dfu-flash`         | Build + flash debug firmware (USB DFU)    |
+| `make dfu-flash-release` | Build + flash release firmware (USB DFU)  |
+| `make sim`               | Build and run the SDL2 simulator          |
+| `make monitor`           | Attach RTT log monitor to running device  |
+| `make bl`                | Build bootloader                          |
+| `make bl-flash`          | Full-chip erase + flash bootloader        |
 
 ## Python balance simulator
 

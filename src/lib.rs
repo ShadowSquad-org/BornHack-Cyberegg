@@ -22,12 +22,14 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use embedded_graphics::{
     mono_font::{
         MonoTextStyle,
-        ascii::{FONT_7X13, FONT_7X13_BOLD, FONT_10X20},
+        ascii::{FONT_7X13, FONT_10X20},
     },
     prelude::*,
     primitives::{Circle, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
+#[cfg(feature = "mesh")]
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 #[cfg(feature = "embassy-base")]
 #[cfg(feature = "simulator")]
 fn get_device_id() -> [u8; 4] {
@@ -423,6 +425,7 @@ where
 }
 
 /// Draw `text` line by line, wrapping at `chars_per_line` characters.
+#[cfg(feature = "mesh")]
 fn draw_wrapped<D>(
     display: &mut D,
     text: &str,

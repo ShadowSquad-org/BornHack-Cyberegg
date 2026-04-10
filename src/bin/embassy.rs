@@ -13,14 +13,14 @@ use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
 use hello_graphics::fw::images::badgercorn::BADGERCORN_DATA;
 use hello_graphics::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK,
-    SCREEN_BADGERCORN, SCREEN_MAIN,
-    board, draw_graphics, health_err, unix_now, with_health,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_BADGERCORN, SCREEN_MAIN, board,
+    draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, buzzer_task},
     fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd},
     fw::led,
     fw::nfct::run_nfct,
+    health_err, unix_now, with_health,
 };
 use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
@@ -32,13 +32,13 @@ use hello_graphics::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
     bonds::bond_task,
     contacts::ContactStore,
-    kv, settings,
+    kv,
     meshcore::run_meshcore_listener,
+    settings,
 };
 #[cfg(feature = "mesh")]
 use hello_graphics::{
-    ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL,
-    SCREEN_PM, SCREEN_CHANNEL, SCREEN_ADVERT,
+    ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 
 // ---------------------------------------------------------------------------
@@ -67,23 +67,38 @@ async fn main(spawner: Spawner) {
 
     let _ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
 
+    // ── External flash (shared between KV store and USB mass storage) ────
+    match hello_graphics::fw::flash::init(
+        p.QSPI,
+        board!(p, flash_sck),
+        board!(p, flash_csn),
+        board!(p, flash_io0),
+        board!(p, flash_io1),
+        board!(p, flash_io2),
+        board!(p, flash_io3),
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(id) => defmt::panic!(
+            "QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})",
+            id[0],
+            id[1],
+            id[2],
+        ),
+    }
+
+    // ── FAT12 partition — auto-format if blank ─────────────────────────
+    if let Err(e) = hello_graphics::fw::fat12::format_if_needed().await {
+        defmt::warn!("FAT12 format check failed: {:?}", e);
+    }
+
     // ── Mesh stack (KV, contacts, identity, BLE) ─────────────────────────
     // Must come before temperature/EPD because it consumes p.RNG, p.RTC0,
     // p.TIMER0, p.TEMP, and PPI channels.
     #[cfg(feature = "mesh")]
     let identity = {
-        match kv::init(
-            p.QSPI,
-            board!(p, flash_sck), board!(p, flash_csn),
-            board!(p, flash_io0), board!(p, flash_io1),
-            board!(p, flash_io2), board!(p, flash_io3),
-        ).await {
-            Ok(()) => {}
-            Err(id) => defmt::panic!(
-                "QSPI flash not reachable (JEDEC ID: {:02X} {:02X} {:02X})",
-                id[0], id[1], id[2],
-            ),
-        }
+        kv::init().await;
         spawner.must_spawn(bond_task());
         ContactStore::new().init().await;
 
@@ -94,19 +109,40 @@ async fn main(spawner: Spawner) {
             StaticCell::new();
         let sdc = init_ble(
             &spawner,
-            p.RTC0, p.TIMER0, p.TEMP,
-            p.PPI_CH19, p.PPI_CH30, p.PPI_CH31,
-            p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21,
-            p.PPI_CH22, p.PPI_CH23, p.PPI_CH24, p.PPI_CH25,
-            p.PPI_CH26, p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
+            p.RTC0,
+            p.TIMER0,
+            p.TEMP,
+            p.PPI_CH19,
+            p.PPI_CH30,
+            p.PPI_CH31,
+            p.PPI_CH17,
+            p.PPI_CH18,
+            p.PPI_CH20,
+            p.PPI_CH21,
+            p.PPI_CH22,
+            p.PPI_CH23,
+            p.PPI_CH24,
+            p.PPI_CH25,
+            p.PPI_CH26,
+            p.PPI_CH27,
+            p.PPI_CH28,
+            p.PPI_CH29,
             p.RNG,
             SDC_MEM.init(nrf_sdc::Mem::new()),
         );
         spawner.must_spawn(run_ble_peripheral(
-            sdc, CompanionContext { pub_key: identity.pub_key }, ble_prng_seed,
+            sdc,
+            CompanionContext {
+                pub_key: identity.pub_key,
+            },
+            ble_prng_seed,
         ));
         identity
     };
+
+    // ── Sprite loader (game assets from FAT12 partition) ────────────────
+    #[cfg(feature = "game")]
+    hello_graphics::game::sprite_loader::init().await;
 
     // ── Temperature ──────────────────────────────────────────────────────
     let temp_celsius = hello_graphics::fw::temperature::read_and_cache().await;
@@ -118,25 +154,34 @@ async fn main(spawner: Spawner) {
     static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
     let mut display: EpdGfx<'_> = init_epd(
         board!(p, epd_spi),
-        board!(p, epd_sck).into(), board!(p, epd_mosi).into(),
-        board!(p, epd_busy).into(), board!(p, epd_reset).into(),
-        board!(p, epd_dc).into(), board!(p, epd_csn).into(),
+        board!(p, epd_sck).into(),
+        board!(p, epd_mosi).into(),
+        board!(p, epd_busy).into(),
+        board!(p, epd_reset).into(),
+        board!(p, epd_dc).into(),
+        board!(p, epd_csn).into(),
         EpdConfig::to_dimensions(),
         BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
         RED_BUF.init([0; EpdConfig::BUF_SIZE]),
         WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
         Some(temp_celsius),
         LutMode::NoInvert,
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     defmt::info!("EPD initialized");
 
     // ── LEDs ─────────────────────────────────────────────────────────────
     let mut led_red = Output::new(board!(p, led_red), Level::High, OutputDrive::Standard);
     let mut led_green = Output::new(board!(p, led_green), Level::High, OutputDrive::Standard);
     let mut led_blue = Output::new(board!(p, led_blue), Level::High, OutputDrive::Standard);
-    led_red.set_low(); led_green.set_low(); led_blue.set_low();
+    led_red.set_low();
+    led_green.set_low();
+    led_blue.set_low();
     Timer::after_millis(200).await;
-    led_red.set_high(); led_green.set_high(); led_blue.set_high();
+    led_red.set_high();
+    led_green.set_high();
+    led_blue.set_high();
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
@@ -152,33 +197,66 @@ async fn main(spawner: Spawner) {
         Input::new(board!(p, joy_fire), Pull::Up),
     );
     let run_nfc = run_nfct(p.NFCT);
-    spawner.must_spawn(buzzer_task(Buzzer::new(
-        SimplePwm::new_1ch(p.PWM0, board!(p, buzzer), &Default::default()),
-    )));
+    spawner.must_spawn(buzzer_task(Buzzer::new(SimplePwm::new_1ch(
+        p.PWM0,
+        board!(p, buzzer),
+        &Default::default(),
+    ))));
     let battery_monitor = match init_battery(p.SAADC, board!(p, vbat), board!(p, vbat_rd)).await {
         Ok(m) => m,
-        Err(e) => { defmt::error!("Battery init failed: {:?}", e); return; }
+        Err(e) => {
+            defmt::error!("Battery init failed: {:?}", e);
+            return;
+        }
     };
     spawner.must_spawn(battery_task(battery_monitor));
     spawner.must_spawn(minute_tick_task());
+
+    // ── USB mass storage ──────────────────────────────────────────────────
+    // Runs alongside all other tasks.  VBUS detection is automatic —
+    // the USB PHY powers up when a cable is connected.
+    #[cfg(feature = "usb-storage")]
+    let run_usb = hello_graphics::fw::usb_storage::run(p.USBD);
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
     let main_loop = display_loop(&mut display, &mut button_rcvr);
 
-    #[cfg(feature = "mesh")]
+    #[cfg(all(feature = "mesh", feature = "usb-storage"))]
     {
         let run_lora = run_meshcore_listener(
             board!(p, lora_spi),
-            board!(p, lora_sck).into(), board!(p, lora_mosi).into(),
-            board!(p, lora_miso).into(), board!(p, lora_rst).into(),
-            board!(p, lora_nss).into(), board!(p, lora_busy).into(),
-            board!(p, lora_dio1).into(), board!(p, lora_rf_sw).into(),
+            board!(p, lora_sck).into(),
+            board!(p, lora_mosi).into(),
+            board!(p, lora_miso).into(),
+            board!(p, lora_rst).into(),
+            board!(p, lora_nss).into(),
+            board!(p, lora_busy).into(),
+            board!(p, lora_dio1).into(),
+            board!(p, lora_rf_sw).into(),
+            &identity,
+        );
+        embassy_futures::join::join5(main_loop, run_nfc, buttons, run_lora, run_usb).await;
+    }
+    #[cfg(all(feature = "mesh", not(feature = "usb-storage")))]
+    {
+        let run_lora = run_meshcore_listener(
+            board!(p, lora_spi),
+            board!(p, lora_sck).into(),
+            board!(p, lora_mosi).into(),
+            board!(p, lora_miso).into(),
+            board!(p, lora_rst).into(),
+            board!(p, lora_nss).into(),
+            board!(p, lora_busy).into(),
+            board!(p, lora_dio1).into(),
+            board!(p, lora_rf_sw).into(),
             &identity,
         );
         embassy_futures::join::join4(main_loop, run_nfc, buttons, run_lora).await;
     }
-    #[cfg(not(feature = "mesh"))]
+    #[cfg(all(not(feature = "mesh"), feature = "usb-storage"))]
+    embassy_futures::join::join4(main_loop, run_nfc, buttons, run_usb).await;
+    #[cfg(all(not(feature = "mesh"), not(feature = "usb-storage")))]
     embassy_futures::join::join3(main_loop, run_nfc, buttons).await;
 }
 
@@ -188,13 +266,48 @@ async fn main(spawner: Spawner) {
 
 async fn display_loop(
     display: &mut EpdGfx<'_>,
-    button_rcvr: &mut embassy_sync::watch::Receiver<'_, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, u8, 2>,
+    button_rcvr: &mut embassy_sync::watch::Receiver<
+        '_,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        u8,
+        2,
+    >,
 ) {
     use embassy_futures::select::{Either, select};
+
+    // Start at frame 1 so the animation plays 15000000→15000003 then
+    // wraps to 00000000 (index 0) before cycling back. Falls back to 0
+    // if fewer than 2 frames exist.
+    #[cfg(feature = "game")]
+    let mut sprite_frame: u8 = if hello_graphics::game::sprite_loader::frame_count() > 1 {
+        1
+    } else {
+        0
+    };
 
     loop {
         let _ = display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
+
+        // Load current sprite frame into the display buffers before drawing.
+        // Each redraw of the game screen advances to the next frame.
+        // The sprite timer in wait_display_event ensures this happens
+        // every 10 seconds (not on every button press).
+        #[cfg(feature = "game")]
+        {
+            if active_screen == hello_graphics::SCREEN_GAME
+                && hello_graphics::game::sprite_loader::frame_count() > 0
+            {
+                defmt::info!("sprite: displaying frame {}", sprite_frame);
+                hello_graphics::game::sprite_loader::blit(
+                    display,
+                    sprite_frame,
+                    0,
+                    hello_graphics::game::PET_AREA_TOP as i32,
+                )
+                .await;
+            }
+        }
 
         #[cfg(feature = "mesh")]
         if active_screen == SCREEN_PM {
@@ -212,57 +325,119 @@ async fn display_loop(
             }
         }
 
-        let update_completed = matches!(
-            select(
-                async {
-                    let _ = display.reset().await;
-                    let _ = display.update_bw(UpdateMode::Mode1).await;
-                    let _ = display.deep_sleep().await;
-                },
-                wait_display_event(button_rcvr, active_screen),
-            ).await,
-            Either::First(_)
-        );
+        let sprite_advance = match select(
+            async {
+                let _ = display.reset().await;
+                let _ = display.update_bw(UpdateMode::Mode1).await;
+                let _ = display.deep_sleep().await;
+            },
+            wait_display_event(button_rcvr, active_screen),
+        )
+        .await
+        {
+            Either::First(_) => {
+                // Update finished — wait for next event.
+                wait_display_event(button_rcvr, active_screen).await
+            }
+            Either::Second(sprite) => sprite, // interrupted by event
+        };
 
         led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
 
-        if update_completed {
-            wait_display_event(button_rcvr, active_screen).await;
+        // Advance animation frame only when the sprite timer fired.
+        #[cfg(feature = "game")]
+        if sprite_advance {
+            let count = hello_graphics::game::sprite_loader::frame_count();
+            if count > 0 {
+                sprite_frame = (sprite_frame + 1) % count;
+            }
         }
+        #[cfg(not(feature = "game"))]
+        let _ = sprite_advance;
     }
 }
 
 /// Wait for a display-relevant event for the given screen.
+///
+/// Returns `true` if the sprite animation timer fired (caller should
+/// advance the frame), `false` for all other events.
 async fn wait_display_event(
-    button_rcvr: &mut embassy_sync::watch::Receiver<'_, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, u8, 2>,
+    button_rcvr: &mut embassy_sync::watch::Receiver<
+        '_,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        u8,
+        2,
+    >,
     active_screen: u8,
-) {
+) -> bool {
     use embassy_futures::select::{Either, Either3, select, select3};
 
+    #[cfg(feature = "game")]
+    let sprite_active = active_screen == hello_graphics::SCREEN_GAME
+        && hello_graphics::game::sprite_loader::frame_count() > 0;
+
     loop {
+        #[cfg(feature = "game")]
+        let sprite_tick = async {
+            // Wait for 2 seconds to advance the sprite frame.
+            if sprite_active {
+                Timer::after_secs(2).await;
+            } else {
+                core::future::pending::<()>().await;
+            }
+        };
+        #[cfg(not(feature = "game"))]
+        let sprite_tick = core::future::pending::<()>();
+
         #[cfg(feature = "mesh")]
-        match select(
-            select3(button_rcvr.changed(), BLE_PAIRING_SIGNAL.wait(), MINUTE_TICK.wait()),
-            select3(PM_SIGNAL.wait(), LORA_MSG_SIGNAL.wait(), ADVERT_SIGNAL.wait()),
-        ).await {
-            Either::First(Either3::First(_))   => return,
-            Either::First(Either3::Second(_))  => return,
-            Either::First(Either3::Third(_))   if active_screen == SCREEN_MAIN    => return,
-            Either::Second(Either3::First(_))  if active_screen == SCREEN_PM      => return,
-            Either::Second(Either3::Second(_)) if active_screen == SCREEN_CHANNEL => return,
-            Either::Second(Either3::Third(_))  if active_screen == SCREEN_ADVERT  => return,
-            _ => {}
+        {
+            use embassy_futures::select::Either4;
+            use embassy_futures::select::select4;
+            match select(
+                select3(
+                    button_rcvr.changed(),
+                    BLE_PAIRING_SIGNAL.wait(),
+                    MINUTE_TICK.wait(),
+                ),
+                select4(
+                    sprite_tick,
+                    PM_SIGNAL.wait(),
+                    LORA_MSG_SIGNAL.wait(),
+                    ADVERT_SIGNAL.wait(),
+                ),
+            )
+            .await
+            {
+                Either::Second(Either4::First(_)) => return true, // sprite timer
+                Either::First(Either3::First(_)) => return false,
+                Either::First(Either3::Second(_)) => return false,
+                Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
+                Either::Second(Either4::Second(_)) if active_screen == SCREEN_PM => return false,
+                Either::Second(Either4::Third(_)) if active_screen == SCREEN_CHANNEL => {
+                    return false;
+                }
+                Either::Second(Either4::Fourth(_)) if active_screen == SCREEN_ADVERT => {
+                    return false;
+                }
+                _ => {}
+            }
         }
 
         #[cfg(not(feature = "mesh"))]
-        match select3(
-            button_rcvr.changed(),
-            BLE_PAIRING_SIGNAL.wait(),
-            MINUTE_TICK.wait(),
-        ).await {
-            Either3::First(_)  => return,
-            Either3::Second(_) => return,
-            Either3::Third(_) if active_screen == SCREEN_MAIN => return,
+        match select(
+            select3(
+                button_rcvr.changed(),
+                BLE_PAIRING_SIGNAL.wait(),
+                MINUTE_TICK.wait(),
+            ),
+            sprite_tick,
+        )
+        .await
+        {
+            Either::Second(_) => return true, // sprite timer
+            Either::First(Either3::First(_)) => return false,
+            Either::First(Either3::Second(_)) => return false,
+            Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
             _ => {}
         }
     }

@@ -20,11 +20,12 @@
 pub mod input;
 pub mod modal;
 pub mod nav;
+pub mod sprite_loader;
 pub use nav::{GameNav, Row};
 
 use embedded_graphics::{
     prelude::*,
-    primitives::{Circle, Ellipse, PrimitiveStyle, Rectangle},
+    primitives::{Circle, PrimitiveStyle, Rectangle},
 };
 
 use crate::{BLACK, TriColor, WHITE};
@@ -39,6 +40,8 @@ const TOP_CY: i32 = 17;
 const BOT_CY: i32 = 131;
 /// Y of the separator below the top icon row.
 const SEP_TOP: i32 = 34;
+/// First display row of the pet/sprite area.
+pub const PET_AREA_TOP: usize = SEP_TOP as usize + 1;
 /// Y of the separator above the bottom icon row.
 const SEP_BOT: i32 = 111;
 /// Radius of the selection circle background (diameter = 26 px).
@@ -245,19 +248,6 @@ where
     Ok(())
 }
 
-// ── Egg sprite ────────────────────────────────────────────────────────────────
-
-/// Draw the egg sprite centred at `center` (used while `is_egg == true`).
-fn draw_egg<D>(display: &mut D, center: Point) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    Ellipse::new(Point::new(center.x - 16, center.y - 21), Size::new(32, 42))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
-        .draw(display)?;
-    Ok(())
-}
-
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Render the BornPets game screen (screen 0).
@@ -293,8 +283,22 @@ where
         .draw(display)?;
 
     // ── Pet area ──────────────────────────────────────────────────────────────
-    let pet_center = Point::new(76, (SEP_TOP + SEP_BOT) / 2);
-    draw_egg(display, pet_center)?;
+    // When sprite frames are available, load_frame() has already blitted
+    // pixels directly into the display buffers before this function runs.
+    if sprite_loader::frame_count() == 0 {
+        use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_7X13};
+        use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+        Text::with_text_style(
+            "No sprites on flash",
+            Point::new(76, (SEP_TOP + SEP_BOT) / 2),
+            MonoTextStyle::new(&FONT_7X13, BLACK),
+            TextStyleBuilder::new()
+                .baseline(Baseline::Middle)
+                .alignment(Alignment::Center)
+                .build(),
+        )
+        .draw(display)?;
+    }
 
     // Separator
     Rectangle::new(Point::new(0, SEP_BOT), Size::new(152, 1))
