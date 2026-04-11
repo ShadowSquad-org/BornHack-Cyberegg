@@ -17,6 +17,7 @@
 //! The focused icon is highlighted: black filled circle + icon drawn in white.
 //! Navigation state lives in [`nav`].
 
+pub mod engine;
 pub mod input;
 pub mod modal;
 pub mod nav;

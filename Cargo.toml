@@ -156,6 +156,11 @@ required-features = ["simulator"]
 
 
 [[bin]]
+name = "simulate_game"
+path = "src/bin/simulate_game.rs"
+required-features = ["simulator"]
+
+[[bin]]
 name = "embassy"
 path = "src/bin/embassy.rs"
 required-features = ["embassy-base"]

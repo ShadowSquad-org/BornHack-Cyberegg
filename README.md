@@ -270,9 +270,88 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make bl`                | Build bootloader                          |
 | `make bl-flash`          | Full-chip erase + flash bootloader        |
 
-## Python balance simulator
+## Game engine
 
-See [`simulation_py/README.md`](simulation_py/README.md) for the Bornpets game balance simulator.
+The CyberÆgg virtual pet game uses a **delta-T progression engine** that computes stat changes in one step over any time interval, rather than ticking every 10 seconds. The engine predicts the next boundary crossing (where a rate or modifier changes) and sleeps until then — saving battery on the badge while maintaining precise game state.
+
+### Stats
+
+Five primary stats (u16, 0 = best, 65535 = worst):
+
+| Stat          | Fills in         | What makes it worse                             | What helps              |
+| ------------- | ---------------- | ----------------------------------------------- | ----------------------- |
+| **Hunger**    | ~20 hours        | Time, miserable boost                           | Feed action             |
+| **Tired**     | ~13 hours        | Time, miserable boost                           | Sleep (tiered recovery) |
+| **Drained**   | Interval-based   | Activity, miserable boost                       | Relax action, sleep     |
+| **Sick**      | ~7.6 days (base) | Time + condition decay when other stats are bad | Heal action             |
+| **Miserable** | Interval-based   | Multiple stats above 60%                        | Play action (zeroes it) |
+
+Stats interact through feedback loops: high miserable boosts hunger/tired/drained decay rates, bad hunger/tired/drained trigger accelerated sick decay, and multiple bad stats increase miserable's growth rate.
+
+### Traits
+
+Each pet hatches with randomized traits (25%–75% range):
+
+- **Vitality** — determines initial sick level (higher = healthier start)
+- **Curiosity** — reduces play action costs (higher = cheaper to play)
+- **Resilience** — reserved for future use
+
+### Actions
+
+| Action    | Duration     | Cooldown | Effect                                        |
+| --------- | ------------ | -------- | --------------------------------------------- |
+| **Feed**  | 2 ticks      | 12 ticks | Reduces hunger and drained                    |
+| **Heal**  | 3 ticks      | 24 ticks | Reduces sick                                  |
+| **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                |
+| **Play**  | 4 ticks      | 48 ticks | Zeroes miserable (costs hunger/tired/drained) |
+| **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery       |
+
+Actions are mutually exclusive. During an action and its cooldown, the corresponding stat's decay is suppressed.
+
+### Lifecycle
+
+1. **Hatching** — 30 ticks (5 minutes), then active
+1. **Active** — stats decay, player manages with actions
+1. **Leaving** — triggered when stats max out for too long (1–4 maxed stats = 20h–2h countdown)
+1. **Gone** — pet has left, new egg starts
+
+### Tuning
+
+All game balance constants (rates, cooldowns, thresholds) are in a single file:
+[`src/game/engine/thresholds.rs`](src/game/engine/thresholds.rs)
+
+The game team can adjust values there without touching engine logic.
+
+### Simulation
+
+Two simulation tools are available for balance testing:
+
+**Rust simulator** (delta-T engine, fast):
+
+```bash
+make simulate-game
+```
+
+Runs all player profiles (perfect, attentive, casual, absent, night owl, etc.) against the Rust engine and outputs a summary table with lifetime, final stats, and action counts. A 60-day simulation runs in milliseconds thanks to boundary-based scheduling.
+
+**Python simulator** (tick-by-tick reference):
+
+See [`simulation_py/README.md`](simulation_py/README.md) for the original Python balance simulator. The Python and Rust engines should produce similar results for the same player profiles — discrepancies indicate policy or engine bugs.
+
+### Game Architecture
+
+```text
+src/game/
+  engine/
+    mod.rs           — GameState, delta-T update(), next_wake_tick()
+    thresholds.rs    — all balance constants
+  sprite_loader.rs   — PCX image loading from FAT12 flash
+  input.rs           — button dispatch
+  modal.rs           — in-game modal dialogs
+  nav.rs             — icon grid navigation
+```
+
+The engine has no dependencies on embassy or hardware — it's pure `no_std` Rust that runs identically on the badge and in host-side tests.
 
 ## Recent fixes
 

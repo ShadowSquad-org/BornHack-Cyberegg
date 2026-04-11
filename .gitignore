@@ -3,3 +3,4 @@ src/main.rs.bak
 *.uf2
 
 bootloader/target
+docs

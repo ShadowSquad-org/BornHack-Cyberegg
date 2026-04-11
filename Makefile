@@ -69,6 +69,11 @@ flash-mesh-release:
 sim:
 	cargo sim
 
+# ---------- Game simulation ----------
+
+simulate-game:
+	cargo run --bin simulate_game --features simulator
+
 # ---------- Monitor / debug ----------
 
 monitor:
