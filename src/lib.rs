@@ -349,13 +349,17 @@ fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resul
 where
     D: DrawTarget<Color = TriColor>,
 {
+    // About screen: full-screen credits, no other elements.
+    let (about, about_page) = with_display_state!(|state| {
+        let s = state.current_screen();
+        (s.is_about(), s.about_page())
+    });
+    if about {
+        return menu::draw_about(display, about_page);
+    }
+
     let circle_post = CIRCLE_POS.load(Ordering::Relaxed);
     CIRCLE_POS.store(circle_post.wrapping_add(1) % 4, Ordering::Relaxed);
-
-    // let centered = TextStyleBuilder::new()
-    //     .baseline(Baseline::Middle)
-    //     .alignment(Alignment::Center)
-    //     .build();
 
     // Animated red dot
     let dot_pos = Point::new(((circle_post * 20) + 15) as i32, 7);
@@ -403,37 +407,40 @@ where
         .map(|_| ())
     })?;
 
-    let (items, pos) = with_display_state!(|state| {
+    let (items, pos, stepper_active) = with_display_state!(|state| {
         let screen = state.current_screen();
-        (screen.current_items(), screen.current_pos())
+        (screen.current_items(), screen.current_pos(), screen.is_stepper_active())
     });
-    menu::draw_menu(display, items, pos)?;
 
-    Text::with_text_style(
-        health_str,
-        Point::new(10, 128),
-        text_style_inverted,
-        TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
-    )
-    .draw(display)?;
+    {
+        menu::draw_menu(display, items, pos, stepper_active)?;
 
-    #[cfg(feature = "embassy-base")]
-    if let Some(unix) = unix_now() {
-        let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
-        let local = (unix as i64 + offset_secs) as u32;
-        let h = (local % 86400) / 3600;
-        let m = (local % 3600) / 60;
-        let time_str = format!(5; "{:02}:{:02}", h, m).unwrap();
         Text::with_text_style(
-            &time_str,
-            Point::new(148, 148),
-            MonoTextStyle::new(&FONT_7X13, BLACK),
-            TextStyleBuilder::new()
-                .baseline(Baseline::Bottom)
-                .alignment(Alignment::Right)
-                .build(),
+            health_str,
+            Point::new(10, 128),
+            text_style_inverted,
+            TextStyleBuilder::new().baseline(Baseline::Bottom).build(),
         )
         .draw(display)?;
+
+        #[cfg(feature = "embassy-base")]
+        if let Some(unix) = unix_now() {
+            let offset_secs = TIMEZONE_OFFSET.load(Ordering::Relaxed) as i64 * 3600;
+            let local = (unix as i64 + offset_secs) as u32;
+            let h = (local % 86400) / 3600;
+            let m = (local % 3600) / 60;
+            let time_str = format!(5; "{:02}:{:02}", h, m).unwrap();
+            Text::with_text_style(
+                &time_str,
+                Point::new(148, 148),
+                MonoTextStyle::new(&FONT_7X13, BLACK),
+                TextStyleBuilder::new()
+                    .baseline(Baseline::Bottom)
+                    .alignment(Alignment::Right)
+                    .build(),
+            )
+            .draw(display)?;
+        }
     }
 
     Ok(())

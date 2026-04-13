@@ -654,10 +654,12 @@ async fn log_txt_msg(
                 }
             }
 
-            // Only push plain-text messages to the UI / message queue.
-            // CLI_DATA and signed types are not handled yet.
-            if dec.txt_type() == txt_msg::TXT_TYPE_PLAIN {
-                // Push to the message queue so SYNC_NEXT_MESSAGE delivers it.
+            // Push plain and CLI messages to the message queue so the companion
+            // app gets them via SYNC_NEXT_MESSAGE. Signed (type 2) is not yet handled.
+            let is_plain = dec.txt_type() == txt_msg::TXT_TYPE_PLAIN;
+            let is_cli   = dec.txt_type() == txt_msg::TXT_TYPE_CLI_DATA;
+
+            if is_plain || is_cli {
                 let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
                 let _ = text_bytes.extend_from_slice(
                     &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
@@ -675,8 +677,12 @@ async fn log_txt_msg(
                     text:          text_bytes,
                 }).await;
                 crate::MESSAGES_WAITING_SIGNAL.signal(());
+            }
 
-                // Send ACK back to the sender.
+            // Only PLAIN messages get an ACK, a display update, and an LED blink.
+            // CLI replies from a repeater are consumed by the companion app only —
+            // the repeater does not ACK our requests and does not expect one back.
+            if is_plain {
                 send_ack(lora, &sender.pub_key, path_len_byte, path, ack_hash).await;
 
                 // Update the display.
@@ -923,13 +929,18 @@ async fn send_txt_msg(lora: &mut SimpleLoRa<'_>, req: crate::TxPrivateMsg, ident
                     if route == RouteType::Direct { "direct" } else { "flood" },
                     len, expected_ack,
                 );
-                // Record pending ACK so we can compute round-trip time when the mesh ACKs back.
-                crate::PENDING_ACK.lock(|cell| {
-                    cell.set(Some(crate::PendingAck {
-                        ack_hash: expected_ack,
-                        sent_at:  embassy_time::Instant::now(),
-                    }));
-                });
+                // Record pending ACK so we can compute round-trip time when the
+                // mesh ACKs back. CLI commands are not ACKed by the receiver
+                // (matches C++ `MyMesh::onPeerDataRecv` which only ACKs TXT_TYPE_PLAIN),
+                // so we skip the pending-ACK slot for them.
+                if req.txt_type == txt_msg::TXT_TYPE_PLAIN {
+                    crate::PENDING_ACK.lock(|cell| {
+                        cell.set(Some(crate::PendingAck {
+                            ack_hash: expected_ack,
+                            sent_at:  embassy_time::Instant::now(),
+                        }));
+                    });
+                }
             }
         }
         Err(e) => {

@@ -13,7 +13,7 @@
   // IMPORTANT: finalise this config before starting artwork.
   // Adding or reordering assets shifts all cell positions in the PNG.
 
-  image: "bornpets-sprites.png",
+  image: "bornpets-sprites-sponsers.png",
   output: "src/fw/game/sprites.rs",
   format: "rle",
 
@@ -340,6 +340,20 @@
       frames: 1,
       frame_width: 152,
       frame_height: 75,
+    },
+
+    // ─────────────────────────────────────────────────────────────────
+    // F — SPONSORS
+    // Used during development for any animation not yet drawn.
+    // ─────────────────────────────────────────────────────────────────
+
+    {
+      type: "sequence",
+      name: "sponsor_logo",
+      comment: "First boot sponsor logo animation.",
+      frames: 6,
+      frame_width: 152,
+      frame_height: 152,
     },
 
     // ─────────────────────────────────────────────────────────────────

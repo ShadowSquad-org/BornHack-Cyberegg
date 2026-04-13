@@ -2,7 +2,10 @@ use core::cell::RefCell;
 use core::sync::atomic::Ordering;
 
 use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_7X13},
+    mono_font::{
+        MonoTextStyle,
+        ascii::{FONT_7X13, FONT_7X13_BOLD},
+    },
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -17,16 +20,18 @@ use crate::{BLACK, TriColor, WHITE};
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ScreenId {
-    Game       = 0,
-    Main       = 1,
-    Pm         = 2,
-    Channel    = 3,
-    Advert     = 4,
+    Game = 0,
+    Main = 1,
+    Pm = 2,
+    Channel = 3,
+    Advert = 4,
     Badgercorn = 5,
 }
 
 impl ScreenId {
-    pub const fn index(self) -> u8 { self as u8 }
+    pub const fn index(self) -> u8 {
+        self as u8
+    }
     pub const COUNT: usize = 6;
 }
 
@@ -36,13 +41,13 @@ impl ScreenId {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ButtonId {
-    Cancel  = 0,
+    Cancel = 0,
     Execute = 1,
-    Up      = 2,
-    Down    = 3,
-    Left    = 4,
-    Right   = 5,
-    Fire    = 6,
+    Up = 2,
+    Down = 3,
+    Left = 4,
+    Right = 5,
+    Fire = 6,
 }
 
 impl ButtonId {
@@ -70,7 +75,10 @@ pub enum MenuItemKind {
     Separator,
     /// Inline value selector. Cancel increments, execute decrements.
     /// The label function should return the current value as a string.
-    Stepper { inc: fn(), dec: fn() },
+    Stepper {
+        inc: fn(),
+        dec: fn(),
+    },
 }
 
 pub struct MenuItem {
@@ -87,6 +95,10 @@ pub struct ScreenState {
     /// `Some` while inside a submenu; `None` at the root level.
     sub_items: Option<&'static [MenuItem]>,
     sub_pos: u8,
+    /// True when a `Stepper` item is being edited (Up/Down change its value).
+    stepper_active: bool,
+    /// Current page when the About screen is active.
+    about_page: u8,
 }
 
 impl ScreenState {
@@ -96,6 +108,26 @@ impl ScreenState {
             root_pos: 0,
             sub_items: None,
             sub_pos: 0,
+            stepper_active: false,
+            about_page: 0,
+        }
+    }
+
+    /// Current about page index.
+    pub fn about_page(&self) -> u8 {
+        self.about_page
+    }
+
+    /// Returns true when a stepper is being edited.
+    pub fn is_stepper_active(&self) -> bool {
+        self.stepper_active
+    }
+
+    /// Returns true when the About screen is active.
+    pub fn is_about(&self) -> bool {
+        match self.sub_items {
+            Some(items) => core::ptr::eq(items, &ABOUT_ITEMS as &[MenuItem]),
+            None => false,
         }
     }
 
@@ -123,6 +155,13 @@ impl ScreenState {
     }
 
     pub fn menu_up(&mut self) {
+        // While editing a stepper, Up increments the value.
+        if self.stepper_active {
+            if let MenuItemKind::Stepper { inc, .. } = self.current_item().kind {
+                inc();
+            }
+            return;
+        }
         let items = self.current_items();
         let pos = self.current_pos();
         if pos == 0 {
@@ -138,6 +177,13 @@ impl ScreenState {
     }
 
     pub fn menu_down(&mut self) {
+        // While editing a stepper, Down decrements the value.
+        if self.stepper_active {
+            if let MenuItemKind::Stepper { dec, .. } = self.current_item().kind {
+                dec();
+            }
+            return;
+        }
         let items = self.current_items();
         let len = items.len();
         let pos = self.current_pos();
@@ -159,7 +205,13 @@ impl ScreenState {
     /// - `Action` → call its function.
     /// - `Submenu` → push into the submenu, cursor reset to 0.
     /// - `Back` → pop back to the root menu.
+    /// - `Stepper` → toggle editing mode (Up/Down change value while active).
     pub fn fire(&mut self) {
+        if self.stepper_active {
+            // Deactivate stepper editing.
+            self.stepper_active = false;
+            return;
+        }
         match self.current_item().kind {
             MenuItemKind::Action(f) => f(),
             MenuItemKind::Submenu(items) => {
@@ -170,15 +222,21 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
-            MenuItemKind::Stepper { dec, .. } => dec(),
+            MenuItemKind::Stepper { .. } => {
+                self.stepper_active = true;
+            }
         }
     }
 
-    /// Called when the cancel button is pressed.  Increments a focused stepper;
-    /// no-op for all other item kinds.
+    /// Called when the cancel button is pressed.
+    ///
+    /// - Deactivates an active stepper.
+    /// - Pops out of a submenu back to the root menu.
     pub fn on_cancel(&mut self) {
-        if let MenuItemKind::Stepper { inc, .. } = self.current_item().kind {
-            inc();
+        if self.stepper_active {
+            self.stepper_active = false;
+        } else if self.sub_items.is_some() {
+            self.sub_items = None;
         }
     }
 
@@ -208,10 +266,14 @@ impl<const M: usize> DisplayState<M> {
         // Start on the first enabled screen (or 0 if none enabled).
         let mut first = 0u8;
         while (first as usize) < M {
-            if enabled[first as usize] { break; }
+            if enabled[first as usize] {
+                break;
+            }
             first += 1;
         }
-        if first as usize >= M { first = 0; }
+        if first as usize >= M {
+            first = 0;
+        }
         Self {
             active_screen: first,
             screens,
@@ -226,7 +288,8 @@ impl<const M: usize> DisplayState<M> {
             self.enabled[screen as usize] = on;
         }
         if !self.enabled[self.active_screen as usize] {
-            if let Some(s) = self.next_enabled_right(self.active_screen)
+            if let Some(s) = self
+                .next_enabled_right(self.active_screen)
                 .or_else(|| self.next_enabled_left(self.active_screen))
             {
                 self.active_screen = s;
@@ -237,18 +300,26 @@ impl<const M: usize> DisplayState<M> {
     fn next_enabled_right(&self, from: u8) -> Option<u8> {
         let mut s = from as usize + 1;
         while s < M {
-            if self.enabled[s] { return Some(s as u8); }
+            if self.enabled[s] {
+                return Some(s as u8);
+            }
             s += 1;
         }
         None
     }
 
     fn next_enabled_left(&self, from: u8) -> Option<u8> {
-        if from == 0 { return None; }
+        if from == 0 {
+            return None;
+        }
         let mut s = from as usize - 1;
         loop {
-            if self.enabled[s] { return Some(s as u8); }
-            if s == 0 { return None; }
+            if self.enabled[s] {
+                return Some(s as u8);
+            }
+            if s == 0 {
+                return None;
+            }
             s -= 1;
         }
     }
@@ -296,14 +367,37 @@ impl<const M: usize> DisplayState<M> {
     /// Dispatch a button press to the menu layer.
     /// Called when the game layer did not consume the event.
     pub fn dispatch_button(&mut self, btn: ButtonId) {
+        let screen = &self.screens[self.active_screen as usize];
+        if screen.is_about() {
+            match btn {
+                ButtonId::Left => {
+                    let s = &mut self.screens[self.active_screen as usize];
+                    if s.about_page > 0 {
+                        s.about_page -= 1;
+                    }
+                }
+                ButtonId::Right => {
+                    let s = &mut self.screens[self.active_screen as usize];
+                    if s.about_page < ABOUT_PAGES - 1 {
+                        s.about_page += 1;
+                    }
+                }
+                ButtonId::Cancel | ButtonId::Execute | ButtonId::Fire => {
+                    let s = &mut self.screens[self.active_screen as usize];
+                    s.about_page = 0;
+                    s.sub_items = None;
+                }
+                _ => {}
+            }
+            return;
+        }
         match btn {
-            ButtonId::Cancel  => self.on_cancel(),
-            ButtonId::Execute => {} // no menu role
-            ButtonId::Up      => self.menu_up(),
-            ButtonId::Down    => self.menu_down(),
-            ButtonId::Left    => self.screen_left(),
-            ButtonId::Right   => self.screen_right(),
-            ButtonId::Fire    => self.fire(),
+            ButtonId::Cancel => self.on_cancel(),
+            ButtonId::Execute | ButtonId::Fire => self.fire(),
+            ButtonId::Up => self.menu_up(),
+            ButtonId::Down => self.menu_down(),
+            ButtonId::Left => self.screen_left(),
+            ButtonId::Right => self.screen_right(),
         }
     }
 
@@ -344,11 +438,9 @@ fn action_reset_contacts() {
 }
 
 static TZ_LABELS: [&str; 27] = [
-    "UTC-12", "UTC-11", "UTC-10", "UTC-9",  "UTC-8",  "UTC-7",  "UTC-6",
-    "UTC-5",  "UTC-4",  "UTC-3",  "UTC-2",  "UTC-1",  "UTC+0",
-    "UTC+1",  "UTC+2",  "UTC+3",  "UTC+4",  "UTC+5",  "UTC+6",
-    "UTC+7",  "UTC+8",  "UTC+9",  "UTC+10", "UTC+11", "UTC+12",
-    "UTC+13", "UTC+14",
+    "UTC-12", "UTC-11", "UTC-10", "UTC-9", "UTC-8", "UTC-7", "UTC-6", "UTC-5", "UTC-4", "UTC-3",
+    "UTC-2", "UTC-1", "UTC+0", "UTC+1", "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+6", "UTC+7",
+    "UTC+8", "UTC+9", "UTC+10", "UTC+11", "UTC+12", "UTC+13", "UTC+14",
 ];
 
 fn label_timezone() -> &'static str {
@@ -430,7 +522,10 @@ static SETTINGS_ITEMS: [MenuItem; 6] = [
     },
     MenuItem {
         label: label_timezone,
-        kind: MenuItemKind::Stepper { inc: action_tz_inc, dec: action_tz_dec },
+        kind: MenuItemKind::Stepper {
+            inc: action_tz_inc,
+            dec: action_tz_dec,
+        },
     },
     MenuItem {
         label: || "",
@@ -483,7 +578,12 @@ static GAME_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
-static MAIN_ITEMS: [MenuItem; 4] = [
+static ABOUT_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "< Back",
+    kind: MenuItemKind::Back,
+}];
+
+static MAIN_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
@@ -499,6 +599,14 @@ static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "Settings",
         kind: MenuItemKind::Submenu(&SETTINGS_ITEMS),
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "About",
+        kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
     },
 ];
 
@@ -590,7 +698,12 @@ const NUM_ROWS: usize = 3; // one above, center, one below
 /// - Adjacent rows (if items exist): black text on white background.
 /// - A 1 px border frames the entire menu area.
 /// - Submenu items have " >" appended to their label.
-pub fn draw_menu<D>(display: &mut D, items: &[MenuItem], pos: usize) -> Result<(), D::Error>
+pub fn draw_menu<D>(
+    display: &mut D,
+    items: &[MenuItem],
+    pos: usize,
+    stepper_active: bool,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -631,19 +744,28 @@ where
                         .draw(display)?;
                 } else {
                     let mut label: heapless::String<24> = heapless::String::new();
-                    if matches!(item.kind, MenuItemKind::Stepper { .. }) {
-                        let _ = label.push_str("< ");
+                    let is_stepper = matches!(item.kind, MenuItemKind::Stepper { .. });
+                    if is_stepper {
+                        if stepper_active && is_center {
+                            let _ = label.push_str("[ ");
+                        } else {
+                            let _ = label.push_str("< ");
+                        }
                     }
                     let _ = label.push_str((item.label)());
                     if matches!(item.kind, MenuItemKind::Submenu(_)) {
                         let _ = label.push_str(" >");
-                    } else if matches!(item.kind, MenuItemKind::Stepper { .. }) {
-                        let _ = label.push_str(" >");
+                    } else if is_stepper {
+                        if stepper_active && is_center {
+                            let _ = label.push_str(" ]");
+                        } else {
+                            let _ = label.push_str(" >");
+                        }
                     }
                     Text::with_text_style(
                         &label,
                         Point::new(MENU_X + MENU_W as i32 / 2, text_y),
-                        MonoTextStyle::new(&FONT_7X13, fg),
+                        MonoTextStyle::new(&FONT_7X13_BOLD, fg),
                         text_style,
                     )
                     .draw(display)?;
@@ -651,6 +773,99 @@ where
             }
         }
     }
+
+    Ok(())
+}
+
+const ABOUT_PAGES: u8 = 5;
+
+/// Draw the About / credits screen.  `page` selects which page to show.
+pub fn draw_about<D>(display: &mut D, page: u8) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    use crate::RED;
+
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    let center = TextStyleBuilder::new()
+        .baseline(Baseline::Top)
+        .alignment(Alignment::Center)
+        .build();
+
+    let x = 76; // center
+
+    // Border
+    Rectangle::new(Point::new(0, 0), Size::new(152, 152))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
+        .draw(display)?;
+    Rectangle::new(Point::new(2, 2), Size::new(148, 148))
+        .into_styled(PrimitiveStyle::with_stroke(RED, 1))
+        .draw(display)?;
+
+    // Title area — same on every page
+    let mut y = 12;
+    let lh = 16;
+    Text::with_text_style("Badge Team 2026", Point::new(x, y), font, center).draw(display)?;
+    y += lh;
+    Text::with_text_style("Cyber AEgg", Point::new(x, y), font, center).draw(display)?;
+
+    // Separator line
+    Rectangle::new(Point::new(10, y + lh), Size::new(132, 1))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    y += lh + 6;
+
+    match page {
+        0 => {
+            Text::with_text_style("-- PCB --", Point::new(x, y), font, center).draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("Renze", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("CMPXCHG", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("PA3WEG", Point::new(x, y), font, center).draw(display)?;
+        }
+        1 => {
+            Text::with_text_style("-- Firmware --", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("Orange_Murker", Point::new(x, y), font, center).draw(display)?;
+        }
+        2 => {
+            Text::with_text_style("-- Case --", Point::new(x, y), font, center).draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("bulbdk", Point::new(x, y), font, center).draw(display)?;
+        }
+        3 => {
+            Text::with_text_style("-- Game --", Point::new(x, y), font, center).draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("at-boy", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("Ranzbak", Point::new(x, y), font, center).draw(display)?;
+        }
+        _ => {
+            Text::with_text_style("-- Graphics --", Point::new(x, y), font, center)
+                .draw(display)?;
+            y += lh + 4;
+            Text::with_text_style("Ankate", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("NightOwlNL", Point::new(x, y), font, center).draw(display)?;
+            y += lh;
+            Text::with_text_style("Lilium", Point::new(x, y), font, center).draw(display)?;
+        }
+    }
+
+    // Page indicator at the bottom
+    let mut indicator: heapless::String<8> = heapless::String::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut indicator,
+        format_args!("< {}/{} >", page + 1, ABOUT_PAGES),
+    );
+    Text::with_text_style(&indicator, Point::new(x, 136), font, center).draw(display)?;
 
     Ok(())
 }
