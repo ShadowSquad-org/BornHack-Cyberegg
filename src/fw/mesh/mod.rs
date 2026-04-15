@@ -103,6 +103,17 @@ pub static MESSAGES_WAITING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 /// set. The BLE task consumes this to emit `PUSH_CODE_CONTACTS_FULL` (0x90).
 pub static CONTACTS_FULL_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Queue of pub_keys for which the firmware has just learned (or refreshed)
+/// a routing path. The BLE task drains this to emit `PUSH_CODE_PATH_UPDATED`
+/// (0x81) notifications so the companion app can re-fetch the contact and
+/// keep its own DB in sync — matching the reference `companion_radio`
+/// behaviour. Sized at 4 to absorb short bursts without dropping updates;
+/// a dropped update just means the phone sees the old path for one extra
+/// reconnect cycle.
+pub static PATH_UPDATED_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, [u8; ::meshcore::PUB_KEY_SIZE], 4,
+> = embassy_sync::channel::Channel::new();
+
 /// In-RAM cache of the persisted `path_hash_mode` setting (CMD_SET_PATH_HASH_MODE, 0x3D).
 ///
 /// Value semantics match the reference: 0 ⇒ 1-byte per-hop hashes,

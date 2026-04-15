@@ -90,15 +90,20 @@ pub const OUT_PATH_UNKNOWN: u8 = 0xFF;
 // Bump [`CURRENT_RECORD_VERSION`] whenever the serialised body changes.
 
 /// Current on-flash record version written by this firmware build.
-pub(crate) const CURRENT_RECORD_VERSION: u8 = 1;
+///
+/// Version history:
+/// - `1`: first versioned layout. 149 bytes. No `sync_since` field.
+/// - `2`: adds `sync_since: u32` at offset 149. 153 bytes. Required for
+///   room server posts so we don't replay the full mailbox on every reboot.
+pub(crate) const CURRENT_RECORD_VERSION: u8 = 2;
 
 // ---------------------------------------------------------------------------
 // Serialised sizes — defined explicitly, not derived from struct layout,
 // to avoid any compiler-inserted padding changing the on-flash format.
 // ---------------------------------------------------------------------------
 
-/// Serialised record size: 1-byte version header + the 148-byte body.
-const CONTACT_SIZE: usize = 149; // 1 (version) + 32+1+1+1+1+64+32+4+4+4+4
+/// Serialised record size: 1-byte version header + the 152-byte body.
+const CONTACT_SIZE: usize = 153; // 1 (version) + 32+1+1+1+1+64+32+4+4+4+4+4
 const META_SIZE: usize = 8;
 
 // ---------------------------------------------------------------------------
@@ -136,6 +141,16 @@ pub struct Contact {
     /// Used as the eviction key: the contact with the smallest `lastmod`
     /// (among non-favourites) is overwritten when the store is full.
     pub lastmod: u32,
+    /// Last post timestamp we have successfully ACKed for this peer.
+    ///
+    /// Meaningful only for room servers (`node_type == 3`): the firmware
+    /// sends this value as the `sync_since` header in the login plaintext
+    /// so the room can resume pushing posts from where we left off across
+    /// reboots. Non-room contacts keep it at 0; `send_login` only reads it
+    /// when the target is a room.
+    ///
+    /// Advances monotonically — see [`ContactStore::update_sync_since`].
+    pub sync_since: u32,
 }
 
 impl Contact {
@@ -236,6 +251,7 @@ impl Contact {
             gps_lat,
             gps_lon,
             lastmod,
+            sync_since: 0,
         })
     }
 
@@ -267,6 +283,7 @@ impl Contact {
             gps_lat: lat,
             gps_lon: lon,
             lastmod: timestamp,
+            sync_since: 0,
         }
     }
 
@@ -275,12 +292,12 @@ impl Contact {
     /// Serialise to the on-flash record layout.
     ///
     /// Byte 0 is the [`CURRENT_RECORD_VERSION`] store-local version marker.
-    /// Bytes 1..149 are the record body.
+    /// Bytes 1..153 are the record body (v2 = v1 + 4-byte `sync_since` tail).
     fn to_bytes(&self) -> [u8; CONTACT_SIZE] {
         let mut b = [0u8; CONTACT_SIZE];
         // [0] store-local record version
         b[0] = CURRENT_RECORD_VERSION;
-        // [1..149] body — offsets shifted by +1 relative to the v0 layout.
+        // [1..153] body — v1 layout + `sync_since` appended at the end.
         let mut p = 1usize;
         b[p..p + 32].copy_from_slice(&self.pub_key);
         p += 32;
@@ -304,6 +321,8 @@ impl Contact {
         p += 4;
         b[p..p + 4].copy_from_slice(&self.lastmod.to_le_bytes());
         p += 4;
+        b[p..p + 4].copy_from_slice(&self.sync_since.to_le_bytes());
+        p += 4;
         debug_assert_eq!(p, CONTACT_SIZE);
         b
     }
@@ -317,11 +336,12 @@ impl Contact {
         if b[0] != CURRENT_RECORD_VERSION {
             return None;
         }
-        // Body offsets, all shifted +1 vs. the v0 layout:
+        // Body offsets (v2):
         //   version(0)
         //   pub_key(1-32) type(33) flags(34) path_len(35) pad(36)
         //   out_path(37-100) name(101-132) ts(133-136)
         //   lat(137-140) lon(141-144) lastmod(145-148)
+        //   sync_since(149-152)
         let pub_key: [u8; 32] = b[1..33].try_into().unwrap();
         let node_type = b[33];
         let flags = b[34];
@@ -333,6 +353,7 @@ impl Contact {
         let gps_lat = i32::from_le_bytes(b[137..141].try_into().unwrap());
         let gps_lon = i32::from_le_bytes(b[141..145].try_into().unwrap());
         let lastmod = u32::from_le_bytes(b[145..149].try_into().unwrap());
+        let sync_since = u32::from_le_bytes(b[149..153].try_into().unwrap());
         Some(Self {
             pub_key,
             node_type,
@@ -345,6 +366,7 @@ impl Contact {
             gps_lat,
             gps_lon,
             lastmod,
+            sync_since,
         })
     }
 }
@@ -361,7 +383,12 @@ struct Meta {
     head: u16,
     /// Number of non-deleted contacts currently in the store.
     count: u16,
-    _pad: u16,
+    /// On-flash record schema version in use at the time this meta was
+    /// written. Checked on boot via [`ContactStore::init`] — a mismatch
+    /// triggers a wipe. Historical meta records wrote `_pad = 0` here,
+    /// which correctly decodes as "legacy, needs migration".
+    schema_version: u8,
+    _reserved: u8,
 }
 
 impl Meta {
@@ -370,6 +397,8 @@ impl Meta {
         b[0..2].copy_from_slice(&self.capacity.to_le_bytes());
         b[2..4].copy_from_slice(&self.head.to_le_bytes());
         b[4..6].copy_from_slice(&self.count.to_le_bytes());
+        b[6] = self.schema_version;
+        b[7] = self._reserved;
         b
     }
 
@@ -378,7 +407,8 @@ impl Meta {
             capacity: u16::from_le_bytes([b[0], b[1]]),
             head: u16::from_le_bytes([b[2], b[3]]),
             count: u16::from_le_bytes([b[4], b[5]]),
-            _pad: 0,
+            schema_version: b[6],
+            _reserved: b[7],
         }
     }
 }
@@ -705,42 +735,43 @@ impl ContactStore {
     // Initialisation & migration
     // -----------------------------------------------------------------------
 
-    /// Look at the contact slots on flash and decide whether the store is in
-    /// a layout this firmware can read.
+    /// Decide whether the on-flash contact store is in a layout this firmware
+    /// can read, based on a single `meta` read.
     ///
-    /// Returns `true` as soon as we find any slot whose size or version byte
-    /// doesn't match the current record format — the caller should treat the
-    /// store as legacy/corrupt and wipe it. Returns `false` when all inspected
-    /// slots look current (or when the store is empty).
+    /// The `meta` record carries the `schema_version` of the records that
+    /// were live at the time it was last written. Comparing that one byte
+    /// against [`CURRENT_RECORD_VERSION`] tells us whether the slot records
+    /// still match our `Contact` layout:
     ///
-    /// Stops at the first definitive answer, so the normal case is a single
-    /// flash read.
+    /// - `meta` missing → first boot / brand-new KV store → nothing to wipe.
+    /// - `meta.schema_version == CURRENT_RECORD_VERSION` → store is current.
+    /// - `meta.schema_version == 0` → historical meta written before this
+    ///   field existed; legacy slots, wipe.
+    /// - `meta.schema_version != CURRENT_RECORD_VERSION` → stale layout,
+    ///   wipe.
+    ///
+    /// Exactly **one** flash read per boot. The previous implementation
+    /// walked up to `MAX_CONTACTS` slots to find a non-empty record, and
+    /// ekv treats every `NotFound` lookup as a full log scan (~50 ms), so
+    /// that cost ~15 s per boot on a sparse or empty store.
     async fn detect_legacy_records(&self) -> bool {
-        let mut buf = [0u8; CONTACT_SIZE];
-        for idx in 0..MAX_CONTACTS {
-            match self.kv.get(slot_key(idx).as_str(), &mut buf).await {
-                Ok(n) if n == CONTACT_SIZE && buf[0] == CURRENT_RECORD_VERSION => {
-                    // Found a record in the current layout — store is current.
-                    return false;
-                }
-                Ok(n) if n > 0 => {
-                    // Non-empty payload with the wrong size or wrong version
-                    // byte → legacy / corrupt.
+        let mut buf = [0u8; META_SIZE];
+        match self.kv.get("meta", &mut buf).await {
+            Ok(n) if n == META_SIZE => {
+                let meta = Meta::from_bytes(buf[..META_SIZE].try_into().unwrap());
+                if meta.schema_version == CURRENT_RECORD_VERSION {
+                    false
+                } else {
                     defmt::warn!(
-                        "contacts: slot {=usize} has n={=usize}B v={=u8:#04x}, expected {=usize}B v={=u8:#04x}",
-                        idx,
-                        n,
-                        buf.get(0).copied().unwrap_or(0),
-                        CONTACT_SIZE,
+                        "contacts: meta schema_version={=u8} expected {=u8} — wiping",
+                        meta.schema_version,
                         CURRENT_RECORD_VERSION,
                     );
-                    return true;
+                    true
                 }
-                _ => continue, // slot not written — keep looking
             }
+            _ => false, // no meta → fresh store, nothing to wipe
         }
-        // Every slot was NotFound → fresh store, nothing to wipe.
-        false
     }
 
     /// Wipe the contact-related KV namespaces (`contacts`, `hi`) after a
@@ -820,7 +851,8 @@ impl ContactStore {
                     capacity: MAX_CONTACTS as u16,
                     head: 0,
                     count: 0,
-                    _pad: 0,
+                    schema_version: CURRENT_RECORD_VERSION,
+                _reserved: 0,
                 };
                 match self.kv.set("meta", &meta.to_bytes(), true).await {
                     Ok(()) => defmt::info!("contacts: initialised (capacity {})", MAX_CONTACTS),
@@ -850,7 +882,8 @@ impl ContactStore {
                 capacity: MAX_CONTACTS as u16,
                 head: old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
                 count: old.count,
-                _pad: 0,
+                schema_version: CURRENT_RECORD_VERSION,
+                _reserved: 0,
             };
             if let Err(e) = self.kv.set("meta", &new_meta.to_bytes(), true).await {
                 defmt::warn!("contacts: migrate(grow) meta write failed: {:?}", e);
@@ -892,7 +925,8 @@ impl ContactStore {
                 capacity: MAX_CONTACTS as u16,
                 head: old.head.min((MAX_CONTACTS as u16).saturating_sub(1)),
                 count,
-                _pad: 0,
+                schema_version: CURRENT_RECORD_VERSION,
+                _reserved: 0,
             };
             if let Err(e) = self.kv.set("meta", &new_meta.to_bytes(), true).await {
                 defmt::warn!("contacts: migrate(shrink) meta write failed: {:?}", e);
@@ -933,33 +967,80 @@ impl ContactStore {
         }
     }
 
+    /// Advance the per-room `sync_since` cursor for a contact.
+    ///
+    /// Writes `timestamp` into the contact's `sync_since` field only if the
+    /// new value is strictly greater than the stored one — matching the
+    /// reference `BaseChatMesh.cpp:242`:
+    /// ```text
+    /// if (timestamp > from.sync_since) { from.sync_since = timestamp; }
+    /// ```
+    /// This keeps the cursor monotonic even if posts arrive out of order.
+    ///
+    /// Returns `Ok(true)` when the flash record was rewritten,
+    /// `Ok(false)` when the contact was not found or the stored value was
+    /// already >= `timestamp`. Meant for room-server post ACK handling —
+    /// see `try_handle_txt_msg` in meshcore.rs.
+    pub async fn update_sync_since(
+        &self,
+        pub_key: &[u8; 32],
+        timestamp: u32,
+    ) -> Result<bool, kv::KvError> {
+        let Some(slot) = self.index_lookup(pub_key).await else {
+            return Ok(false);
+        };
+        let key = slot_key(slot);
+        let mut buf = [0u8; CONTACT_SIZE];
+        if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
+            return Ok(false);
+        }
+        let Some(mut c) = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap()) else {
+            return Ok(false);
+        };
+        if timestamp <= c.sync_since {
+            return Ok(false); // no advance
+        }
+        c.sync_since = timestamp;
+        self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        Ok(true)
+    }
+
     /// Update the routing path for a contact identified by `pub_key`.
     ///
     /// Only writes to flash if the contact exists and the path actually changed.
     /// Silently does nothing if the contact is not found.
+    ///
+    /// Returns:
+    /// - `Ok(true)` — the flash record was rewritten because the new path
+    ///   differs from the stored one. Callers should fire
+    ///   [`crate::PATH_UPDATED_CHANNEL`] so the BLE task notifies the phone.
+    /// - `Ok(false)` — contact not found, or the stored path already matches.
+    ///   No write happened, no notification should be pushed.
+    /// - `Err(_)` — flash write failed.
     pub async fn update_path(
         &self,
         pub_key: &[u8; 32],
         out_path_len: u8,
         out_path: &[u8; MAX_PATH_SIZE],
-    ) -> Result<(), kv::KvError> {
+    ) -> Result<bool, kv::KvError> {
         let Some(slot) = self.index_lookup(pub_key).await else {
-            return Ok(());
+            return Ok(false);
         };
         let key = slot_key(slot);
         let mut buf = [0u8; CONTACT_SIZE];
         if self.kv.get(key.as_str(), &mut buf).await.ok() != Some(CONTACT_SIZE) {
-            return Ok(());
+            return Ok(false);
         }
         let Some(mut c) = Contact::from_bytes(buf[..CONTACT_SIZE].try_into().unwrap()) else {
-            return Ok(());
+            return Ok(false);
         };
         if c.out_path_len == out_path_len && c.out_path == *out_path {
-            return Ok(()); // nothing changed
+            return Ok(false); // nothing changed
         }
         c.out_path_len = out_path_len;
         c.out_path = *out_path;
-        self.kv.set(key.as_str(), &c.to_bytes(), true).await
+        self.kv.set(key.as_str(), &c.to_bytes(), true).await?;
+        Ok(true)
     }
 
     /// Find a contact whose pub_key starts with `prefix` (6 bytes).
@@ -1025,7 +1106,8 @@ impl ContactStore {
                 capacity: MAX_CONTACTS as u16,
                 head: 0,
                 count: 0,
-                _pad: 0,
+                schema_version: CURRENT_RECORD_VERSION,
+                _reserved: 0,
             },
         };
         let capacity = (meta.capacity as usize).min(MAX_CONTACTS).max(1);

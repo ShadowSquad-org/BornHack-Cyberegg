@@ -262,6 +262,7 @@ enum PushEvent {
     ControlData(crate::ControlDataPkt),
     BinaryResult(crate::BinaryResult),
     ContactsFull,
+    PathUpdated([u8; ::meshcore::PUB_KEY_SIZE]),
 }
 
 /// Wait for any push event from radio/system channels.
@@ -299,8 +300,11 @@ async fn wait_push_event() -> PushEvent {
                         crate::CONTROL_DATA_PKT_CHANNEL.receive(),
                     ),
                     select(
-                        crate::BINARY_RESULT_CHANNEL.receive(),
-                        crate::CONTACTS_FULL_SIGNAL.wait(),
+                        select(
+                            crate::BINARY_RESULT_CHANNEL.receive(),
+                            crate::CONTACTS_FULL_SIGNAL.wait(),
+                        ),
+                        crate::PATH_UPDATED_CHANNEL.receive(),
                     ),
                 ),
             ),
@@ -326,11 +330,14 @@ async fn wait_push_event() -> PushEvent {
         Either::Second(Either::Second(Either::Second(Either::First(Either::Second(ct))))) => {
             PushEvent::ControlData(ct)
         }
-        Either::Second(Either::Second(Either::Second(Either::Second(Either::First(br))))) => {
-            PushEvent::BinaryResult(br)
-        }
-        Either::Second(Either::Second(Either::Second(Either::Second(Either::Second(()))))) => {
-            PushEvent::ContactsFull
+        Either::Second(Either::Second(Either::Second(Either::Second(Either::First(
+            Either::First(br),
+        ))))) => PushEvent::BinaryResult(br),
+        Either::Second(Either::Second(Either::Second(Either::Second(Either::First(
+            Either::Second(()),
+        ))))) => PushEvent::ContactsFull,
+        Either::Second(Either::Second(Either::Second(Either::Second(Either::Second(pk))))) => {
+            PushEvent::PathUpdated(pk)
         }
     }
 }
@@ -482,15 +489,12 @@ async fn nus_peripheral_loop<C>(
     };
     crate::update_node_name(&node_name[..node_name_len]);
 
-    // Load the persisted boost-RX flag and timezone offset.
-    crate::BOOSTED_RX_GAIN.store(
-        settings::get_boost_rx().await,
-        core::sync::atomic::Ordering::Relaxed,
-    );
-    crate::TIMEZONE_OFFSET.store(
-        settings::get_timezone().await,
-        core::sync::atomic::Ordering::Relaxed,
-    );
+    // Note: the persisted `TIMEZONE_OFFSET` and `BOOSTED_RX_GAIN` atomics are
+    // loaded from flash in the top-level `embassy.rs` boot sequence before any
+    // task is spawned, so by the time we get here they already hold the
+    // correct values. Don't duplicate the load — we'd just redo the flash
+    // read and race with any edit the menu made while the BLE task was
+    // starting up.
 
     // Load the persisted radio parameters (set via CMD_SET_RADIO_PARAMS 0x0B /
     // CMD_SET_RADIO_TX_POWER 0x0C).  Falls back to EU/UK narrow band defaults.
@@ -908,11 +912,27 @@ async fn nus_peripheral_loop<C>(
                                         }
                                         match msg.kind {
                                             msg_queue::MsgKind::Private => {
+                                                // For signed/room posts (text_type == 2), the stored
+                                                // text buffer is `[author_prefix:4][text:N]`.
+                                                // Split the 4-byte author prefix into the
+                                                // `signature` field the companion protocol expects.
+                                                // For plain/CLI messages the buffer is just text,
+                                                // and `signature` stays None.
+                                                let (sig, text_slice) = if msg.text_type == 2
+                                                    && msg.text.len() >= 4
+                                                {
+                                                    let mut s = [0u8; 4];
+                                                    s.copy_from_slice(&msg.text[..4]);
+                                                    (Some(s), &msg.text[4..])
+                                                } else {
+                                                    (None, &msg.text[..])
+                                                };
                                                 defmt::debug!(
-                                                    "companion: SYNC_NEXT_MESSAGE → private from={=[u8]:02x} ts={=u32} rssi={=i16} ({=u16} remaining)",
+                                                    "companion: SYNC_NEXT_MESSAGE → private from={=[u8]:02x} ts={=u32} rssi={=i16} type={=u8} ({=u16} remaining)",
                                                     msg.sender_prefix,
                                                     msg.timestamp,
                                                     msg.rssi,
+                                                    msg.text_type,
                                                     remaining
                                                 );
                                                 companion::Response::ContactMsgRecvV3(
@@ -926,8 +946,8 @@ async fn nus_peripheral_loop<C>(
                                                         path_len: msg.path_len,
                                                         text_type: msg.text_type,
                                                         timestamp: msg.timestamp,
-                                                        signature: None,
-                                                        text: &msg.text,
+                                                        signature: sig,
+                                                        text: text_slice,
                                                     },
                                                 )
                                             }
@@ -1042,7 +1062,15 @@ async fn nus_peripheral_loop<C>(
                                         )
                                         .await
                                     {
-                                        Ok(()) => companion::Response::Ok,
+                                        Ok(changed) => {
+                                            if changed {
+                                                // Let the phone know the contact's
+                                                // path went back to OUT_PATH_UNKNOWN.
+                                                let _ = crate::PATH_UPDATED_CHANNEL
+                                                    .try_send(*key);
+                                            }
+                                            companion::Response::Ok
+                                        }
                                         Err(e) => {
                                             defmt::warn!("companion: RESET_PATH failed: {:?}", e);
                                             companion::Response::Error(
@@ -1082,9 +1110,11 @@ async fn nus_peripheral_loop<C>(
                                 Ok(companion::cmd::Command::AddUpdateContact) => {
                                     match contacts::Contact::from_add_update_payload(data) {
                                         Some(c) => {
-                                            defmt::debug!(
-                                                "companion: ADD_UPDATE_CONTACT key={:02x}",
-                                                &c.pub_key[..6]
+                                            defmt::info!(
+                                                "companion: ADD_UPDATE_CONTACT key={=[u8]:02x} node_type={=u8} out_path_len={=u8}",
+                                                &c.pub_key[..6],
+                                                c.node_type,
+                                                c.out_path_len,
                                             );
                                             pending_contact = Some(c);
                                             companion::Response::Ok
@@ -1108,7 +1138,7 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                     crate::set_wall_clock(ts);
-                                    defmt::debug!("companion: SET_DEVICE_TIME unix={}", ts);
+                                    defmt::info!("companion: SET_DEVICE_TIME unix={=u32}", ts);
                                     companion::Response::Ok
                                 }
 
@@ -1576,9 +1606,11 @@ async fn nus_peripheral_loop<C>(
                                         pub_key[0], pub_key[1], pub_key[2], pub_key[3],
                                     ]);
                                     defmt::info!(
-                                        "companion: SEND_LOGIN key={=[u8]:02x} tag={=u32:#010x} → queued",
+                                        "companion: SEND_LOGIN key={=[u8]:02x} tag={=u32:#010x} pw_len={=usize} pw={=[u8]:02x} → queued",
                                         &pub_key[..6],
                                         tag,
+                                        password.len(),
+                                        password,
                                     );
                                     let _ = crate::TX_LOGIN_CHANNEL.try_send(crate::TxLogin {
                                         pub_key: *pub_key,
@@ -2075,6 +2107,17 @@ async fn nus_peripheral_loop<C>(
                     PushEvent::ContactsFull => {
                         defmt::info!("BLE: contacts store full, pushing 0x90");
                         outbox_push(outbox, &companion::Response::ContactsFull);
+                    }
+
+                    PushEvent::PathUpdated(pub_key) => {
+                        defmt::info!(
+                            "BLE: path updated for {=[u8]:02x}, pushing 0x81",
+                            &pub_key[..6],
+                        );
+                        outbox_push(
+                            outbox,
+                            &companion::Response::PathUpdated { pub_key: &pub_key },
+                        );
                     }
 
                     PushEvent::AckEvent(ack) => {

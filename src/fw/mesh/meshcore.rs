@@ -675,8 +675,12 @@ async fn log_advert(
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
-        if let Err(e) = store.update_path(&a.pub_key, path_len_byte, &path_buf).await {
-            defmt::warn!("contacts: path update failed: {:?}", e);
+        match store.update_path(&a.pub_key, path_len_byte, &path_buf).await {
+            Ok(true) => {
+                let _ = crate::PATH_UPDATED_CHANNEL.try_send(a.pub_key);
+            }
+            Ok(false) => {}
+            Err(e) => defmt::warn!("contacts: path update failed: {:?}", e),
         }
     }
 }
@@ -805,17 +809,43 @@ async fn try_handle_txt_msg(
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy_len = path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy_len].copy_from_slice(&path[..copy_len]);
-        if let Err(e) = store.update_path(&sender.pub_key, path_len_byte, &path_buf).await {
-            defmt::warn!("TxtMsg: path update failed: {:?}", e);
+        match store.update_path(&sender.pub_key, path_len_byte, &path_buf).await {
+            Ok(true) => {
+                let _ = crate::PATH_UPDATED_CHANNEL.try_send(sender.pub_key);
+            }
+            Ok(false) => {}
+            Err(e) => defmt::warn!("TxtMsg: path update failed: {:?}", e),
         }
     }
 
-    // Push plain and CLI messages to the message queue so the companion app
-    // gets them via SYNC_NEXT_MESSAGE. Signed (type 2) is not yet handled.
-    let is_plain = dec.txt_type() == txt_msg::TXT_TYPE_PLAIN;
-    let is_cli   = dec.txt_type() == txt_msg::TXT_TYPE_CLI_DATA;
+    // Push plain, CLI, and room-signed messages to the queue so the companion
+    // app picks them up via SYNC_NEXT_MESSAGE.
+    //
+    // Layout of the decrypted plaintext by txt_type (see reference
+    // `BaseChatMesh::onPeerDataRecv` at src/helpers/BaseChatMesh.cpp:218):
+    //   TXT_TYPE_PLAIN (0):
+    //     [ts:4][flags:1][text:N]                      → text = dec.text
+    //   TXT_TYPE_CLI_DATA (1):
+    //     [ts:4][flags:1][text:N]                      → same layout
+    //   TXT_TYPE_SIGNED_PLAIN (2): room-server post push
+    //     [ts:4][flags:1][author_prefix:4][text:N]    → dec.text = author_prefix(4) || text
+    //
+    // For signed messages we store the full `dec.text` verbatim (including the
+    // 4-byte author prefix) into msg_queue; the BLE task splits it back out
+    // into `ContactMsg.signature` when forwarding to the companion app.
+    let is_plain  = dec.txt_type() == txt_msg::TXT_TYPE_PLAIN;
+    let is_cli    = dec.txt_type() == txt_msg::TXT_TYPE_CLI_DATA;
+    let is_signed = dec.txt_type() == txt_msg::TXT_TYPE_SIGNED;
 
-    if is_plain || is_cli {
+    if is_signed && dec.text.len() < 4 {
+        defmt::warn!(
+            "TxtMsg signed: payload too short for author prefix ({=usize}B), dropping",
+            dec.text.len(),
+        );
+        return Ok(());
+    }
+
+    if is_plain || is_cli || is_signed {
         let mut text_bytes: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
         let _ = text_bytes.extend_from_slice(
             &dec.text[..dec.text.len().min(msg_queue::MAX_TEXT)]
@@ -833,6 +863,55 @@ async fn try_handle_txt_msg(
             text:          text_bytes,
         }).await;
         crate::MESSAGES_WAITING_SIGNAL.signal(());
+    }
+
+    // ACK handling differs by type:
+    //
+    // - PLAIN:  ACK hash from `txt_msg::decrypt` is correct (hashed with the
+    //           sender's pub_key, per `BaseChatMesh.cpp:222`). Send it back.
+    // - SIGNED: the room expects an ACK whose hash is computed with OUR
+    //           pub_key instead of the sender's (per `BaseChatMesh.cpp:249`),
+    //           over `[ts:4][flags:1][author_prefix:4][text:N]`. Recompute.
+    //           Without this ACK the room retries up to 3 times and then
+    //           evicts our session, which is the "previous messages never
+    //           show up" symptom you saw.
+    // - CLI:    no ACK (the repeater doesn't expect one).
+    if is_signed {
+        // Reassemble the plaintext prefix that the reference hashes over.
+        // `dec.text` already holds `[author_prefix:4][text:N]`, so we just
+        // need to prepend the 4-byte timestamp and 1-byte flags.
+        let mut prefix = [0u8; 5 + meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE];
+        prefix[0..4].copy_from_slice(&dec.timestamp.to_le_bytes());
+        prefix[4] = dec.flags;
+        let n = dec.text.len().min(prefix.len() - 5);
+        prefix[5..5 + n].copy_from_slice(&dec.text[..n]);
+        let signed_ack = meshcore::payload::txt_msg::compute_ack_hash(
+            &prefix[..5 + n],
+            &identity.pub_key,
+        );
+        defmt::info!(
+            "TxtMsg signed: author={=[u8]:02x} text_len={=usize} ack={=u32:#010x}",
+            &dec.text[..4.min(dec.text.len())],
+            dec.text.len().saturating_sub(4),
+            signed_ack,
+        );
+        send_ack(lora, &sender.pub_key, path_len_byte, path, signed_ack).await;
+
+        // Advance the room's sync_since cursor so the next login resumes
+        // after this post instead of replaying the whole backlog. Matches
+        // the reference `BaseChatMesh.cpp:242` monotonic advance.
+        match store.update_sync_since(&sender.pub_key, dec.timestamp).await {
+            Ok(true) => defmt::info!(
+                "TxtMsg signed: sync_since advanced to {=u32} for {=[u8]:02x}",
+                dec.timestamp,
+                &sender.pub_key[..6],
+            ),
+            Ok(false) => {} // cursor already >= this timestamp, no write
+            Err(e) => defmt::warn!(
+                "TxtMsg signed: sync_since persist failed: {:?}",
+                defmt::Debug2Format(&e),
+            ),
+        }
     }
 
     // Only PLAIN messages get an ACK, a display update, and an LED blink.
@@ -1006,8 +1085,8 @@ async fn send_grp_txt(
                 defmt::warn!("send_grp_txt: TX failed: {:?}", e);
             } else {
                 defmt::info!(
-                    "GrpTxt sent: ch={=u8} ts={=u32} len={=usize}B",
-                    req.channel_idx, req.timestamp, len
+                    "GrpTxt sent: ch={=u8} ts={=u32} len={=usize}B frame={=[u8]:02x}",
+                    req.channel_idx, req.timestamp, len, &frame[..len],
                 );
 
                 // Seed MSG_SEEN so relay-bounces of our own packet are
@@ -1444,13 +1523,49 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
     // Hint for the RX fast path so we skip the 300-slot contact scan.
     crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
 
-    let timestamp = crate::unix_now().unwrap_or(0);
+    // Bail out if the wall clock isn't set. Sending `timestamp = 0` is
+    // guaranteed to be rejected by the server as a replay attack:
+    //
+    //     client = acl.putClient(...);           // fresh entry, last_timestamp = 0
+    //     if (sender_timestamp <= last_timestamp) // 0 <= 0 → true → silent drop
+    //
+    // The phone must issue CMD_SET_DEVICE_TIME (0x06) before login can work.
+    let Some(timestamp) = crate::unix_now() else {
+        defmt::warn!(
+            "send_login: wall clock not set — refusing to send login (would be silently dropped by server as replay). Phone must issue SET_DEVICE_TIME first."
+        );
+        return;
+    };
+
+    // Look up the contact once, up front, so we can branch on:
+    //   (a) its `node_type` to decide the login plaintext format (rooms
+    //       include a 4-byte `sync_since` header, repeaters do not), and
+    //   (b) its `out_path_len` to pick Flood vs Direct routing below.
+    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
+
+    // ADV_TYPE_ROOM = 3 (see `vendor/meshcore/src/payload/advert.rs::DeviceRole::RoomServer`).
+    // When the target is a room server we include the persisted
+    // `Contact.sync_since` — the last post timestamp we successfully ACKed.
+    // The room uses this to resume pushing posts from where we left off
+    // instead of replaying the whole backlog. Non-room targets omit the
+    // sync_since header entirely (repeater-shaped login plaintext).
+    const ADV_TYPE_ROOM: u8 = 3;
+    let is_room = contact
+        .as_ref()
+        .map(|c| c.node_type == ADV_TYPE_ROOM)
+        .unwrap_or(false);
+    let sync_since = if is_room {
+        Some(contact.as_ref().map(|c| c.sync_since).unwrap_or(0))
+    } else {
+        None
+    };
 
     let payload = match meshcore::payload::anon_req::encrypt(
         &identity.sec_key,
         &identity.pub_key,
         &req.pub_key,
         timestamp,
+        sync_since,
         &req.password,
     ) {
         Ok(p) => p,
@@ -1461,7 +1576,6 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
     };
 
     // Flood when no path is known; direct when a stored path exists.
-    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
     let (route, path_len_byte, path_bytes) = match contact {
         Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
             let actual = c.path_actual_bytes();
@@ -1492,7 +1606,16 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_login: TX failed: {:?}", e);
             } else {
-                defmt::info!("Login sent to {=[u8]:02x} ({=usize}B)", &req.pub_key[..6], len);
+                defmt::info!(
+                    "Login sent to {=[u8]:02x} node_type={=u8} is_room={=bool} ts={=u32} sync_since={=u32} ({=usize}B) frame={=[u8]:02x}",
+                    &req.pub_key[..6],
+                    contact.as_ref().map(|c| c.node_type).unwrap_or(0xff),
+                    is_room,
+                    timestamp,
+                    sync_since.unwrap_or(0),
+                    len,
+                    &frame[..len],
+                );
             }
         }
         Err(e) => {
@@ -1525,7 +1648,8 @@ async fn send_status_request(
         &identity.pub_key,
         &req.pub_key,
         timestamp,
-        &[], // empty password = status/ping request
+        None,   // legacy anon status-ping never targets a room
+        &[],    // empty password = status/ping request
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -2459,13 +2583,21 @@ async fn try_dispatch_path(
         &c.pub_key[..6], dec.path_len_byte, dec.extra_type, dec.extra.len(),
     );
 
-    // Update the stored routing path for this contact.
-    if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN && !dec.path.is_empty() {
+    // Update the stored routing path for this contact. Accept zero-hop paths
+    // (direct neighbour, `dec.path_len_byte == 0`) as well — the previous
+    // `!dec.path.is_empty()` gate incorrectly skipped those, leaving the
+    // contact's out_path at `OUT_PATH_UNKNOWN` forever and forcing every
+    // subsequent TX to flood.
+    if dec.path_len_byte != contacts::OUT_PATH_UNKNOWN {
         let mut path_buf = [0u8; contacts::MAX_PATH_SIZE];
         let copy = dec.path.len().min(contacts::MAX_PATH_SIZE);
         path_buf[..copy].copy_from_slice(&dec.path[..copy]);
-        if let Err(e) = store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
-            defmt::warn!("Path recv: path update failed: {:?}", e);
+        match store.update_path(&c.pub_key, dec.path_len_byte, &path_buf).await {
+            Ok(true) => {
+                let _ = crate::PATH_UPDATED_CHANNEL.try_send(c.pub_key);
+            }
+            Ok(false) => {}
+            Err(e) => defmt::warn!("Path recv: path update failed: {:?}", e),
         }
     }
 

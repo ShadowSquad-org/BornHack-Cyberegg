@@ -119,6 +119,22 @@ async fn main(spawner: Spawner) {
         spawner.must_spawn(bond_task());
         ContactStore::new().init().await;
 
+        // Load persisted display/runtime settings (timezone, boost-RX) into
+        // their in-RAM atomics SYNCHRONOUSLY here — before any task that
+        // reads them starts rendering. Previously the load lived inside the
+        // BLE task's init block, which races against the display task: on a
+        // quick reboot the display could draw a frame using the static
+        // default (TIMEZONE_OFFSET = 0 → UTC) before the BLE task had a
+        // chance to load the persisted offset.
+        hello_graphics::TIMEZONE_OFFSET.store(
+            settings::get_timezone().await,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+        hello_graphics::BOOSTED_RX_GAIN.store(
+            settings::get_boost_rx().await,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+
         let identity = settings::load_or_create_identity().await;
         let ble_prng_seed = hello_graphics::fw::mesh::device_identity::trng_seed();
 
