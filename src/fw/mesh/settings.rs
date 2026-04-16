@@ -268,7 +268,7 @@ pub struct AdvertConfig {
 /// Default: adverts enabled, 4-hour interval.
 pub const DEFAULT_ADVERT: AdvertConfig = AdvertConfig {
     enabled:        true,
-    interval_hours: 4,
+    interval_hours: 16,
 };
 
 pub async fn get_advert_config_or_default() -> AdvertConfig {

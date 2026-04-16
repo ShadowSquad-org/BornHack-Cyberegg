@@ -83,6 +83,13 @@ pub enum MenuItemKind {
         prompt: &'static str,
         action: fn(),
     },
+    /// Like `Confirm`, but the dialog is only shown when `needs_confirm()`
+    /// returns true. Otherwise `action` runs immediately.
+    ConditionalConfirm {
+        prompt: &'static str,
+        needs_confirm: fn() -> bool,
+        action: fn(),
+    },
 }
 
 pub struct MenuItem {
@@ -261,6 +268,13 @@ impl ScreenState {
             }
             MenuItemKind::Confirm { prompt, action } => {
                 self.confirm = Some((prompt, action));
+            }
+            MenuItemKind::ConditionalConfirm { prompt, needs_confirm, action } => {
+                if needs_confirm() {
+                    self.confirm = Some((prompt, action));
+                } else {
+                    action();
+                }
             }
         }
     }
@@ -601,11 +615,16 @@ fn label_client_repeat() -> &'static str {
     }
 }
 
-fn action_client_repeat() {
-    let cur = crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed);
-    crate::LORA_CLIENT_REPEAT.store(!cur, Ordering::Relaxed);
-    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
-    crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+fn action_client_repeat_toggle() {
+    if crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed) {
+        crate::LORA_CLIENT_REPEAT.store(false, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+    } else {
+        crate::LORA_CLIENT_REPEAT.store(true, Ordering::Relaxed);
+        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+    }
 }
 
 // ── Share location (advert_loc_policy) ─────────────────────────────────────
@@ -1021,7 +1040,11 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 10] = [
     },
     MenuItem {
         label: label_client_repeat,
-        kind: MenuItemKind::Action(action_client_repeat),
+        kind: MenuItemKind::ConditionalConfirm {
+            prompt: "Only enable repeating\nwhen no repeaters are\naround!",
+            needs_confirm: || !crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed),
+            action: action_client_repeat_toggle,
+        },
     },
     MenuItem {
         label: || "Adverts",
@@ -1658,16 +1681,27 @@ where
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
-    // Action name — highlighted row, white text on black.
-    Rectangle::new(Point::new(6, 56), Size::new(140, 20))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-    let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
-    Text::with_text_style(prompt, Point::new(x, 60), font_white, center).draw(display)?;
+    // Prompt text — supports multi-line via '\n'. Rendered as white-on-black
+    // block if single line, or plain black text if multi-line.
+    let line_count = prompt.split('\n').count();
+    if line_count <= 1 {
+        Rectangle::new(Point::new(6, 56), Size::new(140, 20))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        let font_white = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
+        Text::with_text_style(prompt, Point::new(x, 60), font_white, center).draw(display)?;
+    } else {
+        let mut y = 54;
+        for line in prompt.split('\n') {
+            Text::with_text_style(line, Point::new(x, y), font, center).draw(display)?;
+            y += 16;
+        }
+    }
 
     // Hints
-    Text::with_text_style("Fire  = Yes", Point::new(x, 96), font, center).draw(display)?;
-    Text::with_text_style("Cancel = No", Point::new(x, 114), font, center).draw(display)?;
+    let hint_y = if line_count <= 1 { 96 } else { 54 + line_count as i32 * 16 + 8 };
+    Text::with_text_style("Fire  = Yes", Point::new(x, hint_y), font, center).draw(display)?;
+    Text::with_text_style("Cancel = No", Point::new(x, hint_y + 18), font, center).draw(display)?;
 
     Ok(())
 }

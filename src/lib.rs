@@ -129,7 +129,7 @@ pub static TELEMETRY_SHARE: AtomicBool = AtomicBool::new(false);
 /// Periodic self-advert scheduling — driven by the `advert_ticker_task` in
 /// `bin/embassy.rs`.
 pub static ADVERT_ENABLED: AtomicBool = AtomicBool::new(true);
-pub static ADVERT_INTERVAL_HOURS: AtomicU8 = AtomicU8::new(4);
+pub static ADVERT_INTERVAL_HOURS: AtomicU8 = AtomicU8::new(16);
 
 /// Fired by the menu when advert scheduling changes (toggle or interval).
 /// The BLE task persists the new config; the advert ticker task wakes up and

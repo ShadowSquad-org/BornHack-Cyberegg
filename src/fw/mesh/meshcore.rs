@@ -295,6 +295,11 @@ pub async fn run_meshcore_listener<'a>(
                             // No key set → wildcard: accept all TransportFlood packets.
                         }
 
+                        // Client-repeat relay (if enabled).
+                        if let Some(relay_req) = super::repeater::try_relay(&msg, identity) {
+                            let _ = crate::tx_send(relay_req);
+                        }
+
                         // Mirror the original firmware: flood routes carry the wire-encoded
                         // path_len_byte (hash_size_code<<6 | hop_count); direct routes
                         // signal 0xFF (no path built up by relays).

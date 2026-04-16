@@ -14,6 +14,7 @@ pub mod device_identity;
 pub mod kv;
 pub mod meshcore;
 pub mod msg_queue;
+pub mod repeater;
 pub mod settings;
 pub mod storage;
 pub mod sx1262;

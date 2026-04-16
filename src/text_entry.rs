@@ -174,9 +174,10 @@ impl TextEntry {
                         _ => None,
                     };
                     if let Some(id) = table_id {
+                        let mid = (char_table(id).len() / 2) as u8;
                         self.state = InputState::CharPick {
                             table_id: id,
-                            cursor: 0,
+                            cursor: mid,
                         };
                     }
                 }
@@ -219,7 +220,9 @@ impl TextEntry {
                     self.backspace();
                 }
                 ButtonId::Down => {
-                    self.state = InputState::SpecialPick { cursor: 0 };
+                    self.state = InputState::SpecialPick {
+                        cursor: (SPECIAL_CHARS.len() / 2) as u8,
+                    };
                 }
                 ButtonId::Right => {
                     self.state = InputState::CmdRightHub;
@@ -239,7 +242,9 @@ impl TextEntry {
                     self.clear();
                 }
                 ButtonId::Right => {
-                    self.state = InputState::NumberPick { cursor: 0 };
+                    self.state = InputState::NumberPick {
+                        cursor: (NUMBER_CHARS.len() / 2) as u8,
+                    };
                 }
                 _ => {}
             },
