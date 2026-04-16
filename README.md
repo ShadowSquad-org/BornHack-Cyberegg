@@ -107,6 +107,91 @@ The firmware implements the [MeshCore companion protocol](https://docs.meshcore.
 | `0x89` | `TRACE_DATA`       | Trace-path result (response to `0x24`) |
 | `0x8A` | `NEW_ADVERT`       | Newly discovered or updated contact    |
 
+## On-device UI
+
+The badge has a 152x152 e-paper display and a 4-direction joystick with Fire, Execute, and Cancel buttons. Several features are accessible directly from the badge without needing the companion app.
+
+### Navigation
+
+| Button | Action |
+| --- | --- |
+| Left / Right | Switch between screens (Main, Channels, PM, Adverts, etc.) |
+| Up / Down | Scroll within a menu or list |
+| Fire / Execute | Select / confirm |
+| Cancel | Go back / dismiss |
+
+### Channel browser
+
+Navigate to the **Channels** screen (left/right from the main screen). When no BLE client is connected, the on-device channel browser is shown.
+
+**Channel list** — shows all configured channels with a message count badge (e.g. `#bornhack (3)`). Use Up/Down to scroll, Fire to open a channel. Left/Right switches to adjacent screens.
+
+**Channel view** — shows the channel name and message count in a header bar, followed by the most recent messages (newest at the bottom, filling up to 8 lines). Each message shows the sender name (inverted white-on-black) and the message text wrapped across multiple lines.
+
+Own sent messages are prefixed with `> You`. When a repeater relays your message back, a repeat counter (inverted digit 1-9) appears before the sender name, confirming the message reached the mesh.
+
+**Reply** — press Fire in the channel view to compose a reply using the on-screen keyboard. The message is sent to the currently viewed channel.
+
+When a BLE companion is connected, the channel browser shows "Messages unavailable — BLE client connected" since the companion app handles messaging.
+
+### On-screen keyboard
+
+The text entry system uses a hierarchical joystick-driven keyboard. The screen splits: the top half shows entered text, the bottom half shows the current navigation state.
+
+**Root level** — a center dot with four directional options:
+
+| Direction | Action |
+| --- | --- |
+| Left | Letters A-I |
+| Up | Letters J-R |
+| Right | Letters S-Z |
+| Down | Commands (space, backspace, specials, numbers) |
+| Fire | Submit text |
+| Cancel | Discard and exit |
+
+**Letter groups** — after choosing a letter range, three sub-groups are available (the opposite direction returns to root). For example, A-I:
+
+| Direction | Letters |
+| --- | --- |
+| Down | a b c |
+| Left | d e f |
+| Up | g h i |
+| Right | Back to root |
+
+**Letter selection** — the group shows 2-3 characters with the middle one highlighted. Use Left/Right to move the highlight, Fire to insert the character.
+
+**Commands** (Down from root):
+
+| Direction | Action |
+| --- | --- |
+| Up | Back to root |
+| Left | Special characters (`_ . , ( ) * / + - ? #`) |
+| Down | Space / Backspace (space selected by default) |
+| Right | More options |
+
+**More options** (Right from Commands):
+
+| Direction | Action |
+| --- | --- |
+| Up | Toggle Shift (types one uppercase letter, then reverts) |
+| Down | Clear all text |
+| Right | Number picker (0-9) |
+| Left | Back to Commands |
+
+When Shift is active, an inverted "S" indicator appears in the keyboard area. The next letter entered will be uppercase, then shift automatically deactivates.
+
+### Settings menu
+
+The main menu contains a **Settings** submenu with:
+
+- **Bluetooth** — view BLE device name, enable/disable BLE, clear stored pairings (with confirmation)
+- **LoRa** — enable/disable LoRa radio, boost RX gain, radio preset picker (community presets), TX power
+- **MeshCore** — set node name, client repeat (with confirmation), adverts (on/off, interval), telemetry sharing, multi-ACK, path hash length, reset channels, reset contacts
+- **Timezone** — UTC offset stepper
+- **Factory reset** — wipes all settings and reboots (with confirmation)
+
+Destructive actions (reset channels, reset contacts, factory reset, clear pairings) show a full-screen "Are you sure?" confirmation dialog. The client-repeat toggle also shows a warning when enabling.
+
 ## Setup
 
 ### Prerequisites
