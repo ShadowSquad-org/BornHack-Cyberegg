@@ -43,7 +43,9 @@ static CHARS_STU: &[u8] = b"stu";
 static CHARS_VWX: &[u8] = b"vwx";
 static CHARS_YZ: &[u8] = b"yz";
 
-static SPECIAL_CHARS: &[u8] = b" _.,()*/+-";
+const BKSP: u8 = 0x08;
+static SPACE_BKSP: &[u8] = &[b' ', BKSP];
+static SPECIAL_CHARS: &[u8] = b"_.,()*/+-?#";
 static NUMBER_CHARS: &[u8] = b"0123456789";
 
 // ── State machine ────────────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ enum InputState {
     CharPick { table_id: u8, cursor: u8 },
     CmdHub,
     CmdRightHub,
+    SpaceBkspPick { cursor: u8 },
     SpecialPick { cursor: u8 },
     NumberPick { cursor: u8 },
 }
@@ -106,7 +109,9 @@ impl TextEntry {
     }
 
     fn push_char(&mut self, ch: u8) {
-        if self.text.len() < self.max_len as usize {
+        if ch == BKSP {
+            self.text.pop();
+        } else if self.text.len() < self.max_len as usize {
             let c = if self.shift { ch.to_ascii_uppercase() } else { ch };
             let _ = self.text.push(c);
             self.shift = false;
@@ -217,12 +222,12 @@ impl TextEntry {
                     self.state = InputState::Root;
                 }
                 ButtonId::Left => {
-                    self.backspace();
-                }
-                ButtonId::Down => {
                     self.state = InputState::SpecialPick {
                         cursor: (SPECIAL_CHARS.len() / 2) as u8,
                     };
+                }
+                ButtonId::Down => {
+                    self.state = InputState::SpaceBkspPick { cursor: 0 };
                 }
                 ButtonId::Right => {
                     self.state = InputState::CmdRightHub;
@@ -245,6 +250,26 @@ impl TextEntry {
                     self.state = InputState::NumberPick {
                         cursor: (NUMBER_CHARS.len() / 2) as u8,
                     };
+                }
+                _ => {}
+            },
+
+            InputState::SpaceBkspPick { cursor } => match btn {
+                ButtonId::Left => {
+                    if cursor > 0 {
+                        self.state = InputState::SpaceBkspPick { cursor: cursor - 1 };
+                    }
+                }
+                ButtonId::Right => {
+                    if (cursor + 1) < SPACE_BKSP.len() as u8 {
+                        self.state = InputState::SpaceBkspPick { cursor: cursor + 1 };
+                    }
+                }
+                ButtonId::Execute | ButtonId::Fire => {
+                    self.push_char(SPACE_BKSP[cursor as usize]);
+                }
+                ButtonId::Cancel => {
+                    self.state = InputState::CmdHub;
                 }
                 _ => {}
             },
@@ -351,6 +376,9 @@ where
         }
         InputState::CmdHub => draw_hub_cmd(display)?,
         InputState::CmdRightHub => draw_hub_cmd_right(display)?,
+        InputState::SpaceBkspPick { cursor } => {
+            draw_char_picker(display, SPACE_BKSP, cursor)?;
+        }
         InputState::SpecialPick { cursor } => {
             draw_char_picker(display, SPECIAL_CHARS, cursor)?;
         }
@@ -406,7 +434,10 @@ where
             }
             break;
         }
-        let byte_end = (byte_start + CHARS_PER_LINE).min(text.len());
+        let mut byte_end = (byte_start + CHARS_PER_LINE).min(text.len());
+        while byte_end > byte_start && !text.is_char_boundary(byte_end) {
+            byte_end -= 1;
+        }
         let line_str = &text[byte_start..byte_end];
 
         Text::with_text_style(
@@ -601,8 +632,8 @@ where
     draw_arrow_down(display)?;
     draw_arrow_right(display)?;
     draw_label(display, "<-", KB_CX, KB_CY - 28, Alignment::Center)?;
-    draw_label(display, "Bksp", KB_CX - 34, KB_CY, Alignment::Right)?;
-    draw_label(display, "Spec", KB_CX, KB_CY + 28, Alignment::Center)?;
+    draw_label(display, "!@#", KB_CX - 34, KB_CY, Alignment::Right)?;
+    draw_label(display, "SP/BS", KB_CX, KB_CY + 28, Alignment::Center)?;
     draw_label(display, "More", KB_CX + 34, KB_CY, Alignment::Left)?;
     Ok(())
 }
@@ -649,8 +680,11 @@ where
             .draw(display)?;
         }
 
-        let label = if ch == b' ' { "SP" } else {
-            // Single byte → safe ASCII
+        let label = if ch == b' ' {
+            "SP"
+        } else if ch == BKSP {
+            "BS"
+        } else {
             unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&ch)) }
         };
         let font = if is_sel { FONT_INV } else { FONT };

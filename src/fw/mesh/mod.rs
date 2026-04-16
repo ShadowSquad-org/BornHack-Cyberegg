@@ -8,6 +8,7 @@
 
 pub mod ble;
 pub mod bonds;
+pub mod channel_browser;
 pub mod channels;
 pub mod contacts;
 pub mod device_identity;
@@ -46,6 +47,85 @@ pub static LAST_LORA_MSG: Mutex<CriticalSectionRawMutex, RefCell<Option<LoraMess
 
 /// Fired whenever a new channel message is stored in `LAST_LORA_MSG`.
 pub static LORA_MSG_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// ---------------------------------------------------------------------------
+// Channel message ring buffer (for the on-device channel browser)
+// ---------------------------------------------------------------------------
+
+/// Maximum channel message text size in bytes.
+pub const CHANNEL_MSG_TEXT_MAX: usize = 130;
+
+/// A single channel message cached in RAM for the on-device browser.
+pub struct ChannelMsgEntry {
+    pub channel_idx: u8,
+    pub sender: heapless::String<16>,
+    pub text: heapless::String<CHANNEL_MSG_TEXT_MAX>,
+    pub timestamp: u32,
+    pub content_hash: u32,
+    pub is_own: bool,
+    pub repeat_count: u8,
+}
+
+const CHANNEL_MSG_RING_SIZE: usize = 32;
+
+pub struct ChannelMsgRing {
+    entries: [Option<ChannelMsgEntry>; CHANNEL_MSG_RING_SIZE],
+    head: usize,
+    len: usize,
+}
+
+impl ChannelMsgRing {
+    const INIT: Option<ChannelMsgEntry> = None;
+
+    pub const fn new() -> Self {
+        Self {
+            entries: [Self::INIT; CHANNEL_MSG_RING_SIZE],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, entry: ChannelMsgEntry) {
+        self.entries[self.head] = Some(entry);
+        self.head = (self.head + 1) % CHANNEL_MSG_RING_SIZE;
+        if self.len < CHANNEL_MSG_RING_SIZE {
+            self.len += 1;
+        }
+    }
+
+    /// Iterate entries from oldest to newest.
+    pub fn iter(&self) -> impl Iterator<Item = &ChannelMsgEntry> {
+        let start = if self.len < CHANNEL_MSG_RING_SIZE {
+            0
+        } else {
+            self.head
+        };
+        (0..self.len).filter_map(move |i| {
+            let idx = (start + i) % CHANNEL_MSG_RING_SIZE;
+            self.entries[idx].as_ref()
+        })
+    }
+
+    /// Find a mutable entry by content_hash (for repeat-count updates).
+    pub fn find_by_hash_mut(&mut self, hash: u32) -> Option<&mut ChannelMsgEntry> {
+        self.entries.iter_mut().filter_map(|e| e.as_mut()).find(|e| e.content_hash == hash)
+    }
+}
+
+pub static CHANNEL_MSG_RING: Mutex<CriticalSectionRawMutex, RefCell<ChannelMsgRing>> =
+    Mutex::new(RefCell::new(ChannelMsgRing::new()));
+
+/// Cached channel list for the on-device browser. Populated by the meshcore
+/// task at boot and on `CHANNELS_CHANGED_SIGNAL`.
+pub struct CachedChannel {
+    pub slot_idx: u8,
+    pub name: heapless::String<20>,
+}
+
+pub static CACHED_CHANNELS: Mutex<
+    CriticalSectionRawMutex,
+    RefCell<heapless::Vec<CachedChannel, { channels::NUM_CHANNELS }>>,
+> = Mutex::new(RefCell::new(heapless::Vec::new()));
 
 /// Last received MeshCore advert.
 pub struct LastAdvert {

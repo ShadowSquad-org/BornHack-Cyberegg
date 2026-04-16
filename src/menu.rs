@@ -452,6 +452,17 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
+        // Channel browser intercepts input on the Channel screen.
+        #[cfg(feature = "mesh")]
+        if self.active_screen == crate::SCREEN_CHANNEL {
+            let leave = crate::fw::mesh::channel_browser::dispatch(btn);
+            if leave {
+                // Cancel propagates: let the normal handler switch screens.
+            } else {
+                return;
+            }
+        }
+
         let screen = &self.screens[self.active_screen as usize];
         // Confirmation dialog takes priority over any other screen mode.
         if screen.confirm.is_some() {

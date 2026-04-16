@@ -251,6 +251,18 @@ pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31
 pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
     std::sync::Mutex::new(RefCell::new(heapless::String::new()));
 
+/// Truncate a UTF-8 string to fit within `max_bytes` on a char boundary.
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
 #[cfg(feature = "embassy-base")]
 pub fn update_node_name(name: &[u8]) {
@@ -258,7 +270,7 @@ pub fn update_node_name(name: &[u8]) {
         NODE_NAME.lock(|cell| {
             let mut stored = cell.borrow_mut();
             stored.clear();
-            let _ = stored.push_str(&s[..s.len().min(31)]);
+            let _ = stored.push_str(truncate_str(s, 31));
         });
     }
 }
@@ -270,7 +282,7 @@ pub fn update_node_name(name: &[u8]) {
         let guard = NODE_NAME.lock().unwrap();
         let mut stored = guard.borrow_mut();
         stored.clear();
-        let _ = stored.push_str(&s[..s.len().min(31)]);
+        let _ = stored.push_str(truncate_str(s, 31));
     }
 }
 
@@ -347,6 +359,29 @@ pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resu
 where
     D: DrawTarget<Color = TriColor>,
 {
+    // Text entry: full-screen text input takes priority over all screens.
+    if text_entry::is_active() {
+        #[cfg(feature = "embassy-base")]
+        return text_entry::TEXT_ENTRY.lock(|cell| {
+            let borrow = cell.borrow();
+            if let Some(ref entry) = *borrow {
+                text_entry::draw_text_entry(display, entry)
+            } else {
+                Ok(())
+            }
+        });
+        #[cfg(feature = "simulator")]
+        return {
+            let guard = text_entry::TEXT_ENTRY.lock().unwrap();
+            let borrow = guard.borrow();
+            if let Some(ref entry) = *borrow {
+                text_entry::draw_text_entry(display, entry)
+            } else {
+                Ok(())
+            }
+        };
+    }
+
     let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]
@@ -355,6 +390,9 @@ where
         #[cfg(feature = "mesh")]
         SCREEN_PM => draw_screen_pm(display, bat_prc),
         #[cfg(feature = "mesh")]
+        #[cfg(feature = "mesh")]
+        SCREEN_CHANNEL => fw::mesh::channel_browser::draw(display, bat_prc),
+        #[cfg(not(feature = "mesh"))]
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
         SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
@@ -437,28 +475,6 @@ fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resul
 where
     D: DrawTarget<Color = TriColor>,
 {
-    // Text entry: full-screen text input takes priority over all other screens.
-    if text_entry::is_active() {
-        #[cfg(feature = "embassy-base")]
-        return text_entry::TEXT_ENTRY.lock(|cell| {
-            let borrow = cell.borrow();
-            if let Some(ref entry) = *borrow {
-                text_entry::draw_text_entry(display, entry)
-            } else {
-                Ok(())
-            }
-        });
-        #[cfg(feature = "simulator")]
-        return {
-            let guard = text_entry::TEXT_ENTRY.lock().unwrap();
-            let borrow = guard.borrow();
-            if let Some(ref entry) = *borrow {
-                text_entry::draw_text_entry(display, entry)
-            } else {
-                Ok(())
-            }
-        };
-    }
 
     // About screen: full-screen credits, no other elements.
     let (about, about_page) = with_display_state!(|state| {
@@ -676,72 +692,19 @@ where
     })
 }
 
-#[cfg(feature = "mesh")]
-fn draw_screen_lora<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
+#[cfg(not(feature = "mesh"))]
+fn draw_screen_lora<D>(display: &mut D, _bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let style_msg = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
-
-    // Header bar: "Channel" + battery
-    Text::with_text_style("Channel", Point::new(4, 14), style_bold, bottom).draw(display)?;
-    let bat_text = bat_text(bat_prc);
-    Text::with_text_style(
-        &bat_text,
-        Point::new(148, 14),
-        style_msg,
-        TextStyleBuilder::new()
-            .baseline(Baseline::Bottom)
-            .alignment(Alignment::Right)
-            .build(),
-    )
-    .draw(display)?;
-    Rectangle::new(Point::new(0, 16), Size::new(152, 1))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
+    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let center = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), font, center)
         .draw(display)?;
-
-    LAST_LORA_MSG.lock(|cell| -> Result<(), D::Error> {
-        match *cell.borrow() {
-            None => {
-                Text::with_text_style(
-                    "No channel messages",
-                    display.bounding_box().center(),
-                    style_bold,
-                    TextStyleBuilder::new()
-                        .baseline(Baseline::Middle)
-                        .alignment(Alignment::Center)
-                        .build(),
-                )
-                .draw(display)?;
-            }
-            Some(ref msg) => {
-                // Channel name (bold)
-                Text::with_text_style(msg.channel.as_str(), Point::new(4, 30), style_bold, bottom)
-                    .draw(display)?;
-
-                // Sender nickname (bold)
-                Text::with_text_style(msg.sender.as_str(), Point::new(4, 44), style_bold, bottom)
-                    .draw(display)?;
-
-                // Divider
-                Rectangle::new(Point::new(0, 46), Size::new(152, 1))
-                    .into_styled(PrimitiveStyle::with_fill(BLACK))
-                    .draw(display)?;
-
-                // Message text wrapped
-                draw_wrapped(display, msg.text.as_str(), 4, 60, 14, 21, style_msg)?;
-
-                // RSSI and SNR at bottom
-                let rssi_text = format!(24; "{} dBm / {} dB", msg.rssi, msg.snr_x4 / 4).unwrap();
-                Text::with_text_style(&rssi_text, Point::new(4, 152), style_rssi, bottom)
-                    .draw(display)?;
-            }
-        }
-        Ok(())
-    })
+    Ok(())
 }
 
 #[cfg(feature = "mesh")]

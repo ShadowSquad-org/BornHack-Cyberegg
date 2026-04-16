@@ -519,10 +519,8 @@ async fn nus_peripheral_loop<C>(
 
     loop {
         // Handle channel reset request from the menu (fires between connections).
-        if crate::CHANNEL_RESET_SIGNAL.signaled() {
-            crate::CHANNEL_RESET_SIGNAL.reset();
-            channels::reset().await;
-        }
+        // CHANNEL_RESET_SIGNAL is now handled in the meshcore task
+        // (which loops continuously and can respond immediately).
         // Persist boost-RX flag when toggled from the menu.
         if crate::BOOST_RX_CHANGED_SIGNAL.signaled() {
             crate::BOOST_RX_CHANGED_SIGNAL.reset();

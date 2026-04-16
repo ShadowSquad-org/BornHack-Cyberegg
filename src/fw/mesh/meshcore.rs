@@ -39,6 +39,26 @@ async fn load_channels() -> heapless::Vec<LoadedChannel, { channels::NUM_CHANNEL
     v
 }
 
+pub(super) use crate::truncate_str as truncate_bytes;
+
+fn update_cached_channels(loaded: &heapless::Vec<LoadedChannel, { channels::NUM_CHANNELS }>) {
+    crate::CACHED_CHANNELS.lock(|cell| {
+        let mut list = cell.borrow_mut();
+        list.clear();
+        for ch in loaded {
+            let name_str = core::str::from_utf8(&ch.name)
+                .unwrap_or("?")
+                .trim_end_matches('\0');
+            let mut name = heapless::String::new();
+            let _ = name.push_str(truncate_bytes(name_str, 20));
+            let _ = list.push(crate::CachedChannel {
+                slot_idx: ch.slot_idx,
+                name,
+            });
+        }
+    });
+}
+
 static CONTACTS: Mutex<CriticalSectionRawMutex, RefCell<Contacts<20>>> =
     Mutex::new(RefCell::new(Contacts::new()));
 
@@ -137,6 +157,7 @@ pub async fn run_meshcore_listener<'a>(
     defmt::info!("MeshCore identity pub_key: {=[u8]:02x}", &identity.pub_key[..]);
 
     let mut loaded_channels = load_channels().await;
+    update_cached_channels(&loaded_channels);
     defmt::info!("MeshCore: loaded {} channel(s) from KV", loaded_channels.len());
 
     // Load the persisted path hash mode into the RAM cache so every flood TX
@@ -167,10 +188,20 @@ pub async fn run_meshcore_listener<'a>(
             }
         }
 
+        // Reset channels and reboot when requested from the menu.
+        if crate::CHANNEL_RESET_SIGNAL.signaled() {
+            crate::CHANNEL_RESET_SIGNAL.reset();
+            channels::reset().await;
+            defmt::info!("channels: reset complete — rebooting");
+            Timer::after_millis(200).await;
+            cortex_m::peripheral::SCB::sys_reset();
+        }
+
         // Reload channel table if the BLE task updated a channel.
         if crate::CHANNELS_CHANGED_SIGNAL.signaled() {
             crate::CHANNELS_CHANGED_SIGNAL.reset();
             loaded_channels = load_channels().await;
+            update_cached_channels(&loaded_channels);
             defmt::debug!("MeshCore: reloaded {} channel(s) from KV", loaded_channels.len());
         }
 
@@ -398,6 +429,15 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
                 if ring.contains(content_hash) { false } else { ring.insert(content_hash); true }
             });
             if !is_new {
+                // Check if this is our own message echoed back by a repeater.
+                crate::CHANNEL_MSG_RING.lock(|cell| {
+                    if let Some(entry) = cell.borrow_mut().find_by_hash_mut(content_hash) {
+                        if entry.is_own && entry.repeat_count < 9 {
+                            entry.repeat_count += 1;
+                            crate::LORA_MSG_SIGNAL.signal(());
+                        }
+                    }
+                });
                 defmt::debug!("GrpTxt: duplicate suppressed (hash={=u32:#010x})", content_hash);
                 return;
             }
@@ -438,6 +478,25 @@ async fn push_grp_txt(payload: &[u8], rssi: i16, snr_x4: i8, path_len: u8, chann
                 });
             });
             crate::LORA_MSG_SIGNAL.signal(());
+
+            // Add to the channel message ring for the on-device browser.
+            {
+                let mut s: heapless::String<16> = heapless::String::new();
+                let _ = s.push_str(truncate_bytes(sender_str, 16));
+                let mut t: heapless::String<{ crate::CHANNEL_MSG_TEXT_MAX }> = heapless::String::new();
+                let _ = t.push_str(truncate_bytes(msg_str, crate::CHANNEL_MSG_TEXT_MAX));
+                crate::CHANNEL_MSG_RING.lock(|cell| {
+                    cell.borrow_mut().push(crate::ChannelMsgEntry {
+                        channel_idx: ch.slot_idx,
+                        sender: s,
+                        text: t,
+                        timestamp: dec.timestamp,
+                        content_hash,
+                        is_own: false,
+                        repeat_count: 0,
+                    });
+                });
+            }
 
             // Push to the flash queue and notify any connected BLE companion.
             let mut queued_text: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
@@ -1099,6 +1158,26 @@ async fn send_grp_txt(
                 // companion app already knows it sent this message.
                 let content_hash = msg_hash(hash, &wire_text, req.timestamp);
                 MSG_SEEN.lock(|cell| cell.borrow_mut().insert(content_hash));
+
+                // Add to the channel message ring so the on-device browser
+                // shows our own sent messages.
+                {
+                    let body = core::str::from_utf8(&req.text).unwrap_or("");
+                    let mut t: heapless::String<{ crate::CHANNEL_MSG_TEXT_MAX }> = heapless::String::new();
+                    let _ = t.push_str(truncate_bytes(body, crate::CHANNEL_MSG_TEXT_MAX));
+                    crate::CHANNEL_MSG_RING.lock(|cell| {
+                        cell.borrow_mut().push(crate::ChannelMsgEntry {
+                            channel_idx: req.channel_idx,
+                            sender: heapless::String::new(),
+                            text: t,
+                            timestamp: req.timestamp,
+                            content_hash,
+                            is_own: true,
+                            repeat_count: 0,
+                        });
+                    });
+                    crate::LORA_MSG_SIGNAL.signal(());
+                }
             }
         }
         Err(e) => {

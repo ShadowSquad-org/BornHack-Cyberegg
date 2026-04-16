@@ -81,11 +81,23 @@ pub async fn init() {
     }
 
     if found == 0 {
+        seed_defaults().await;
+        defmt::info!("channels: first boot, seeded default channels");
+    }
+}
+
+async fn seed_defaults() {
+    let defaults: [(&[u8], &[u8; KEY_LEN]); 3] = [
+        (b"public", &PUBLIC_CHANNEL_KEY),
+        (b"#bornhack", &meshcore::channel::key_from_hashtag("#bornhack")),
+        (b"#test", &meshcore::channel::key_from_hashtag("#test")),
+    ];
+    for (i, (name, key)) in defaults.iter().enumerate() {
         let mut slot = [0u8; SLOT_LEN];
-        slot[..6].copy_from_slice(b"public");
-        slot[NAME_LEN..].copy_from_slice(&PUBLIC_CHANNEL_KEY);
-        kv_write(0, &slot).await;
-        defmt::info!("channels: first boot, seeded public channel");
+        let n = name.len().min(NAME_LEN);
+        slot[..n].copy_from_slice(&name[..n]);
+        slot[NAME_LEN..].copy_from_slice(*key);
+        kv_write(i, &slot).await;
     }
 }
 
@@ -149,10 +161,7 @@ pub async fn reset() {
     for i in 0..NUM_CHANNELS {
         kv_write(i, &[0u8; SLOT_LEN]).await;
     }
-    let mut slot = [0u8; SLOT_LEN];
-    slot[..6].copy_from_slice(b"public");
-    slot[NAME_LEN..].copy_from_slice(&PUBLIC_CHANNEL_KEY);
-    kv_write(0, &slot).await;
+    seed_defaults().await;
     defmt::info!("channels: reset to defaults");
 }
 
