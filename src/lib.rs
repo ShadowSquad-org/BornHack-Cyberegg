@@ -14,6 +14,7 @@ pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+pub mod text_entry;
 use core::cell::RefCell;
 pub use menu::{DISPLAY_STATE, DisplayState, MenuItem, MenuItemKind, ScreenState, draw_menu};
 
@@ -155,6 +156,10 @@ pub static PATH_HASH_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signa
 #[cfg(feature = "embassy-base")]
 pub static FACTORY_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Fired when the menu's text entry submits a new node name.
+#[cfg(feature = "embassy-base")]
+pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// When true, the LoRa radio is put into standby and the meshcore task
 /// pauses all RX/TX until re-enabled.
 pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -242,6 +247,10 @@ pub fn unix_now() -> Option<u32> {
 pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31>>> =
     Mutex::new(RefCell::new(heapless::String::new()));
 
+#[cfg(feature = "simulator")]
+pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
+    std::sync::Mutex::new(RefCell::new(heapless::String::new()));
+
 /// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
 #[cfg(feature = "embassy-base")]
 pub fn update_node_name(name: &[u8]) {
@@ -251,6 +260,17 @@ pub fn update_node_name(name: &[u8]) {
             stored.clear();
             let _ = stored.push_str(&s[..s.len().min(31)]);
         });
+    }
+}
+
+/// Store `name` (raw UTF-8 bytes) into [`NODE_NAME`].  Invalid UTF-8 is ignored.
+#[cfg(feature = "simulator")]
+pub fn update_node_name(name: &[u8]) {
+    if let Ok(s) = core::str::from_utf8(name) {
+        let guard = NODE_NAME.lock().unwrap();
+        let mut stored = guard.borrow_mut();
+        stored.clear();
+        let _ = stored.push_str(&s[..s.len().min(31)]);
     }
 }
 
@@ -417,6 +437,29 @@ fn draw_screen_main<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Resul
 where
     D: DrawTarget<Color = TriColor>,
 {
+    // Text entry: full-screen text input takes priority over all other screens.
+    if text_entry::is_active() {
+        #[cfg(feature = "embassy-base")]
+        return text_entry::TEXT_ENTRY.lock(|cell| {
+            let borrow = cell.borrow();
+            if let Some(ref entry) = *borrow {
+                text_entry::draw_text_entry(display, entry)
+            } else {
+                Ok(())
+            }
+        });
+        #[cfg(feature = "simulator")]
+        return {
+            let guard = text_entry::TEXT_ENTRY.lock().unwrap();
+            let borrow = guard.borrow();
+            if let Some(ref entry) = *borrow {
+                text_entry::draw_text_entry(display, entry)
+            } else {
+                Ok(())
+            }
+        };
+    }
+
     // About screen: full-screen credits, no other elements.
     let (about, about_page) = with_display_state!(|state| {
         let s = state.current_screen();

@@ -404,6 +404,40 @@ impl<const M: usize> DisplayState<M> {
     /// Dispatch a button press to the menu layer.
     /// Called when the game layer did not consume the event.
     pub fn dispatch_button(&mut self, btn: ButtonId) {
+        // Text entry intercepts all input when active.
+        if crate::text_entry::is_active() {
+            let done = {
+                #[cfg(feature = "embassy-base")]
+                {
+                    crate::text_entry::TEXT_ENTRY.lock(|cell| {
+                        let mut borrow = cell.borrow_mut();
+                        if let Some(ref mut entry) = *borrow {
+                            entry.dispatch(btn)
+                        } else {
+                            false
+                        }
+                    })
+                }
+                #[cfg(feature = "simulator")]
+                {
+                    let guard = crate::text_entry::TEXT_ENTRY.lock().unwrap();
+                    let mut borrow = guard.borrow_mut();
+                    if let Some(ref mut entry) = *borrow {
+                        entry.dispatch(btn)
+                    } else {
+                        false
+                    }
+                }
+            };
+            if done {
+                #[cfg(feature = "embassy-base")]
+                crate::text_entry::TEXT_ENTRY.lock(|cell| cell.replace(None));
+                #[cfg(feature = "simulator")]
+                crate::text_entry::TEXT_ENTRY.lock().unwrap().replace(None);
+            }
+            return;
+        }
+
         let screen = &self.screens[self.active_screen as usize];
         // Confirmation dialog takes priority over any other screen mode.
         if screen.confirm.is_some() {
@@ -796,6 +830,35 @@ fn label_lora_enabled() -> &'static str {
     }
 }
 
+// ── Set Name (via text entry) ───────────────────────────────────────────────
+
+fn on_name_complete(name: &[u8]) {
+    crate::update_node_name(name);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::NODE_NAME_CHANGED_SIGNAL.signal(());
+}
+
+fn action_set_name() {
+    #[cfg(feature = "embassy-base")]
+    let prefill = crate::NODE_NAME.lock(|cell| {
+        let s = cell.borrow();
+        let mut buf = [0u8; 31];
+        let n = s.len().min(31);
+        buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
+        (buf, n)
+    });
+    #[cfg(feature = "simulator")]
+    let prefill = {
+        let guard = crate::NODE_NAME.lock().unwrap();
+        let s = guard.borrow();
+        let mut buf = [0u8; 31];
+        let n = s.len().min(31);
+        buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
+        (buf, n)
+    };
+    crate::text_entry::begin(&prefill.0[..prefill.1], 31, on_name_complete);
+}
+
 fn action_lora_toggle() {
     let cur = crate::LORA_DISABLED.load(Ordering::Relaxed);
     crate::LORA_DISABLED.store(!cur, Ordering::Relaxed);
@@ -947,10 +1010,14 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static MESHCORE_MENU_ITEMS: [MenuItem; 9] = [
+static MESHCORE_MENU_ITEMS: [MenuItem; 10] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "Set Name",
+        kind: MenuItemKind::Action(action_set_name),
     },
     MenuItem {
         label: label_client_repeat,

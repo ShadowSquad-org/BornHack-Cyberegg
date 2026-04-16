@@ -614,6 +614,26 @@ async fn nus_peripheral_loop<C>(
             super::contacts::ContactStore::new().clear_all().await;
         }
 
+        // Persist node name when changed from the menu text entry.
+        if crate::NODE_NAME_CHANGED_SIGNAL.signaled() {
+            crate::NODE_NAME_CHANGED_SIGNAL.reset();
+            #[cfg(feature = "embassy-base")]
+            {
+                let name_bytes = crate::NODE_NAME.lock(|cell| {
+                    let s = cell.borrow();
+                    let mut buf = [0u8; 31];
+                    let n = s.len().min(31);
+                    buf[..n].copy_from_slice(s.as_bytes().get(..n).unwrap_or(&[]));
+                    (buf, n)
+                });
+                node_name[..name_bytes.1].copy_from_slice(&name_bytes.0[..name_bytes.1]);
+                node_name_len = name_bytes.1;
+                match settings::set_node_name(&name_bytes.0[..name_bytes.1]).await {
+                    Ok(()) => defmt::info!("settings: node_name persisted from menu"),
+                    Err(e) => defmt::warn!("settings: node_name persist failed: {:?}", e),
+                }
+            }
+        }
         // Persist LoRa-enabled flag when changed from the menu.
         if crate::LORA_DISABLED_CHANGED.signaled() {
             crate::LORA_DISABLED_CHANGED.reset();
