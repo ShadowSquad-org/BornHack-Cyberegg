@@ -511,7 +511,7 @@ async fn wait_display_event(
 
 /// Periodic self-advert task.
 ///
-/// Wakes every `ADVERT_INTERVAL_HOURS` hours and fires `SEND_ADVERT_SIGNAL`
+/// Wakes every `ADVERT_INTERVAL_HOURS` hours and pushes `TxRequest::Advert`
 /// when `ADVERT_ENABLED` is true. When scheduling changes via the menu, the
 /// task wakes early on `ADVERT_CHANGED_SIGNAL` and re-reads the interval.
 /// When disabled it waits on the change signal and never sends.
@@ -533,8 +533,11 @@ async fn advert_ticker_task() {
 
         // Send an advert now, then sleep until the next tick (or wake early
         // if the menu changes the schedule).
-        hello_graphics::fw::mesh::SEND_ADVERT_SIGNAL
-            .signal(hello_graphics::fw::mesh::meshcore::AdvertMode::Flood);
+        let _ = hello_graphics::fw::mesh::tx_send(
+            hello_graphics::fw::mesh::TxRequest::Advert(
+                hello_graphics::fw::mesh::meshcore::AdvertMode::Flood,
+            ),
+        );
 
         let hours = hello_graphics::ADVERT_INTERVAL_HOURS
             .load(Relaxed)

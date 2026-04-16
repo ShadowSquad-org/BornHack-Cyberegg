@@ -1172,8 +1172,7 @@ async fn nus_peripheral_loop<C>(
                                     } else {
                                         super::meshcore::AdvertMode::ZeroHop
                                     };
-                                    crate::SEND_ADVERT_SIGNAL.signal(advert_mode);
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(crate::TxRequest::Advert(advert_mode));
                                     defmt::info!(
                                         "companion: SEND_SELF_ADVERT mode={=u8} → signalled",
                                         mode
@@ -1326,17 +1325,16 @@ async fn nus_peripheral_loop<C>(
                                             );
                                             let is_flood =
                                                 c.out_path_len == contacts::OUT_PATH_UNKNOWN;
-                                            match crate::TX_PM_CHANNEL.try_send(
-                                                crate::TxPrivateMsg {
+                                            match crate::tx_send(
+                                                crate::TxRequest::PrivateMsg(crate::TxPrivateMsg {
                                                     recipient_pub_key: c.pub_key,
                                                     timestamp,
                                                     text: v,
                                                     txt_type,
                                                     attempt,
-                                                },
+                                                }),
                                             ) {
                                                 Ok(()) => {
-                                                    crate::TX_WAKEUP.signal(());
                                                     // Compute expected_ack = SHA-256([ts:4][flags:1][text] || sender_pk)[0..4]
                                                     let flags = (attempt & 3) | (txt_type << 2);
                                                     let text_len = text.len().min(meshcore::payload::txt_msg::MAX_TXT_TEXT_SIZE);
@@ -1390,13 +1388,14 @@ async fn nus_peripheral_loop<C>(
                                     let _ = v.extend_from_slice(
                                         &text[..text.len().min(msg_queue::MAX_TEXT)],
                                     );
-                                    match crate::TX_MSG_CHANNEL.try_send(crate::TxChannelMsg {
-                                        channel_idx: channel,
-                                        timestamp,
-                                        text: v,
-                                    }) {
+                                    match crate::tx_send(
+                                        crate::TxRequest::ChannelMsg(crate::TxChannelMsg {
+                                            channel_idx: channel,
+                                            timestamp,
+                                            text: v,
+                                        }),
+                                    ) {
                                         Ok(()) => {
-                                            crate::TX_WAKEUP.signal(());
                                             defmt::info!(
                                                 "companion: SEND_CHANNEL_MSG ch={=u8} → queued for TX",
                                                 channel
@@ -1658,13 +1657,14 @@ async fn nus_peripheral_loop<C>(
                                         tag,
                                         path_vec.len(),
                                     );
-                                    let _ = crate::TX_TRACE_CHANNEL.try_send(crate::TxTracePath {
-                                        tag,
-                                        auth,
-                                        flags,
-                                        path: path_vec,
-                                    });
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::Trace(crate::TxTracePath {
+                                            tag,
+                                            auth,
+                                            flags,
+                                            path: path_vec,
+                                        }),
+                                    );
                                     let sent_resp = companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1701,14 +1701,13 @@ async fn nus_peripheral_loop<C>(
                                         rd.first().copied().unwrap_or(0),
                                         rd.len(),
                                     );
-                                    let _ = crate::TX_BINARY_REQ_CHANNEL.try_send(
-                                        crate::TxBinaryReq {
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::BinaryReq(crate::TxBinaryReq {
                                             pub_key: *pub_key,
                                             tag,
                                             req_data: rd,
-                                        },
+                                        }),
                                     );
-                                    crate::TX_WAKEUP.signal(());
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1725,12 +1724,12 @@ async fn nus_peripheral_loop<C>(
                                         "companion: SEND_STATUS_REQUEST key={=[u8]:02x} tag={=u32:#010x} (admin path)",
                                         &pub_key[..6], tag,
                                     );
-                                    let _ = crate::TX_ADMIN_STATUS_CHANNEL
-                                        .try_send(crate::TxAdminStatusReq {
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::AdminStatusReq(crate::TxAdminStatusReq {
                                             pub_key: *pub_key,
                                             tag,
-                                        });
-                                    crate::TX_WAKEUP.signal(());
+                                        }),
+                                    );
                                     companion::Response::Ok
                                 }
 
@@ -1749,11 +1748,12 @@ async fn nus_peripheral_loop<C>(
                                         password.len(),
                                         password,
                                     );
-                                    let _ = crate::TX_LOGIN_CHANNEL.try_send(crate::TxLogin {
-                                        pub_key: *pub_key,
-                                        password: pw_vec,
-                                    });
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::Login(crate::TxLogin {
+                                            pub_key: *pub_key,
+                                            password: pw_vec,
+                                        }),
+                                    );
                                     companion::Response::SentWithTag {
                                         is_flood: false,
                                         tag,
@@ -1849,9 +1849,9 @@ async fn nus_peripheral_loop<C>(
                                         tag,
                                         is_flood,
                                     );
-                                    let _ = crate::TX_TELEM_REQ_CHANNEL
-                                        .try_send(crate::TxTelemReq { pub_key: key, tag });
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::TelemReq(crate::TxTelemReq { pub_key: key, tag }),
+                                    );
                                     companion::Response::SentWithTag {
                                         is_flood,
                                         tag,
@@ -1905,9 +1905,9 @@ async fn nus_peripheral_loop<C>(
                                         &key[..6],
                                         tag,
                                     );
-                                    let _ = crate::TX_DISCOVERY_CHANNEL
-                                        .try_send(crate::TxDiscoveryReq { pub_key: key, tag });
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::DiscoveryReq(crate::TxDiscoveryReq { pub_key: key, tag }),
+                                    );
                                     // Discovery always floods; use a generous timeout.
                                     companion::Response::SentWithTag {
                                         is_flood: true,
@@ -1950,9 +1950,9 @@ async fn nus_peripheral_loop<C>(
                                     );
                                     let mut v = heapless::Vec::new();
                                     let _ = v.extend_from_slice(payload);
-                                    let _ = crate::TX_CONTROL_DATA_CHANNEL
-                                        .try_send(crate::TxControlData { payload: v });
-                                    crate::TX_WAKEUP.signal(());
+                                    let _ = crate::tx_send(
+                                        crate::TxRequest::ControlData(crate::TxControlData { payload: v }),
+                                    );
                                     companion::Response::Ok
                                 }
 

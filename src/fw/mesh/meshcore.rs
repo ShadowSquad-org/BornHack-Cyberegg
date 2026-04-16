@@ -180,56 +180,20 @@ pub async fn run_meshcore_listener<'a>(
             defmt::debug!("TX budget updated: af={=u32}.{=u32:03}", af_x1000 / 1000, af_x1000 % 1000);
         }
 
-        // Drain any already-queued outgoing messages before entering RX.
-        while let Ok(req) = crate::TX_MSG_CHANNEL.try_receive() {
-            send_grp_txt(&mut lora, &loaded_channels, req).await;
-        }
-        while let Ok(req) = crate::TX_PM_CHANNEL.try_receive() {
-            send_txt_msg(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_TRACE_CHANNEL.try_receive() {
-            send_trace(&mut lora, req).await;
-        }
-        while let Ok(req) = crate::TX_LOGIN_CHANNEL.try_receive() {
-            send_login(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_STATUS_REQ_CHANNEL.try_receive() {
-            send_status_request(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_TELEM_REQ_CHANNEL.try_receive() {
-            send_telem_request(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_ADMIN_STATUS_CHANNEL.try_receive() {
-            send_admin_status_request(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_BINARY_REQ_CHANNEL.try_receive() {
-            send_binary_request(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_DISCOVERY_CHANNEL.try_receive() {
-            send_discovery_request(&mut lora, req, identity).await;
-        }
-        while let Ok(req) = crate::TX_CONTROL_DATA_CHANNEL.try_receive() {
-            send_control_data(&mut lora, req).await;
-        }
-        if let Some(mode) = crate::SEND_ADVERT_SIGNAL.try_take() {
-            let mut name_buf = [0u8; settings::MAX_NODE_NAME];
-            let name_len = settings::get_node_name(&mut name_buf).await;
-            send_advert(&mut lora, identity, &name_buf[..name_len], 0, mode).await;
+        // Drain all queued TX requests before entering RX.
+        while let Ok(req) = crate::TX_CHANNEL.try_receive() {
+            dispatch_tx(&mut lora, &loaded_channels, identity, req).await;
         }
 
-        // Race: receive the next LoRa packet OR a TX request arrives on any
-        // channel. `TX_WAKEUP` is fired by every `TX_*_CHANNEL.try_send` site
-        // (and `SEND_ADVERT_SIGNAL`); waking on it lets the top-of-loop drain
-        // pick up the new request immediately instead of waiting for the
-        // ~15-second receive_packet timeout.
+        // Race: receive the next LoRa packet OR a TX request arrives.
+        // TX_WAKEUP breaks the receive_packet wait so the drain above
+        // picks up the new request immediately.
         use embassy_futures::select::{Either, select};
         let rx_result = match select(
             lora.receive_packet(&mut raw),
             crate::TX_WAKEUP.wait(),
         ).await {
             Either::Second(()) => {
-                // Reset so the next signal call wakes us again. The drain at
-                // the top of the loop handles routing per channel.
                 crate::TX_WAKEUP.reset();
                 continue;
             }
@@ -1019,6 +983,35 @@ fn flood_path_len_byte() -> u8 {
 ///
 /// The channel key is looked up first from the already-loaded in-RAM table,
 /// with a direct KV fallback for channels set after the last reload.
+async fn dispatch_tx(
+    lora: &mut SimpleLoRa<'_>,
+    loaded_channels: &heapless::Vec<LoadedChannel, { channels::NUM_CHANNELS }>,
+    identity: &DeviceIdentity,
+    req: crate::TxRequest,
+) {
+    match req {
+        crate::TxRequest::ChannelMsg(msg) => send_grp_txt(lora, loaded_channels, msg).await,
+        crate::TxRequest::PrivateMsg(msg) => send_txt_msg(lora, msg, identity).await,
+        crate::TxRequest::Trace(msg) => send_trace(lora, msg).await,
+        crate::TxRequest::Login(msg) => send_login(lora, msg, identity).await,
+        crate::TxRequest::AdminStatusReq(msg) => send_admin_status_request(lora, msg, identity).await,
+        crate::TxRequest::BinaryReq(msg) => send_binary_request(lora, msg, identity).await,
+        crate::TxRequest::TelemReq(msg) => send_telem_request(lora, msg, identity).await,
+        crate::TxRequest::DiscoveryReq(msg) => send_discovery_request(lora, msg, identity).await,
+        crate::TxRequest::ControlData(msg) => send_control_data(lora, msg).await,
+        crate::TxRequest::Advert(mode) => {
+            let mut name_buf = [0u8; settings::MAX_NODE_NAME];
+            let name_len = settings::get_node_name(&mut name_buf).await;
+            send_advert(lora, identity, &name_buf[..name_len], 0, mode).await;
+        }
+        crate::TxRequest::RawFrame { data, len } => {
+            if let Err(e) = lora.send_message(&data[..len]).await {
+                defmt::warn!("relay TX failed: {:?}", e);
+            }
+        }
+    }
+}
+
 async fn send_grp_txt(
     lora: &mut SimpleLoRa<'_>,
     loaded_channels: &[LoadedChannel],
@@ -1634,79 +1627,6 @@ async fn send_login(lora: &mut SimpleLoRa<'_>, req: crate::TxLogin, identity: &D
 // ---------------------------------------------------------------------------
 // Status request transmission
 // ---------------------------------------------------------------------------
-
-/// Build and transmit a STATUS REQUEST — same `AnonReq` wire format as login
-/// but with an empty password.  The server sees `data[4] == 0` (no password
-/// byte) and responds with uptime + battery instead of a login result.
-async fn send_status_request(
-    lora: &mut SimpleLoRa<'_>,
-    req: crate::TxStatusReq,
-    identity: &DeviceIdentity,
-) {
-    use meshcore::packet::{Message, PayloadType, RouteType};
-    use meshcore::MAX_TRANS_UNIT;
-
-    crate::LAST_REQ_TARGET.lock(|cell| cell.set(Some(req.pub_key)));
-
-    let timestamp = crate::unix_now().unwrap_or(0);
-
-    let payload = match meshcore::payload::anon_req::encrypt(
-        &identity.sec_key,
-        &identity.pub_key,
-        &req.pub_key,
-        timestamp,
-        None,   // legacy anon status-ping never targets a room
-        &[],    // empty password = status/ping request
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            defmt::warn!("send_status_req: encrypt failed: {:?}", defmt::Debug2Format(&e));
-            return;
-        }
-    };
-
-    let contact = contacts::ContactStore::new().find_by_key(&req.pub_key).await;
-    let (route, path_len_byte, path_bytes) = match contact {
-        Some(ref c) if c.out_path_len != contacts::OUT_PATH_UNKNOWN => {
-            let actual = c.path_actual_bytes();
-            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
-            let _ = pv.extend_from_slice(&c.out_path[..actual]);
-            (RouteType::Direct, c.out_path_len, pv)
-        }
-        _ => (RouteType::Flood, flood_path_len_byte(), heapless::Vec::new()),
-    };
-    let (route, transport_code) = match route {
-        RouteType::Flood => flood_route(PayloadType::AnonReq.to_u8(), &payload),
-        r => (r, 0),
-    };
-
-    let msg = Message {
-        payload_type:   PayloadType::AnonReq,
-        route,
-        version:        0,
-        transport_code,
-        path_len_byte,
-        path:           path_bytes,
-        payload,
-    };
-
-    let mut frame = [0u8; MAX_TRANS_UNIT];
-    match meshcore::packet::serialize(&msg, &mut frame) {
-        Ok(len) => {
-            // Record as pending BEFORE transmitting so the response handler can match it.
-            crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(Some(req.pub_key)));
-            if let Err(e) = lora.send_message(&frame[..len]).await {
-                defmt::warn!("send_status_req: TX failed: {:?}", e);
-                crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
-            } else {
-                defmt::info!("Status req sent to {=[u8]:02x} ({=usize}B)", &req.pub_key[..6], len);
-            }
-        }
-        Err(e) => {
-            defmt::warn!("send_status_req: packet serialize failed: {:?}", defmt::Debug2Format(&e));
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Telemetry request transmission

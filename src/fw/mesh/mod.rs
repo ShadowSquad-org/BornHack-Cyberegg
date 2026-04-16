@@ -139,12 +139,8 @@ pub static CHANNELS_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal
 /// Signals the meshcore task that tuning params changed; carries the new airtime_factor_x1000.
 pub static TUNING_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, u32> = Signal::new();
 
-/// Signals the meshcore task to transmit a self-advert.
-pub static SEND_ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, meshcore::AdvertMode> =
-    Signal::new();
-
 /// Wakes the meshcore task out of `lora.receive_packet()` whenever a new TX
-/// request is enqueued on any `TX_*_CHANNEL` (or `SEND_ADVERT_SIGNAL` is set).
+/// request is enqueued on `TX_CHANNEL`.
 ///
 /// Without this, `receive_packet`'s ~15 s timeout becomes the worst-case TX
 /// latency for any channel that isn't directly part of the meshcore task's
@@ -195,16 +191,8 @@ pub static RAW_PKT_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMut
     embassy_sync::channel::Channel::new();
 
 // ---------------------------------------------------------------------------
-// Control data packets
+// Control data packets (RX: meshcore → BLE)
 // ---------------------------------------------------------------------------
-
-pub struct TxControlData {
-    pub payload: heapless::Vec<u8, { ::meshcore::MAX_PAYLOAD_SIZE }>,
-}
-
-pub static TX_CONTROL_DATA_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxControlData, 2,
-> = embassy_sync::channel::Channel::new();
 
 pub struct ControlDataPkt {
     pub snr_x4: i8,
@@ -218,7 +206,7 @@ pub static CONTROL_DATA_PKT_CHANNEL: embassy_sync::channel::Channel<
 > = embassy_sync::channel::Channel::new();
 
 // ---------------------------------------------------------------------------
-// TX channels (BLE → meshcore)
+// Unified TX channel (BLE / menu / advert ticker → meshcore)
 // ---------------------------------------------------------------------------
 
 pub struct TxChannelMsg {
@@ -226,10 +214,6 @@ pub struct TxChannelMsg {
     pub timestamp: u32,
     pub text: heapless::Vec<u8, { msg_queue::MAX_TEXT }>,
 }
-
-pub static TX_MSG_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxChannelMsg, 16,
-> = embassy_sync::channel::Channel::new();
 
 pub struct TxPrivateMsg {
     pub recipient_pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
@@ -239,9 +223,6 @@ pub struct TxPrivateMsg {
     pub attempt: u8,
 }
 
-pub static TX_PM_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxPrivateMsg, 4> =
-    embassy_sync::channel::Channel::new();
-
 pub struct TxTracePath {
     pub tag: u32,
     pub auth: u32,
@@ -249,76 +230,76 @@ pub struct TxTracePath {
     pub path: heapless::Vec<u8, { ::meshcore::MAX_PATH_SIZE }>,
 }
 
-pub static TX_TRACE_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxTracePath, 2,
-> = embassy_sync::channel::Channel::new();
-
 pub struct TxLogin {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
     pub password: heapless::Vec<u8, 15>,
 }
 
-pub static TX_LOGIN_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxLogin, 2> =
-    embassy_sync::channel::Channel::new();
-
-pub struct TxStatusReq {
-    pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
-}
-
-pub static TX_STATUS_REQ_CHANNEL: embassy_sync::channel::Channel<CriticalSectionRawMutex, TxStatusReq, 2> =
-    embassy_sync::channel::Channel::new();
-
 /// `PAYLOAD_TYPE_REQ` with `REQ_TYPE_GET_STATUS` (0x01) — authenticated
 /// repeater-stats query sent after a successful login to a repeater.
-/// `tag` is the request's sender-timestamp, echoed by the repeater in the
-/// response's first 4 bytes for transaction matching.
 pub struct TxAdminStatusReq {
     pub pub_key: [u8; ::meshcore::PUB_KEY_SIZE],
     pub tag:     u32,
 }
 
-pub static TX_ADMIN_STATUS_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxAdminStatusReq, 2,
-> = embassy_sync::channel::Channel::new();
-
-/// Maximum `req_data` payload for a `CMD_SEND_BINARY_REQ`. The C++ reference
-/// uses up to ~12 bytes (get-neighbours with random blob is 11). 24 leaves
-/// slack without pressure on txt_msg plaintext budget (1 AES block ≤ 11 bytes
-/// of params after `[ts:4][flags:1]`).
+/// Maximum `req_data` payload for a `CMD_SEND_BINARY_REQ`.
 pub const MAX_BINARY_REQ_PARAMS: usize = 24;
 
 /// Generic `PAYLOAD_TYPE_REQ` with an opaque `[req_type:1][params...]` body.
-/// Used by the companion protocol's `SEND_BINARY_REQ` (0x32) pipe for things
-/// like `REQ_TYPE_GET_NEIGHBOURS`, `REQ_TYPE_GET_ACCESS_LIST`, etc.
 pub struct TxBinaryReq {
     pub pub_key:  [u8; ::meshcore::PUB_KEY_SIZE],
     pub tag:      u32,
-    /// First byte = `REQ_TYPE_*` discriminant (from the C++ `BaseChatMesh.h`
-    /// constants). Remaining bytes are request-type-specific parameters.
     pub req_data: heapless::Vec<u8, MAX_BINARY_REQ_PARAMS>,
 }
-
-pub static TX_BINARY_REQ_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxBinaryReq, 2,
-> = embassy_sync::channel::Channel::new();
 
 pub struct TxTelemReq {
     pub pub_key: [u8; 32],
     pub tag: u32,
 }
 
-pub static TX_TELEM_REQ_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxTelemReq, 2,
-> = embassy_sync::channel::Channel::new();
-
 pub struct TxDiscoveryReq {
     pub pub_key: [u8; 32],
     pub tag: u32,
 }
 
-pub static TX_DISCOVERY_CHANNEL: embassy_sync::channel::Channel<
-    CriticalSectionRawMutex, TxDiscoveryReq, 2,
+pub struct TxControlData {
+    pub payload: heapless::Vec<u8, { ::meshcore::MAX_PAYLOAD_SIZE }>,
+}
+
+/// Every outgoing LoRa transmission flows through this single enum.
+/// The meshcore task drains the channel and dispatches to the appropriate
+/// send function (encryption, framing, serialization, `lora.send_message`).
+pub enum TxRequest {
+    ChannelMsg(TxChannelMsg),
+    PrivateMsg(TxPrivateMsg),
+    Trace(TxTracePath),
+    Login(TxLogin),
+    AdminStatusReq(TxAdminStatusReq),
+    BinaryReq(TxBinaryReq),
+    TelemReq(TxTelemReq),
+    DiscoveryReq(TxDiscoveryReq),
+    ControlData(TxControlData),
+    Advert(meshcore::AdvertMode),
+    /// Pre-serialized frame (for relay / repeat). Sent as-is via
+    /// `lora.send_message()`.
+    RawFrame { data: [u8; ::meshcore::MAX_TRANS_UNIT], len: usize },
+}
+
+pub static TX_CHANNEL: embassy_sync::channel::Channel<
+    CriticalSectionRawMutex, TxRequest, 16,
 > = embassy_sync::channel::Channel::new();
+
+/// Convenience: push a `TxRequest` and wake the meshcore task.
+/// Returns `Err` if the channel is full.
+pub fn tx_send(req: TxRequest) -> Result<(), TxRequest> {
+    match TX_CHANNEL.try_send(req) {
+        Ok(()) => {
+            TX_WAKEUP.signal(());
+            Ok(())
+        }
+        Err(embassy_sync::channel::TrySendError::Full(r)) => Err(r),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Result channels (meshcore → BLE)
