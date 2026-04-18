@@ -84,7 +84,7 @@ impl ModalKind {
             Self::Feed      => &["Feed now",     "Cancel"],
             Self::Heal      => &["Give medicine",    "Cancel"],
             Self::Play      => &["Play now",     "Play music",  "Cancel"],
-            Self::Music     => &["Startup", "Rickroll", "Imp. March", "Sandstorm", "Pink Panther", "Cancel"],
+            Self::Music     => &["Startup", "Rickroll", "Imp. March", "Sandstorm", "Pink Panther", "Trololo", "Cancel"],
             Self::Rest      => &["Sleep",        "Relax",       "Cancel"],
             Self::None      => &[],
         }
@@ -108,7 +108,7 @@ fn is_item_available(label: &str) -> bool {
         "Relax"      => stats.can_relax,
         "Play now"   => stats.can_play,
         "Play music" => true,
-        "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" => true,
+        "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
         "Hibernate"  => !stats.hibernating,
         "Wake up"    => stats.hibernating,
         _            => true, // Cancel, View stats, etc.
@@ -215,6 +215,7 @@ pub fn activate() {
         "Imp. March"  => { play_song(2); }
         "Sandstorm"   => { play_song(3); }
         "Pink Panther" => { play_song(4); }
+        "Trololo"     => { play_song(5); }
         "Hibernate"   => { lifecycle::hibernate(); close(); }
         "Wake up"     => { lifecycle::wake_from_hibernation(); close(); }
         _ => {}
@@ -224,7 +225,6 @@ pub fn activate() {
 fn play_song(_index: usize) {
     #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(_index);
-    super::lifecycle::play();
     close();
 }
 

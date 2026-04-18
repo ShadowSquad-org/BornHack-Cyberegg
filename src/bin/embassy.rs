@@ -341,15 +341,8 @@ async fn display_loop(
 ) {
     use embassy_futures::select::{Either, select};
 
-    // Start at frame 1 so the animation plays 15000000→15000003 then
-    // wraps to 00000000 (index 0) before cycling back. Falls back to 0
-    // if fewer than 2 frames exist.
     #[cfg(feature = "game")]
-    let mut sprite_frame: u8 = if hello_graphics::game::sprite_loader::frame_count() > 1 {
-        1
-    } else {
-        0
-    };
+    let mut sprite_frame: u8 = 0;
 
     loop {
         let _ = display.clear(Color::White);

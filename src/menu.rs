@@ -954,10 +954,11 @@ fn action_melody_1() { play_melody(1); }
 fn action_melody_2() { play_melody(2); }
 fn action_melody_3() { play_melody(3); }
 fn action_melody_4() { play_melody(4); }
+fn action_melody_5() { play_melody(5); }
 
 // ── Static item arrays ────────────────────────────────────────────────────────
 
-static MELODY_ITEMS: [MenuItem; 6] = [
+static MELODY_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -981,6 +982,10 @@ static MELODY_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "Pink Panther",
         kind: MenuItemKind::Action(action_melody_4),
+    },
+    MenuItem {
+        label: || "Trololo",
+        kind: MenuItemKind::Action(action_melody_5),
     },
 ];
 

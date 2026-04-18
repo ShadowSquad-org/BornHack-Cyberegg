@@ -94,6 +94,12 @@ pub struct GameState {
     /// `age_ticks` at the time of the last successful save.
     /// Not part of the game logic — only used by the save system.
     last_save_tick: u32,
+
+    /// Transient flag (not serialized): when true, the next
+    /// `needs_save()` check returns true regardless of the interval.
+    /// Set on game start and phase transitions so the save happens
+    /// immediately rather than waiting 15 minutes.
+    save_pending: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +157,7 @@ impl GameState {
             hibernating: false,
             hibernate_ticks: 0,
             last_save_tick: 0,
+            save_pending: true,
         }
     }
 
@@ -255,6 +262,7 @@ impl GameState {
                 self.hatching_countdown -= consumed as u16;
                 if self.hatching_countdown == 0 {
                     self.phase = Phase::Active;
+                    self.save_pending = true;
                 }
                 return;
             }
@@ -565,6 +573,7 @@ impl GameState {
             self.leaving_countdown = 0;
             if self.phase == Phase::Leaving {
                 self.phase = Phase::Active;
+                self.save_pending = true;
             }
             return;
         }
@@ -574,8 +583,10 @@ impl GameState {
 
         if self.leaving_countdown >= threshold {
             self.phase = Phase::Gone;
+            self.save_pending = true;
         } else if self.phase == Phase::Active {
             self.phase = Phase::Leaving;
+            self.save_pending = true;
         }
     }
 }
@@ -864,12 +875,14 @@ impl GameState {
     /// No extra wake-ups are scheduled for saving — this check
     /// piggybacks on whatever triggered the current update.
     pub fn needs_save(&self) -> bool {
-        self.age_ticks.saturating_sub(self.last_save_tick) >= SAVE_INTERVAL_TICKS
+        self.save_pending
+            || self.age_ticks.saturating_sub(self.last_save_tick) >= SAVE_INTERVAL_TICKS
     }
 
     /// Mark the state as successfully saved.  Resets the save timer.
     pub fn mark_saved(&mut self) {
         self.last_save_tick = self.age_ticks;
+        self.save_pending = false;
     }
 }
 
@@ -878,7 +891,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 64;
+pub const SAVE_SIZE: usize = 65;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -903,7 +916,7 @@ impl GameState {
         w16!(self.hatching_countdown);
         w32!(self.leaving_countdown);
         w16!(self.generation);
-        // Action state (9 bytes).
+        // Action state (10 bytes).
         w8!(self.active_action.map_or(0xFF, |a| a as u8));
         w8!(self.action_ticks_remaining);
         w16!(self.cooldown_feed); w16!(self.cooldown_heal);
@@ -919,7 +932,7 @@ impl GameState {
         w32!(self.hibernate_ticks);
         // Save tick (4 bytes).
         w32!(self.last_save_tick);
-        // Total: 64 bytes.
+        // Total: 65 bytes.
         b
     }
 
@@ -976,6 +989,7 @@ impl GameState {
             drained_interval_counter, miserable_interval_counter, tired_passive_counter,
             is_sleeping, hibernating, hibernate_ticks,
             last_save_tick,
+            save_pending: false,
         })
     }
 }
