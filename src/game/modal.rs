@@ -83,7 +83,7 @@ impl ModalKind {
             Self::Hibernate => &["Hibernate",    "Wake up",     "Cancel"],
             Self::Feed      => &["Feed now",     "Cancel"],
             Self::Heal      => &["Give medicine",    "Cancel"],
-            Self::Play      => &["Play now",     "Tic Tac Toe", "Play music",  "Cancel"],
+            Self::Play      => &["Play now",     "Tic Tac Toe", "Lights Out",  "Play music",  "Cancel"],
             Self::Music     => &["Startup", "Rickroll", "Imp. March", "Sandstorm", "Pink Panther", "Trololo", "Cancel"],
             Self::Rest      => &["Sleep",        "Relax",       "Cancel"],
             Self::None      => &[],
@@ -108,7 +108,7 @@ fn is_item_available(label: &str) -> bool {
         "Relax"      => stats.can_relax,
         "Play now"   => stats.can_play,
         "Play music" => true,
-        "Tic Tac Toe" => true,
+        "Tic Tac Toe" | "Lights Out" => true,
         "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
         "Hibernate"  => !stats.hibernating,
         "Wake up"    => stats.hibernating,
@@ -209,6 +209,7 @@ pub fn activate() {
         "Relax"       => { lifecycle::relax(); close(); }
         "Play now"    => { lifecycle::play(); close(); }
         "Tic Tac Toe" => { super::tictactoe::open(); close(); }
+        "Lights Out"  => { super::lightsout::open(); close(); }
         "Play music"  => {
             open(ModalKind::Music);
         }

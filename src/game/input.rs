@@ -44,6 +44,19 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel | ButtonId::Fire);
     }
 
+    // ── Lights Out mini-game ──────────────────────────────────────────
+    if super::lightsout::is_active() {
+        match btn {
+            ButtonId::Cancel  => super::lightsout::close(),
+            ButtonId::Up      => super::lightsout::cursor_up(),
+            ButtonId::Down    => super::lightsout::cursor_down(),
+            ButtonId::Left    => super::lightsout::cursor_left(),
+            ButtonId::Right   => super::lightsout::cursor_right(),
+            ButtonId::Fire | ButtonId::Execute => { super::lightsout::activate(); }
+        }
+        return true;
+    }
+
     // ── Tic-tac-toe mini-game ──────────────────────────────────────────
     if super::tictactoe::is_active() {
         match btn {

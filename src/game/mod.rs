@@ -20,6 +20,7 @@ pub mod lifecycle;
 pub mod modal;
 pub mod nav;
 pub mod sprite_loader;
+pub mod lightsout;
 pub mod tictactoe;
 pub use nav::{GameNav, Row};
 
@@ -196,9 +197,12 @@ where
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
 
-    // ── Tic-tac-toe full-screen takeover ────────────────────────────────
+    // ── Mini-game full-screen takeover ─────────────────────────────────
     if tictactoe::is_active() {
         return tictactoe::draw(display);
+    }
+    if lightsout::is_active() {
+        return lightsout::draw(display);
     }
 
     // Battery icon — top-right.
