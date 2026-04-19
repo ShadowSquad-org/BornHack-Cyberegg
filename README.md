@@ -18,6 +18,9 @@ The firmware runs three concurrent Embassy tasks:
 - **BLE task** — GATT peripheral exposing Nordic UART Service (NUS). Speaks the MeshCore companion protocol; handles all commands from the companion app and pushes async notifications.
 - **MeshCore task** — drives the SX1262 in continuous RX. Receives/transmits MeshCore packets (adverts, private messages, channel messages, trace-path, login). Forwards received packets to the BLE task via channels.
 - **Display task** — renders UI screens to the SSD1675 e-paper display.
+- **Buzzer task** — plays melodies on the piezo buzzer via PWM, triggered by signal from any task.
+- **Battery task** — periodic ADC reads of battery voltage, caches percentage for display.
+- **Minute tick / advert ticker** — periodic timers for game updates and self-advertisement scheduling.
 
 ### Bootloader
 
@@ -113,12 +116,12 @@ The badge has a 152x152 e-paper display and a 4-direction joystick with Fire, Ex
 
 ### Navigation
 
-| Button | Action |
-| --- | --- |
-| Left / Right | Switch between screens (Main, Channels, PM, Adverts, etc.) |
-| Up / Down | Scroll within a menu or list |
-| Fire / Execute | Select / confirm |
-| Cancel | Go back / dismiss |
+| Button         | Action                                                     |
+| -------------- | ---------------------------------------------------------- |
+| Left / Right   | Switch between screens (Main, Channels, PM, Adverts, etc.) |
+| Up / Down      | Scroll within a menu or list                               |
+| Fire / Execute | Select / confirm                                           |
+| Cancel         | Go back / dismiss                                          |
 
 ### Channel browser
 
@@ -140,43 +143,43 @@ The text entry system uses a hierarchical joystick-driven keyboard. The screen s
 
 **Root level** — a center dot with four directional options:
 
-| Direction | Action |
-| --- | --- |
-| Left | Letters A-I |
-| Up | Letters J-R |
-| Right | Letters S-Z |
-| Down | Commands (space, backspace, specials, numbers) |
-| Fire | Submit text |
-| Cancel | Discard and exit |
+| Direction | Action                                         |
+| --------- | ---------------------------------------------- |
+| Left      | Letters A-I                                    |
+| Up        | Letters J-R                                    |
+| Right     | Letters S-Z                                    |
+| Down      | Commands (space, backspace, specials, numbers) |
+| Fire      | Submit text                                    |
+| Cancel    | Discard and exit                               |
 
 **Letter groups** — after choosing a letter range, three sub-groups are available (the opposite direction returns to root). For example, A-I:
 
-| Direction | Letters |
-| --- | --- |
-| Down | a b c |
-| Left | d e f |
-| Up | g h i |
-| Right | Back to root |
+| Direction | Letters      |
+| --------- | ------------ |
+| Down      | a b c        |
+| Left      | d e f        |
+| Up        | g h i        |
+| Right     | Back to root |
 
 **Letter selection** — the group shows 2-3 characters with the middle one highlighted. Use Left/Right to move the highlight, Fire to insert the character.
 
 **Commands** (Down from root):
 
-| Direction | Action |
-| --- | --- |
-| Up | Back to root |
-| Left | Special characters (`_ . , ( ) * / + - ? #`) |
-| Down | Space / Backspace (space selected by default) |
-| Right | More options |
+| Direction | Action                                        |
+| --------- | --------------------------------------------- |
+| Up        | Back to root                                  |
+| Left      | Special characters (`_ . , ( ) * / + - ? #`)  |
+| Down      | Space / Backspace (space selected by default) |
+| Right     | More options                                  |
 
 **More options** (Right from Commands):
 
-| Direction | Action |
-| --- | --- |
-| Up | Toggle Shift (types one uppercase letter, then reverts) |
-| Down | Clear all text |
-| Right | Number picker (0-9) |
-| Left | Back to Commands |
+| Direction | Action                                                  |
+| --------- | ------------------------------------------------------- |
+| Up        | Toggle Shift (types one uppercase letter, then reverts) |
+| Down      | Clear all text                                          |
+| Right     | Number picker (0-9)                                     |
+| Left      | Back to Commands                                        |
 
 When Shift is active, an inverted "S" indicator appears in the keyboard area. The next letter entered will be uppercase, then shift automatically deactivates.
 
@@ -357,48 +360,12 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 
 ## Game engine
 
+> **Looking for how to play?** See [GAME.md](GAME.md) for player-facing
+> instructions, controls, and mini-game rules.
+
 The CyberÆgg virtual pet game uses a **delta-T progression engine** that computes stat changes in one step over any time interval, rather than ticking every 10 seconds. The engine predicts the next boundary crossing (where a rate or modifier changes) and sleeps until then — saving battery on the badge while maintaining precise game state.
 
-### Stats
-
-Five primary stats (u16, 0 = best, 65535 = worst):
-
-| Stat          | Fills in         | What makes it worse                             | What helps              |
-| ------------- | ---------------- | ----------------------------------------------- | ----------------------- |
-| **Hunger**    | ~20 hours        | Time, miserable boost                           | Feed action             |
-| **Tired**     | ~13 hours        | Time, miserable boost                           | Sleep (tiered recovery) |
-| **Drained**   | Interval-based   | Activity, miserable boost                       | Relax action, sleep     |
-| **Sick**      | ~7.6 days (base) | Time + condition decay when other stats are bad | Heal action             |
-| **Miserable** | Interval-based   | Multiple stats above 60%                        | Play action (zeroes it) |
-
-Stats interact through feedback loops: high miserable boosts hunger/tired/drained decay rates, bad hunger/tired/drained trigger accelerated sick decay, and multiple bad stats increase miserable's growth rate.
-
-### Traits
-
-Each pet hatches with randomized traits (25%–75% range):
-
-- **Vitality** — determines initial sick level (higher = healthier start)
-- **Curiosity** — reduces play action costs (higher = cheaper to play)
-- **Resilience** — reserved for future use
-
-### Actions
-
-| Action    | Duration     | Cooldown | Effect                                        |
-| --------- | ------------ | -------- | --------------------------------------------- |
-| **Feed**  | 2 ticks      | 12 ticks | Reduces hunger and drained                    |
-| **Heal**  | 3 ticks      | 24 ticks | Reduces sick                                  |
-| **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                |
-| **Play**  | 4 ticks      | 48 ticks | Zeroes miserable (costs hunger/tired/drained) |
-| **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery       |
-
-Actions are mutually exclusive. During an action and its cooldown, the corresponding stat's decay is suppressed.
-
-### Lifecycle
-
-1. **Hatching** — 30 ticks (5 minutes), then active
-1. **Active** — stats decay, player manages with actions
-1. **Leaving** — triggered when stats max out for too long (1–4 maxed stats = 20h–2h countdown)
-1. **Gone** — pet has left, new egg starts
+For stats, actions, traits, lifecycle, and mini-game details, see [GAME.md](GAME.md).
 
 ### Tuning
 
@@ -451,10 +418,15 @@ src/game/
   engine/
     mod.rs           — GameState, delta-T update(), next_wake_tick()
     thresholds.rs    — all balance constants
+    anim_files.rs    — animation-to-filename lookup table
+    to_display.rs    — DisplayAnim enum and state mapping
+  lifecycle.rs       — save/restore, game cycle, player actions
   sprite_loader.rs   — PCX image loading from FAT12 flash
   input.rs           — button dispatch
   modal.rs           — in-game modal dialogs
   nav.rs             — icon grid navigation
+  tictactoe.rs       — Tic Tac Toe mini-game
+  lightsout.rs       — Lights Out mini-game
 ```
 
 The engine has no dependencies on embassy or hardware — it's pure `no_std` Rust that runs identically on the badge and in host-side tests.
