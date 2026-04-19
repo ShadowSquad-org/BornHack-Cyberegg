@@ -249,7 +249,7 @@ where
         .draw(display)?;
 
     // Grid lines (2 horizontal + 2 vertical).
-    let grid_style = PrimitiveStyle::with_stroke(BLACK, 2);
+    let grid_style = PrimitiveStyle::with_stroke(BLACK, 3);
     for i in 1..3 {
         let offset = BOARD_Y + i as i32 * CELL;
         // Horizontal.
@@ -278,7 +278,7 @@ where
                 Point::new(x + 2, y + 2),
                 Size::new((CELL - 4) as u32, (CELL - 4) as u32),
             )
-            .into_styled(PrimitiveStyle::with_stroke(crate::RED, 2))
+            .into_styled(PrimitiveStyle::with_stroke(crate::RED, 3))
             .draw(display)?;
         }
 
@@ -312,7 +312,7 @@ fn draw_x<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style = PrimitiveStyle::with_stroke(crate::RED, 2);
+    let style = PrimitiveStyle::with_stroke(crate::RED, 3);
     Line::new(Point::new(x, y), Point::new(x + size, y + size))
         .into_styled(style).draw(display)?;
     Line::new(Point::new(x + size, y), Point::new(x, y + size))
@@ -326,7 +326,7 @@ where
     D: DrawTarget<Color = TriColor>,
 {
     Rectangle::new(Point::new(x, y), Size::new(size as u32, size as u32))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 2))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 3))
         .draw(display)?;
     Ok(())
 }
