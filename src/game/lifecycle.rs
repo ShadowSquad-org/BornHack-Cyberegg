@@ -192,8 +192,7 @@ pub fn pet_name() -> &'static str {
 }
 
 /// Get the current pet name as raw bytes.
-#[cfg(feature = "mesh")]
-fn pet_name_bytes() -> &'static [u8] {
+fn pet_name_bytes_sync() -> &'static [u8] {
     let len = PET_NAME_LEN.load(core::sync::atomic::Ordering::Relaxed) as usize;
     let buf = unsafe { &*PET_NAME.get() };
     &buf[..len]
@@ -292,10 +291,20 @@ pub fn award_inspiration() {
     }
 }
 
-/// Start a new generation (after pet has left).
+/// Start a new generation (after pet has left or manual reset).
+/// Records the current pet in the Unicorn Realm before replacing it.
 pub fn new_generation(kind: super::engine::PetKind) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
+        // Record the departing pet in the realm (unless it never hatched).
+        if s.phase != super::engine::Phase::Hatching {
+            let record = PetRecord::from_game_state(s, pet_name_bytes_sync());
+            let realm = unsafe { &mut *REALM.get() };
+            realm.push(record);
+            // Mark realm_pending so it gets persisted on the next save cycle.
+            s.realm_pending = true;
+        }
+
         let seed = now_tick() as u64 ^ 0xDEAD_BEEF;
         s.new_generation(seed, kind);
         s.last_update_tick = now_tick();
@@ -353,7 +362,7 @@ pub async fn save_if_needed() -> bool {
     // If the pet just left, record it in the Unicorn Realm.
     if state.realm_pending {
         state.realm_pending = false;
-        let record = PetRecord::from_game_state(state, pet_name_bytes());
+        let record = PetRecord::from_game_state(state, pet_name_bytes_sync());
         let realm = unsafe { &mut *REALM.get() };
         realm.push(record);
         let buf = realm.to_bytes();
@@ -373,7 +382,7 @@ pub async fn save_if_needed() -> bool {
         Ok(()) => {
             state.mark_saved();
             // Also persist pet name alongside state.
-            let name = pet_name_bytes();
+            let name = pet_name_bytes_sync();
             let _ = ns.set("name", name, true).await;
             true
         }

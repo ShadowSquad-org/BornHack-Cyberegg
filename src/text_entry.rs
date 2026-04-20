@@ -370,7 +370,8 @@ where
         .draw(display)?;
     }
 
-    draw_text_area(display, entry)?;
+    let text_offset = if entry.title.is_empty() { 0 } else { 18 };
+    draw_text_area(display, entry, text_offset)?;
 
     // Divider
     Rectangle::new(Point::new(0, KB_Y - 2), Size::new(DISPLAY_W as u32, 1))
@@ -412,14 +413,15 @@ where
     Ok(())
 }
 
-fn draw_text_area<D>(display: &mut D, entry: &TextEntry) -> Result<(), D::Error>
+fn draw_text_area<D>(display: &mut D, entry: &TextEntry, y_offset: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    // Border
+    // Border — clamp height so it doesn't overlap the keyboard area.
+    let border_h = (TEXT_AREA_H + 4).min(KB_Y - 2 - y_offset) as u32;
     Rectangle::new(
-        Point::new(0, 0),
-        Size::new(DISPLAY_W as u32, TEXT_AREA_H as u32 + 4),
+        Point::new(0, y_offset),
+        Size::new(DISPLAY_W as u32, border_h),
     )
     .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
     .draw(display)?;
@@ -448,7 +450,7 @@ where
             if byte_start == text.len() {
                 Text::with_text_style(
                     "_",
-                    Point::new(4, TEXT_AREA_Y + 2 + i as i32 * LINE_H),
+                    Point::new(4, y_offset + TEXT_AREA_Y + 2 + i as i32 * LINE_H),
                     FONT,
                     ts,
                 )
@@ -464,7 +466,7 @@ where
 
         Text::with_text_style(
             line_str,
-            Point::new(4, TEXT_AREA_Y + 2 + i as i32 * LINE_H),
+            Point::new(4, y_offset + TEXT_AREA_Y + 2 + i as i32 * LINE_H),
             FONT,
             ts,
         )
@@ -474,7 +476,7 @@ where
         if byte_end == text.len() && line_str.len() < CHARS_PER_LINE {
             Text::with_text_style(
                 "_",
-                Point::new(4 + line_str.len() as i32 * CHAR_W, TEXT_AREA_Y + 2 + i as i32 * LINE_H),
+                Point::new(4 + line_str.len() as i32 * CHAR_W, y_offset + TEXT_AREA_Y + 2 + i as i32 * LINE_H),
                 FONT,
                 ts,
             )
