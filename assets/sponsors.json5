@@ -1,0 +1,44 @@
+{
+  // Sponsor logo slideshow config for aegg-asset-assistant
+  // Generate template:  asset-gen template assets/sponsors.json5
+  // Encode sprites:     asset-gen encode-config assets/sponsors.json5
+  //
+  // This file describes a template for the first-boot sponsor slideshow.
+  // When the badge powers on for the first time, it displays 7 full-screen
+  // frames showing the logos of companies sponsoring the badge.team project.
+  //
+  // 2bpp PCX format: 00=black, 01=red, 10=white, 11=transparent.
+  // Each frame is a full 152x152 pixel screen.
+  //
+  // The source PNG should be a horizontal strip: 7 × 152px wide = 1064px,
+  // 152px tall. Each 152x152 cell is one sponsor slide.
+  //
+  // Up to 10 sponsor slots are supported. The firmware scans
+  // 020000.PCX through 020009.PCX and silently skips any that
+  // are missing — so you only need to provide files for the
+  // sponsors you have.
+  //
+  // Currently 4 sponsors are provided (F1–F4).
+  // Filenames on the FAT12 filesystem:
+  //   020000.PCX – Sponsor 1 logo
+  //   020001.PCX – Sponsor 2 logo
+  //   020002.PCX – Sponsor 3 logo
+  //   020003.PCX – Sponsor 4 logo
+  //   020004.PCX – (available)
+  //   ...
+  //   020009.PCX – (available, max 10)
+
+  image: "sponsor-logos.png",
+  format: "pcx",
+
+  assets: [
+    {
+      type: "sequence",
+      name: "sponsors",
+      comment: "Full 152x152 pixel sponsor logos for the first-boot slideshow. One logo per frame, up to 10 sponsors. Missing frames are skipped.",
+      frames: 10,
+      frame_width: 152,
+      frame_height: 152,
+    },
+  ],
+}

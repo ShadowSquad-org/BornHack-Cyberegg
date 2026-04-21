@@ -278,6 +278,12 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "mesh")]
     spawner.must_spawn(advert_ticker_task());
 
+    // ── First-boot sponsor slideshow ────────────────────────────────────
+    if !hello_graphics::fw::sponsors::already_shown().await {
+        defmt::info!("Running first-boot sponsor slideshow");
+        hello_graphics::fw::sponsors::run(&mut display, &mut button_rcvr).await;
+    }
+
     // ── USB mass storage ──────────────────────────────────────────────────
     // Runs alongside all other tasks.  VBUS detection is automatic —
     // the USB PHY powers up when a cable is connected.
@@ -345,6 +351,9 @@ async fn display_loop(
     let mut sprite_frame: u8 = 0;
 
     loop {
+        // Process any pending sponsor flag clear request from the menu.
+        hello_graphics::fw::sponsors::process_clear_request().await;
+
         let _ = display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 

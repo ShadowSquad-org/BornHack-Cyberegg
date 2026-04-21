@@ -411,6 +411,40 @@ PCX files can be opened and edited in **GIMP** (File > Open) or any other image 
 
 Missing animation files fall back to the placeholder sprite (`1E000000.PCX`).
 
+#### Generating assets
+
+The PCX sprite files are generated from PNG sprite sheets using the `asset-gen` tool (in the `asset-gen/` sibling directory). Each JSON5 config file in `assets/` describes a sprite sheet layout.
+
+To regenerate all PCX files into `assets/to-badge/`:
+
+```bash
+cd ../asset-gen
+cargo run -- export \
+    ../hello-graphics/assets/bornpets-sponsors.json5 \
+    ../hello-graphics/assets/bornpets-sponsors-cat.json5 \
+    ../hello-graphics/assets/sponsors.json5 \
+    --output-dir ../hello-graphics/assets/to-badge \
+    --format pcx
+```
+
+This reads the source PNGs referenced in each JSON5 config, slices them into individual frames, and encodes them as 2bpp PCX files with the correct palette. The output filenames match the `PPAAFF.PCX` convention expected by the firmware.
+
+After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
+
+#### Changing or adding assets
+
+The firmware maps animation states to filenames in code. If you add new animations, change frame counts, reorder assets, or add a new pet kind, the following source files must be updated to match:
+
+| What changed               | File to update                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| Frame counts per animation | [`anim_files.rs`](src/game/engine/anim_files.rs) — `SNAIL_FRAMES`, `CAT_FRAMES`      |
+| New pet kind               | [`mod.rs`](src/game/engine/mod.rs) — `PetKind` enum + frame table in `anim_files.rs` |
+| Animation ID assignment    | [`anim_files.rs`](src/game/engine/anim_files.rs) — `anim_id()` function              |
+| Sponsor slide filenames    | [`sponsors.rs`](src/fw/sponsors.rs) — `sponsor_filename()` and `MAX_SPONSORS`        |
+| Start screen filename      | [`anim_files.rs`](src/game/engine/anim_files.rs) — `start_screen_filename()`         |
+
+The filename convention is `PPAAFF.PCX` where `PP` = pet prefix (hex), `AA` = animation ID (hex), `FF` = frame number (hex). This is encoded in `anim_files.rs::build_filename()`.
+
 ### Game Architecture
 
 ```text

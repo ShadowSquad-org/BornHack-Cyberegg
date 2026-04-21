@@ -1140,7 +1140,7 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     },
 ];
 
-static SETTINGS_ITEMS: [MenuItem; 7] = [
+static SETTINGS_ITEMS: [MenuItem; 8] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1167,6 +1167,13 @@ static SETTINGS_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "",
         kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "Replay Sponsors",
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::sponsors::request_clear();
+        }),
     },
     MenuItem {
         label: || "Factory reset",
