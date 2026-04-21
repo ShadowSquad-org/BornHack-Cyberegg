@@ -440,19 +440,39 @@ async fn wait_display_event(
         let sprite_tick = async {
             if sprite_active {
                 // Compute frame interval from the current animation.
-                // Hatching: spread frames over the full countdown.
-                // Everything else: 10 seconds per frame (EPD is slow with red).
+                // Timed animations (hatching, actions) spread frames evenly
+                // over their duration so every frame is shown.
+                // Idle/warning/etc: 10 seconds per frame.
                 let anim = hello_graphics::game::lifecycle::display_anim();
                 let kind = hello_graphics::game::lifecycle::pet_kind();
-                let frame_count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
-                let interval_secs = match anim {
-                    hello_graphics::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
-                        let total_secs = ticks_remaining as u64 * 10;
-                        if frame_count > 0 { total_secs / frame_count as u64 } else { 10 }
-                    }
-                    _ => 10,
-                };
-                Timer::after_secs(interval_secs.max(1)).await;
+                let frame_count = hello_graphics::game::engine::anim_files::frame_count(kind, anim) as u64;
+                if frame_count <= 1 {
+                    // Single frame — no animation to advance; sleep until
+                    // the game state changes (next wake tick).
+                    let wake = hello_graphics::game::lifecycle::next_wake_tick();
+                    let now = hello_graphics::game::lifecycle::now_tick();
+                    let wait_ticks = wake.saturating_sub(now).max(1) as u64;
+                    Timer::after_secs(wait_ticks * 10).await;
+                } else {
+                    let interval_secs = match anim {
+                        hello_graphics::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
+                            let total_secs = ticks_remaining as u64 * 10;
+                            total_secs / frame_count
+                        }
+                        hello_graphics::game::engine::DisplayAnim::Feeding
+                        | hello_graphics::game::engine::DisplayAnim::Healing
+                        | hello_graphics::game::engine::DisplayAnim::Relaxing
+                        | hello_graphics::game::engine::DisplayAnim::Playing => {
+                            // Spread frames over the remaining action time.
+                            let stats = hello_graphics::game::lifecycle::cycle();
+                            let remaining_ticks = stats.map_or(0, |s| s.action_ticks_remaining as u64);
+                            let total_secs = remaining_ticks * 10;
+                            total_secs / frame_count
+                        }
+                        _ => 10,
+                    };
+                    Timer::after_secs(interval_secs.max(3)).await;
+                }
             } else {
                 core::future::pending::<()>().await;
             }

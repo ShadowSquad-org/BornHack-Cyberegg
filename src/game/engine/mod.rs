@@ -651,9 +651,14 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 impl GameState {
+    /// True when the pet is alive (Active or Leaving) and can receive actions.
+    fn is_alive(&self) -> bool {
+        self.phase == Phase::Active || self.phase == Phase::Leaving
+    }
+
     /// Start the feed action.  Returns false if not available.
     pub fn feed(&mut self) -> bool {
-        if self.phase != Phase::Active || self.is_sleeping { return false; }
+        if !self.is_alive() || self.is_sleeping { return false; }
         if self.active_action.is_some() || self.cooldown_feed > 0 { return false; }
         self.active_action = Some(Action::Feed);
         self.action_ticks_remaining = FEED_DURATION;
@@ -662,7 +667,7 @@ impl GameState {
 
     /// Start the heal action.
     pub fn heal(&mut self) -> bool {
-        if self.phase != Phase::Active || self.is_sleeping { return false; }
+        if !self.is_alive() || self.is_sleeping { return false; }
         if self.active_action.is_some() || self.cooldown_heal > 0 { return false; }
         self.active_action = Some(Action::Heal);
         self.action_ticks_remaining = HEAL_DURATION;
@@ -671,7 +676,7 @@ impl GameState {
 
     /// Start the relax action.
     pub fn relax(&mut self) -> bool {
-        if self.phase != Phase::Active || self.is_sleeping { return false; }
+        if !self.is_alive() || self.is_sleeping { return false; }
         if self.active_action.is_some() || self.cooldown_relax > 0 { return false; }
         self.active_action = Some(Action::Relax);
         self.action_ticks_remaining = RELAX_DURATION;
@@ -680,7 +685,7 @@ impl GameState {
 
     /// Start the play action.
     pub fn play(&mut self) -> bool {
-        if self.phase != Phase::Active || self.is_sleeping { return false; }
+        if !self.is_alive() || self.is_sleeping { return false; }
         if self.active_action.is_some() || self.cooldown_play > 0 { return false; }
         self.active_action = Some(Action::Play);
         self.action_ticks_remaining = PLAY_DURATION;
@@ -689,7 +694,7 @@ impl GameState {
 
     /// Put the pet to sleep.
     pub fn sleep(&mut self) -> bool {
-        if self.phase != Phase::Active || self.is_sleeping { return false; }
+        if !self.is_alive() || self.is_sleeping { return false; }
         self.is_sleeping = true;
         true
     }
@@ -893,7 +898,8 @@ impl GameState {
         }
 
         let action_idle = self.active_action.is_none();
-        let awake_active = self.phase == Phase::Active && !self.is_sleeping;
+        let alive = self.phase == Phase::Active || self.phase == Phase::Leaving;
+        let awake_active = alive && !self.is_sleeping;
 
         PetStats {
             hunger:   to_display_pct(self.hunger),
@@ -914,7 +920,7 @@ impl GameState {
             can_heal:  awake_active && action_idle && self.cooldown_heal == 0,
             can_relax: awake_active && action_idle && self.cooldown_relax == 0,
             can_play:  awake_active && action_idle && self.cooldown_play == 0,
-            can_sleep: self.phase == Phase::Active && !self.is_sleeping,
+            can_sleep: alive && !self.is_sleeping,
             can_wake:  self.is_sleeping,
 
             hibernating: self.hibernating,
