@@ -104,6 +104,11 @@ pub async fn process_clear_request() {
 /// Run the sponsor slideshow. Blocks until all slides are shown.
 ///
 /// `button_rcvr` is used to detect button presses to advance slides.
+///
+/// If no sponsor PCX files are present on the FAT partition, shows a
+/// "No assets found in flash" screen and blocks forever — the operator
+/// can then copy files in via USB mass storage (spawned separately) and
+/// power-cycle the badge to proceed.
 pub async fn run(
     display: &mut EpdGfx<'_>,
     button_rcvr: &mut embassy_sync::watch::Receiver<
@@ -113,6 +118,12 @@ pub async fn run(
         2,
     >,
 ) {
+    // ── Pre-flight: check at least one sponsor slide exists ──────────
+    if !any_sponsor_file_present().await {
+        show_missing_assets_forever(display).await;
+        // show_missing_assets_forever never returns.
+    }
+
     // ── Intro screen ─────────────────────────────────────────────────
     let _ = display.clear(Color::White);
 
@@ -179,6 +190,67 @@ pub async fn run(
     mark_shown().await;
 
     defmt::info!("sponsors: slideshow complete");
+}
+
+/// Returns true if at least one sponsor PCX file (020000.PCX .. 0200NN.PCX)
+/// exists on the FAT partition.
+async fn any_sponsor_file_present() -> bool {
+    for i in 0..MAX_SPONSORS as u8 {
+        let name = sponsor_filename(i);
+        if fat12::find_file(&name).await.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Draw a full-screen "No assets found" message, commit it to the display,
+/// then block forever.  Intended for mass-flashing: the operator flashes the
+/// firmware, waits for this message to appear, copies the asset PCX files in
+/// via USB mass storage, then power-cycles the badge.
+async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
+    defmt::info!("sponsors: no sponsor PCX files found — waiting for USB upload");
+
+    let _ = display.clear(Color::White);
+
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+
+    let _ = Text::with_text_style(
+        "No assets found",
+        Point::new(76, 60),
+        font,
+        centered,
+    ).draw(display);
+    let _ = Text::with_text_style(
+        "in flash",
+        Point::new(76, 76),
+        font,
+        centered,
+    ).draw(display);
+    let _ = Text::with_text_style(
+        "Copy via USB,",
+        Point::new(76, 100),
+        font,
+        centered,
+    ).draw(display);
+    let _ = Text::with_text_style(
+        "then power cycle",
+        Point::new(76, 116),
+        font,
+        centered,
+    ).draw(display);
+
+    let _ = display.reset().await;
+    let _ = display.update_bw(UpdateMode::Mode1).await;
+    let _ = display.deep_sleep().await;
+
+    // Block forever.  USB mass storage is running on its own task and stays
+    // live while we're parked here.  A power-cycle is the intended exit.
+    core::future::pending::<()>().await
 }
 
 /// Wait for `secs` seconds, or until any button is pressed.

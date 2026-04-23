@@ -424,7 +424,13 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
 // Format — create a fresh FAT12 filesystem
 // ---------------------------------------------------------------------------
 
-/// Format the FAT partition as FAT12 with volume label "CYBERAEGG".
+/// Format the FAT partition as FAT12 with a per-badge unique volume label
+/// (`CYBR` + 4 hex chars of the MCU device ID) and serial.
+///
+/// Per-badge uniqueness matters when multiple badges are plugged in
+/// concurrently for mass-flashing: `udisks2` picks the mount point from
+/// the label (or falls back to the serial), so identical values across
+/// badges collide.
 ///
 /// Matches the geometry produced by `mkfs.fat -F 12` on a 1 MiB device:
 ///   512 bytes/sector, 4 sectors/cluster (2 KiB), 2 FATs × 2 sectors,
@@ -433,6 +439,16 @@ pub async fn read_file(file: &FileRef, offset: u32, buf: &mut [u8]) -> Result<us
 /// Erases and writes sectors 0–36 (boot sector, 2 FATs, root directory).
 /// The data region is left as-is (erased flash = 0xFF = free clusters).
 pub async fn format() -> Result<(), FatError> {
+    // Per-badge unique identifiers derived from the MCU device ID.
+    // Label: "CYBR" + 4 hex chars of device ID (e.g., "CYBRA3F7   ").
+    // Serial: device ID in the low 16 bits so OS shows e.g. "0000-A3F7".
+    let id_hex = crate::fw::device_id::get_bytes(); // 4 ASCII hex chars
+    let [id0, id1] = crate::fw::device_id::get();
+    let mut label = [b' '; 11];
+    label[..4].copy_from_slice(b"CYBR");
+    label[4..8].copy_from_slice(&id_hex);
+    let serial = u32::from_le_bytes([id0, id1, 0x00, 0x00]);
+
     // -- Boot sector (sector 0) ------------------------------------------
     let mut boot = [0u8; 512];
 
@@ -454,8 +470,8 @@ pub async fn format() -> Result<(), FatError> {
     // Extended boot record (FAT12/16).
     boot[36] = 0x80;                                        // drive number
     boot[38] = 0x29;                                        // extended boot signature
-    boot[39..43].copy_from_slice(&0x12345678u32.to_le_bytes()); // volume serial
-    boot[43..54].copy_from_slice(b"CYBERAEGG  ");          // volume label (11 bytes)
+    boot[39..43].copy_from_slice(&serial.to_le_bytes());    // volume serial
+    boot[43..54].copy_from_slice(&label);                   // volume label (11 bytes)
     boot[54..62].copy_from_slice(b"FAT12   ");             // filesystem type
     // Boot signature.
     boot[510] = 0x55; boot[511] = 0xAA;
@@ -492,26 +508,36 @@ pub async fn format() -> Result<(), FatError> {
 
     // -- Root directory (sectors 5–36: 16384 bytes = 512 entries) ----------
     // Erased flash is 0xFF, but the FAT driver interprets 0xFF first-byte
-    // entries as occupied.  Zero the entire root directory so all entries
-    // read as 0x00 (end-of-directory / free), then write the volume label.
+    // entries as occupied.  Zero every root-dir entry so they read as 0x00
+    // (end-of-directory / free).  The first 32 bytes hold the volume-label
+    // entry — build it into the first sector's buffer up-front so the label
+    // bytes are written alongside the zeros in a single flash pass.  Writing
+    // the label afterwards would be a no-op on NOR flash (can't flip 0-bits
+    // back to 1 without an erase).
     let root_addr = flash::FAT_OFFSET + 5 * 512; // sector 5
     let root_size = 512u32 * 32; // 512 entries × 32 bytes = 16384 bytes
 
-    // Write zeros in 512-byte chunks (one sector at a time).
+    // First sector: volume-label entry at offset 0, zeros for the rest.
+    let mut first_sector = [0u8; 512];
+    first_sector[0..11].copy_from_slice(&label);
+    first_sector[11] = 0x08; // volume label attribute
+    flash::write(root_addr, &first_sector)
+        .await
+        .map_err(|_| FatError::FlashError)?;
+
+    // Remaining sectors: all zeros.
     let zeros = [0u8; 512];
-    for sector in 0..(root_size / 512) {
+    for sector in 1..(root_size / 512) {
         flash::write(root_addr + sector * 512, &zeros)
             .await
             .map_err(|_| FatError::FlashError)?;
     }
 
-    // Volume label entry (32 bytes): name + attribute 0x08.
-    let mut vol_entry = [0u8; 32];
-    vol_entry[0..11].copy_from_slice(b"CYBERAEGG  ");
-    vol_entry[11] = 0x08; // volume label attribute
-    flash::write(root_addr, &vol_entry).await.map_err(|_| FatError::FlashError)?;
-
-    defmt::info!("FAT12: formatted partition as CYBERAEGG");
+    defmt::info!(
+        "FAT12: formatted partition as {=[u8]:a} (serial {=u32:08x})",
+        label,
+        serial,
+    );
     Ok(())
 }
 

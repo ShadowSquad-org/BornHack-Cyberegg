@@ -2,11 +2,13 @@ ELF         = target/thumbv7em-none-eabihf/debug/embassy
 BIN         = target/thumbv7em-none-eabihf/debug/embassy.bin
 BIN_REL     = target/thumbv7em-none-eabihf/release/embassy.bin
 ELF_REL     = target/thumbv7em-none-eabihf/release/embassy
+ELF_HWTEST  = target/thumbv7em-none-eabihf/release-hwtest/hwtest
 
 # App flash base matches the app slot in memory.x (ORIGIN in memory.x = 0xD000)
 FLASH_BASE = 0x0000D000
 
 .PHONY: fw fw-release fw-game fw-game-release fw-mesh fw-mesh-release \
+        fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
         sim flash flash-release flash-game flash-mesh \
         monitor bl bl-flash dfu-flash dfu-flash-release
 
@@ -63,6 +65,29 @@ flash-mesh:
 flash-mesh-release:
 	cargo fw-mesh-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# ---------- Factory hardware test (standalone, no bootloader) ----------
+
+fw-hwtest:
+	cargo fw-hwtest
+	@arm-none-eabi-size $(ELF_HWTEST) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+
+flash-hwtest: fw-hwtest
+	probe-rs erase --chip nRF52840_xxAA
+	probe-rs download --chip nRF52840_xxAA $(ELF_HWTEST)
+	probe-rs reset --chip nRF52840_xxAA
+
+# Flash + attach RTT console (defmt log stream over SWD).
+run-hwtest: fw-hwtest
+	probe-rs erase --chip nRF52840_xxAA
+	probe-rs run --chip nRF52840_xxAA $(ELF_HWTEST)
+
+# Attach to an already-running hwtest (no flash, no reset).  Only useful
+# while the chip is actively logging — after the test finishes the CPU
+# parks in WFI and probe-rs misreports it as "locked up core".  For
+# flash-and-watch use `make run-hwtest`.
+monitor-hwtest:
+	probe-rs attach --chip nRF52840_xxAA $(ELF_HWTEST)
 
 # ---------- Simulator ----------
 

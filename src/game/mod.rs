@@ -285,11 +285,8 @@ where
 
     // ── Hatching ─────────────────────────────────────────────────────────
     if let DisplayAnim::Hatching { ticks_remaining } = anim {
-        // Egg animation blitted by embassy.rs if available; fallback text.
-        if sprite_loader::frame_count() == 0 {
-            Text::with_text_style("Egg hatching...", Point::new(76, 55), font, centered)
-                .draw(display)?;
-        }
+        // Egg animation is blitted by embassy.rs.  The countdown timer
+        // below acts as the sole hatching indicator.
         let secs = ticks_remaining as u32 * 10;
         let mut time_str: heapless::String<16> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(

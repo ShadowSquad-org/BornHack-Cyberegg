@@ -22,3 +22,4 @@ fw-game = "build --bin embassy --no-default-features --features embassy-game --t
 fw-game-release = "build --bin embassy --no-default-features --features embassy-game --target thumbv7em-none-eabihf --release"
 fw-mesh = "build --bin embassy --no-default-features --features embassy-mesh --target thumbv7em-none-eabihf"
 fw-mesh-release = "build --bin embassy --no-default-features --features embassy-mesh --target thumbv7em-none-eabihf --release"
+fw-hwtest = "build --bin hwtest --no-default-features --features hwtest --target thumbv7em-none-eabihf --profile release-hwtest"

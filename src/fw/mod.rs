@@ -6,7 +6,6 @@ pub mod device_id;
 pub mod epd;
 pub mod fat12;
 pub mod health;
-pub mod images;
 pub mod iso14443;
 pub mod flash;
 pub mod led;

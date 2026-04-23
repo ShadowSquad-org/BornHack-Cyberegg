@@ -124,8 +124,13 @@ impl BatteryMonitor {
 // ---------------------------------------------------------------------------
 
 /// Voltages outside this range trigger a `BatteryError` during `init()`.
-const VBAT_MIN_MV: u16 = 3000; // as per trickle charge threshold voltage
-const VBAT_MAX_MV: u16 = 4250; // as per datasheet max rating
+/// The display shows "Battery voltage critical" when init errors.
+const VBAT_MIN_MV: u16 = 3000; // trickle-charge threshold
+const VBAT_MAX_MV: u16 = 4400; // above this is treated as critical — a real
+                               // overcharge or a broken divider, not just a
+                               // CV-peak overshoot.  Readings between the
+                               // curve's top (4250 mV = 100%) and this limit
+                               // are clamped to 100% by `mv_to_pct`.
 
 /// (millivolts, percent) pairs, sorted ascending by voltage.
 /// Edit this table to recalibrate for a different cell chemistry or pack.

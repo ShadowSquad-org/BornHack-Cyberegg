@@ -1088,6 +1088,12 @@ impl GameState {
         self.last_save_tick = self.age_ticks;
         self.save_pending = false;
     }
+
+    /// Request that the next `save_if_needed()` persists this state
+    /// immediately, rather than waiting for the next 15-minute interval.
+    pub fn request_save(&mut self) {
+        self.save_pending = true;
+    }
 }
 
 // ---------------------------------------------------------------------------

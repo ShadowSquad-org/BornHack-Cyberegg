@@ -52,6 +52,12 @@ impl BlockDevice for FatBlockDevice {
     }
 
     async fn write_block(&self, lba: u32, buf: &[u8]) -> Result<(), ()> {
+        // Blink the blue LED on every block write so the operator can see at
+        // a glance which badge is still receiving data during mass-flashing.
+        // `BlinkOnce` auto-resets after ~50 ms, so a stream of writes shows
+        // up as flicker without needing a "turn off when idle" timer.
+        crate::fw::led::set_led(&crate::fw::led::LED_BLUE, crate::fw::led::LedState::BlinkOnce);
+
         let addr = flash::FAT_OFFSET + lba * 512;
 
         // NOR flash requires erase before write.  We erase the containing
@@ -70,6 +76,14 @@ impl BlockDevice for FatBlockDevice {
 // ---------------------------------------------------------------------------
 // USB task
 // ---------------------------------------------------------------------------
+
+/// Spawn-ready wrapper around [`run`] for use with `Spawner::must_spawn`.
+/// Lets the USB stack come up early in `main()` and stay running alongside
+/// the sponsor slideshow, first-boot screens, and the main display loop.
+#[embassy_executor::task]
+pub async fn usb_storage_task(usbd: Peri<'static, peripherals::USBD>) {
+    run(usbd).await;
+}
 
 /// Run the USB mass storage device.  Returns only on unrecoverable error.
 ///

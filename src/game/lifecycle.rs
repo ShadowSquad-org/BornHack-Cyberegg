@@ -176,12 +176,21 @@ const DEFAULT_NAMES: &[&str] = &[
 ];
 
 /// Set the pet name from raw bytes (called by text entry callback).
+///
+/// Also flags the game state for immediate save so the name is persisted
+/// to flash on the next `save_if_needed()` call, rather than waiting for
+/// the 15-minute periodic save (which would lose the name on an early
+/// reboot).
 pub fn set_pet_name(name: &[u8]) {
     let len = name.len().min(PET_NAME_MAX);
     let buf = unsafe { &mut *PET_NAME.get() };
     buf[..len].copy_from_slice(&name[..len]);
     buf[len..].fill(0);
     PET_NAME_LEN.store(len as u8, core::sync::atomic::Ordering::Relaxed);
+
+    if let Some(state) = unsafe { (*GAME.get()).as_mut() } {
+        state.request_save();
+    }
 }
 
 /// Get the current pet name as a str.

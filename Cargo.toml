@@ -98,6 +98,15 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Same optimisation as `release`, but keeps the symbol table so that
+# probe-rs can locate `_defmt_version_` and decode the RTT log stream.
+# Stripping has no effect on flash usage — the loaded sections (.text /
+# .data) are identical — but it removes the symbols probe-rs needs.
+[profile.release-hwtest]
+inherits = "release"
+strip = false
+debug = 2
+
 # Optimize all dependencies
 [profile.dev.package."*"]
 opt-level = "z"
@@ -143,6 +152,20 @@ embassy      = ["embassy-base", "game", "mesh", "usb-storage"]
 embassy-game = ["embassy-base", "game", "usb-storage"]
 # Mesh only (no game, no USB storage).
 embassy-mesh = ["embassy-base", "mesh"]
+# Factory hardware test — minimal standalone firmware, no bootloader required.
+# Verifies buttons, joystick, LoRa, battery, QSPI flash and drives LED/buzzer.
+hwtest = [
+    "cortex-m",
+    "cortex-m-rt",
+    "defmt",
+    "defmt-rtt",
+    "embassy-executor",
+    "embassy-nrf",
+    "embassy-sync",
+    "embassy-time",
+    "heapless",
+    "panic-probe",
+]
 
 # [workspace]
 # harness = false
@@ -164,4 +187,10 @@ required-features = ["simulator"]
 name = "embassy"
 path = "src/bin/embassy.rs"
 required-features = ["embassy-base"]
+harness = false
+
+[[bin]]
+name = "hwtest"
+path = "src/bin/hwtest.rs"
+required-features = ["hwtest"]
 harness = false

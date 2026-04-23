@@ -43,6 +43,41 @@ pub enum KvError {
     Other,
 }
 
+impl<E> From<ekv::ReadError<E>> for KvError {
+    fn from(e: ekv::ReadError<E>) -> Self {
+        match e {
+            ekv::ReadError::KeyNotFound => Self::NotFound,
+            ekv::ReadError::KeyTooBig => Self::KeyTooLong,
+            ekv::ReadError::BufferTooSmall => Self::BufferTooSmall,
+            ekv::ReadError::Corrupted => Self::Corrupted,
+            ekv::ReadError::Flash(_) => Self::Other,
+        }
+    }
+}
+
+impl<E> From<ekv::WriteError<E>> for KvError {
+    fn from(e: ekv::WriteError<E>) -> Self {
+        match e {
+            ekv::WriteError::Full => Self::StoreFull,
+            ekv::WriteError::Corrupted => Self::Corrupted,
+            ekv::WriteError::KeyTooBig => Self::KeyTooLong,
+            ekv::WriteError::NotSorted
+            | ekv::WriteError::ValueTooBig
+            | ekv::WriteError::TransactionCanceled
+            | ekv::WriteError::Flash(_) => Self::Other,
+        }
+    }
+}
+
+impl<E> From<ekv::CommitError<E>> for KvError {
+    fn from(e: ekv::CommitError<E>) -> Self {
+        match e {
+            ekv::CommitError::Corrupted => Self::Corrupted,
+            ekv::CommitError::TransactionCanceled | ekv::CommitError::Flash(_) => Self::Other,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Singleton Database
 // ---------------------------------------------------------------------------
@@ -155,14 +190,7 @@ impl KvNamespace {
         let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
         let db = get_db()?;
         let rtx = db.read_transaction().await;
-        match rtx.read(k, buf).await {
-            Ok(n) => Ok(n),
-            Err(ekv::ReadError::KeyNotFound) => Err(KvError::NotFound),
-            Err(ekv::ReadError::BufferTooSmall) => Err(KvError::BufferTooSmall),
-            Err(ekv::ReadError::KeyTooBig) => Err(KvError::KeyTooLong),
-            Err(ekv::ReadError::Corrupted) => Err(KvError::Corrupted),
-            Err(ekv::ReadError::Flash(_)) => Err(KvError::Other),
-        }
+        Ok(rtx.read(k, buf).await?)
     }
 
     /// Write `data` under `key`.
@@ -177,26 +205,18 @@ impl KvNamespace {
 
         if !update {
             // Check existence first; return KeyExists if found.
+            // Other read errors fall through so the write still gets a chance.
             let rtx = db.read_transaction().await;
             match rtx.read(k, &mut []).await {
                 Ok(_) | Err(ekv::ReadError::BufferTooSmall) => return Err(KvError::KeyExists),
-                Err(ekv::ReadError::KeyNotFound) => {}
                 Err(_) => {}
             }
         }
 
         let mut wtx = db.write_transaction().await;
-        match wtx.write(k, data).await {
-            Ok(()) => {}
-            Err(ekv::WriteError::Full) => return Err(KvError::StoreFull),
-            Err(ekv::WriteError::Corrupted) => return Err(KvError::Corrupted),
-            Err(_) => return Err(KvError::Other),
-        }
-        match wtx.commit().await {
-            Ok(()) => Ok(()),
-            Err(ekv::CommitError::Corrupted) => Err(KvError::Corrupted),
-            Err(_) => Err(KvError::Other),
-        }
+        wtx.write(k, data).await?;
+        wtx.commit().await?;
+        Ok(())
     }
 
     /// Delete the value for `key`.  Returns `Ok(())` even if the key did not exist.
@@ -205,16 +225,9 @@ impl KvNamespace {
         let k = namespaced_key(self.prefix, key, &mut kbuf).ok_or(KvError::KeyTooLong)?;
         let db = get_db()?;
         let mut wtx = db.write_transaction().await;
-        match wtx.delete(k).await {
-            Ok(()) => {}
-            Err(ekv::WriteError::Corrupted) => return Err(KvError::Corrupted),
-            Err(_) => return Err(KvError::Other),
-        }
-        match wtx.commit().await {
-            Ok(()) => Ok(()),
-            Err(ekv::CommitError::Corrupted) => Err(KvError::Corrupted),
-            Err(_) => Err(KvError::Other),
-        }
+        wtx.delete(k).await?;
+        wtx.commit().await?;
+        Ok(())
     }
 
     /// Returns `true` if the key exists in the store.
@@ -226,8 +239,7 @@ impl KvNamespace {
         match rtx.read(k, &mut []).await {
             Ok(_) | Err(ekv::ReadError::BufferTooSmall) => Ok(true),
             Err(ekv::ReadError::KeyNotFound) => Ok(false),
-            Err(ekv::ReadError::Corrupted) => Err(KvError::Corrupted),
-            Err(_) => Err(KvError::Other),
+            Err(e) => Err(e.into()),
         }
     }
 }

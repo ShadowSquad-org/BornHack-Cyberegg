@@ -15,5 +15,5 @@ rustflags = [
 DEFMT_LOG = "info"
 
 [alias]
-bl       = "build --release"
-bl-flash = "run --release"
+bl       = "build --release --features with-qspi-flash"
+bl-flash = "run --release --features with-qspi-flash"

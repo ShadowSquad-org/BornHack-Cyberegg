@@ -11,9 +11,8 @@ use embassy_time::Timer;
 use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
 use hello_graphics::fw::button::BTN_WATCH;
 use hello_graphics::fw::device_id;
-use hello_graphics::fw::images::badgercorn::BADGERCORN_DATA;
 use hello_graphics::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_BADGERCORN, SCREEN_MAIN, board,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, board,
     draw_graphics,
     fw::button::run_buttons,
     fw::buzzer::{Buzzer, buzzer_task},
@@ -270,6 +269,7 @@ async fn main(spawner: Spawner) {
         Ok(m) => m,
         Err(e) => {
             defmt::error!("Battery init failed: {:?}", e);
+            show_battery_critical(&mut display, &e).await;
             return;
         }
     };
@@ -278,39 +278,27 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "mesh")]
     spawner.must_spawn(advert_ticker_task());
 
+    // ── USB mass storage ──────────────────────────────────────────────────
+    // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
+    // partition and drop in sponsor PCX files on a fresh badge without
+    // waiting for the main display loop to come up.  VBUS detection is
+    // automatic — the USB PHY powers up when a cable is connected.
+    #[cfg(feature = "usb-storage")]
+    spawner.must_spawn(hello_graphics::fw::usb_storage::usb_storage_task(p.USBD));
+
     // ── First-boot sponsor slideshow ────────────────────────────────────
     if !hello_graphics::fw::sponsors::already_shown().await {
         defmt::info!("Running first-boot sponsor slideshow");
         hello_graphics::fw::sponsors::run(&mut display, &mut button_rcvr).await;
     }
 
-    // ── USB mass storage ──────────────────────────────────────────────────
-    // Runs alongside all other tasks.  VBUS detection is automatic —
-    // the USB PHY powers up when a cable is connected.
-    #[cfg(feature = "usb-storage")]
-    let run_usb = hello_graphics::fw::usb_storage::run(p.USBD);
-
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
     let main_loop = display_loop(&mut display, &mut button_rcvr);
 
-    #[cfg(all(feature = "mesh", feature = "usb-storage"))]
-    {
-        let run_lora = run_meshcore_listener(
-            board!(p, lora_spi),
-            board!(p, lora_sck).into(),
-            board!(p, lora_mosi).into(),
-            board!(p, lora_miso).into(),
-            board!(p, lora_rst).into(),
-            board!(p, lora_nss).into(),
-            board!(p, lora_busy).into(),
-            board!(p, lora_dio1).into(),
-            board!(p, lora_rf_sw).into(),
-            &identity,
-        );
-        embassy_futures::join::join5(main_loop, run_nfc, buttons, run_lora, run_usb).await;
-    }
-    #[cfg(all(feature = "mesh", not(feature = "usb-storage")))]
+    // USB mass storage is a separately-spawned task (see above), so it's
+    // not in these joins.
+    #[cfg(feature = "mesh")]
     {
         let run_lora = run_meshcore_listener(
             board!(p, lora_spi),
@@ -326,9 +314,7 @@ async fn main(spawner: Spawner) {
         );
         embassy_futures::join::join4(main_loop, run_nfc, buttons, run_lora).await;
     }
-    #[cfg(all(not(feature = "mesh"), feature = "usb-storage"))]
-    embassy_futures::join::join4(main_loop, run_nfc, buttons, run_usb).await;
-    #[cfg(all(not(feature = "mesh"), not(feature = "usb-storage")))]
+    #[cfg(not(feature = "mesh"))]
     embassy_futures::join::join3(main_loop, run_nfc, buttons).await;
 }
 
@@ -369,14 +355,10 @@ async fn display_loop(
             led::set_led(&led::LED_BLUE, led::LedState::Off);
         }
 
-        if active_screen == SCREEN_BADGERCORN {
-            display.blit(Some(BADGERCORN_DATA), None);
-        } else {
-            let health_str = with_health!(|f| f.to_string());
-            let bat_str = battery::read_pct();
-            if draw_graphics(display, &health_str, &bat_str).is_err() {
-                health_err!(epd, "Failed to draw graphics");
-            }
+        let health_str = with_health!(|f| f.to_string());
+        let bat_str = battery::read_pct();
+        if draw_graphics(display, &health_str, &bat_str).is_err() {
+            health_err!(epd, "Failed to draw graphics");
         }
 
         let sprite_advance = match select(
@@ -611,4 +593,43 @@ async fn pet_watchdog_task(mut handle: embassy_nrf::wdt::WatchdogHandle) {
         handle.pet();
         Timer::after_secs(2).await;
     }
+}
+
+/// Draw a "Battery voltage critical" screen on the EPD and commit it.
+/// Called from the main battery-init error path before main() returns.
+/// The EPD retains the image after deep_sleep, so the message stays visible
+/// until the operator intervenes.
+async fn show_battery_critical(
+    display: &mut EpdGfx<'_>,
+    err: &battery::BatteryError,
+) {
+    use embedded_graphics::{
+        mono_font::{MonoTextStyle, ascii::FONT_7X13_BOLD},
+        prelude::*,
+        text::{Alignment, Baseline, Text, TextStyleBuilder},
+    };
+
+    let _ = display.clear(Color::White);
+
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+
+    let _ = Text::with_text_style("Battery voltage", Point::new(76, 50), font, centered).draw(display);
+    let _ = Text::with_text_style("critical", Point::new(76, 66), font, centered).draw(display);
+
+    let mut detail: heapless::String<32> = heapless::String::new();
+    let _ = match err {
+        battery::BatteryError::TooLow(mv)  => core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too low", mv)),
+        battery::BatteryError::TooHigh(mv) => core::fmt::Write::write_fmt(&mut detail, format_args!("{} mV — too high", mv)),
+    };
+    let _ = Text::with_text_style(detail.as_str(), Point::new(76, 90), font, centered).draw(display);
+    let _ = Text::with_text_style("Check / replace", Point::new(76, 114), font, centered).draw(display);
+    let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
+
+    let _ = display.reset().await;
+    let _ = display.update_bw(UpdateMode::Mode1).await;
+    let _ = display.deep_sleep().await;
 }

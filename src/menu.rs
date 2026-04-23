@@ -8,7 +8,7 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, RED, TriColor, WHITE};
 
 // ── Screen identifiers ──────────────────────────────────────────────────────
 
@@ -22,14 +22,13 @@ pub enum ScreenId {
     Pm = 2,
     Channel = 3,
     Advert = 4,
-    Badgercorn = 5,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 5;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -291,13 +290,6 @@ impl ScreenState {
         }
     }
 
-    pub fn get_label(&self, index: usize) -> Option<&'static str> {
-        self.current_items().get(index).map(|item| (item.label)())
-    }
-
-    pub fn get_current_label(&self) -> Option<&'static str> {
-        Some((self.current_item().label)())
-    }
 }
 
 // ── Top-level display state ───────────────────────────────────────────────────
@@ -311,7 +303,6 @@ pub struct DisplayState<const M: usize> {
     enabled: [bool; M],
 }
 
-#[allow(dead_code)]
 impl<const M: usize> DisplayState<M> {
     pub const fn new(screens: [ScreenState; M], enabled: [bool; M]) -> Self {
         // Start on the first enabled screen (or 0 if none enabled).
@@ -329,22 +320,6 @@ impl<const M: usize> DisplayState<M> {
             active_screen: first,
             screens,
             enabled,
-        }
-    }
-
-    /// Enable or disable a screen at runtime.  If the currently active
-    /// screen becomes disabled, jumps to the nearest enabled screen.
-    pub fn set_enabled(&mut self, screen: u8, on: bool) {
-        if (screen as usize) < M {
-            self.enabled[screen as usize] = on;
-        }
-        if !self.enabled[self.active_screen as usize] {
-            if let Some(s) = self
-                .next_enabled_right(self.active_screen)
-                .or_else(|| self.next_enabled_left(self.active_screen))
-            {
-                self.active_screen = s;
-            }
         }
     }
 
@@ -395,7 +370,7 @@ impl<const M: usize> DisplayState<M> {
         &self.screens[self.active_screen as usize]
     }
 
-    pub fn current_screen_mut(&mut self) -> &mut ScreenState {
+    fn current_screen_mut(&mut self) -> &mut ScreenState {
         &mut self.screens[self.active_screen as usize]
     }
 
@@ -548,13 +523,6 @@ impl<const M: usize> DisplayState<M> {
         }
     }
 
-    pub fn get_current_menu_item(&self) -> Option<&'static str> {
-        self.current_screen().get_current_label()
-    }
-
-    pub fn get_menu_item(&self, index: usize) -> Option<&'static str> {
-        self.current_screen().get_label(index)
-    }
 }
 
 // ── Action / label helpers ────────────────────────────────────────────────────
@@ -638,15 +606,10 @@ fn label_client_repeat() -> &'static str {
 }
 
 fn action_client_repeat_toggle() {
-    if crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed) {
-        crate::LORA_CLIENT_REPEAT.store(false, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
-        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
-    } else {
-        crate::LORA_CLIENT_REPEAT.store(true, Ordering::Relaxed);
-        #[cfg(all(feature = "mesh", feature = "embassy-base"))]
-        crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
-    }
+    let cur = crate::LORA_CLIENT_REPEAT.load(Ordering::Relaxed);
+    crate::LORA_CLIENT_REPEAT.store(!cur, Ordering::Relaxed);
+    #[cfg(all(feature = "mesh", feature = "embassy-base"))]
+    crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
 // ── Share location (advert_loc_policy) ─────────────────────────────────────
@@ -960,19 +923,6 @@ fn play_melody(_index: usize) {
     crate::game::lifecycle::play();
 }
 
-#[cfg(feature = "game")]
-fn action_melody_0() { play_melody(0); }
-#[cfg(feature = "game")]
-fn action_melody_1() { play_melody(1); }
-#[cfg(feature = "game")]
-fn action_melody_2() { play_melody(2); }
-#[cfg(feature = "game")]
-fn action_melody_3() { play_melody(3); }
-#[cfg(feature = "game")]
-fn action_melody_4() { play_melody(4); }
-#[cfg(feature = "game")]
-fn action_melody_5() { play_melody(5); }
-
 // ── Static item arrays ────────────────────────────────────────────────────────
 
 #[cfg(feature = "game")]
@@ -983,27 +933,27 @@ static MELODY_ITEMS: [MenuItem; 7] = [
     },
     MenuItem {
         label: || "Startup",
-        kind: MenuItemKind::Action(action_melody_0),
+        kind: MenuItemKind::Action(|| play_melody(0)),
     },
     MenuItem {
         label: || "Rickroll",
-        kind: MenuItemKind::Action(action_melody_1),
+        kind: MenuItemKind::Action(|| play_melody(1)),
     },
     MenuItem {
         label: || "Imp. March",
-        kind: MenuItemKind::Action(action_melody_2),
+        kind: MenuItemKind::Action(|| play_melody(2)),
     },
     MenuItem {
         label: || "Sandstorm",
-        kind: MenuItemKind::Action(action_melody_3),
+        kind: MenuItemKind::Action(|| play_melody(3)),
     },
     MenuItem {
         label: || "Pink Panther",
-        kind: MenuItemKind::Action(action_melody_4),
+        kind: MenuItemKind::Action(|| play_melody(4)),
     },
     MenuItem {
         label: || "Trololo",
-        kind: MenuItemKind::Action(action_melody_5),
+        kind: MenuItemKind::Action(|| play_melody(5)),
     },
 ];
 
@@ -1277,11 +1227,10 @@ pub static LORA_PRESETS: &[LoRaPreset] = &[
 /// Returns the index of the preset that matches the current LoRa atomics, or
 /// `LORA_PRESETS.len()` to indicate "Custom" (no matching preset).
 fn current_lora_preset_index() -> u8 {
-    use core::sync::atomic::Ordering::Relaxed;
-    let freq = crate::LORA_FREQ_HZ.load(Relaxed);
-    let bw = crate::LORA_BW_HZ.load(Relaxed);
-    let sf = crate::LORA_SF.load(Relaxed);
-    let cr = crate::LORA_CR.load(Relaxed);
+    let freq = crate::LORA_FREQ_HZ.load(Ordering::Relaxed);
+    let bw = crate::LORA_BW_HZ.load(Ordering::Relaxed);
+    let sf = crate::LORA_SF.load(Ordering::Relaxed);
+    let cr = crate::LORA_CR.load(Ordering::Relaxed);
     for (i, p) in LORA_PRESETS.iter().enumerate() {
         if p.freq_hz == freq && p.bw_hz == bw && p.sf == sf && p.cr == cr {
             return i as u8;
@@ -1291,12 +1240,11 @@ fn current_lora_preset_index() -> u8 {
 }
 
 fn apply_lora_preset(idx: usize) {
-    use core::sync::atomic::Ordering::Relaxed;
     let p = &LORA_PRESETS[idx];
-    crate::LORA_FREQ_HZ.store(p.freq_hz, Relaxed);
-    crate::LORA_BW_HZ.store(p.bw_hz, Relaxed);
-    crate::LORA_SF.store(p.sf, Relaxed);
-    crate::LORA_CR.store(p.cr, Relaxed);
+    crate::LORA_FREQ_HZ.store(p.freq_hz, Ordering::Relaxed);
+    crate::LORA_BW_HZ.store(p.bw_hz, Ordering::Relaxed);
+    crate::LORA_SF.store(p.sf, Ordering::Relaxed);
+    crate::LORA_CR.store(p.cr, Ordering::Relaxed);
     #[cfg(feature = "embassy-base")]
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
@@ -1335,11 +1283,6 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
     kind: MenuItemKind::Action(|| {}),
 }];
 
-static BADGERCORN_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Badgercorn",
-    kind: MenuItemKind::Action(|| {}),
-}];
-
 // ── DISPLAY_STATE ─────────────────────────────────────────────────────────────
 
 pub const SCREEN_COUNT: usize = ScreenId::COUNT;
@@ -1358,37 +1301,24 @@ const GAME_ENABLED: bool = false;
 
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
-
-#[cfg(feature = "embassy-base")]
-pub static DISPLAY_STATE: Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>> =
-    Mutex::new(RefCell::new(DisplayState::new(
-        [
-            ScreenState::new(&GAME_ITEMS),
-            ScreenState::new(&MAIN_ITEMS),
-            ScreenState::new(&PM_ITEMS),
-            ScreenState::new(&LORA_ITEMS),
-            ScreenState::new(&ADVERT_ITEMS),
-            ScreenState::new(&BADGERCORN_ITEMS),
-        ],
-        [GAME_ENABLED, true, true, true, true, true],
-    )));
-
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
+#[cfg(feature = "embassy-base")]
+type DisplayMutex = Mutex<ThreadModeRawMutex, RefCell<DisplayState<SCREEN_COUNT>>>;
 #[cfg(feature = "simulator")]
-pub static DISPLAY_STATE: Mutex<RefCell<DisplayState<SCREEN_COUNT>>> =
-    Mutex::new(RefCell::new(DisplayState::new(
-        [
-            ScreenState::new(&GAME_ITEMS),
-            ScreenState::new(&MAIN_ITEMS),
-            ScreenState::new(&PM_ITEMS),
-            ScreenState::new(&LORA_ITEMS),
-            ScreenState::new(&ADVERT_ITEMS),
-            ScreenState::new(&BADGERCORN_ITEMS),
-        ],
-        [GAME_ENABLED, true, true, true, true, true],
-    )));
+type DisplayMutex = Mutex<RefCell<DisplayState<SCREEN_COUNT>>>;
+
+pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayState::new(
+    [
+        ScreenState::new(&GAME_ITEMS),
+        ScreenState::new(&MAIN_ITEMS),
+        ScreenState::new(&PM_ITEMS),
+        ScreenState::new(&LORA_ITEMS),
+        ScreenState::new(&ADVERT_ITEMS),
+    ],
+    [GAME_ENABLED, true, true, true, true],
+)));
 
 // ── Scrolling menu renderer ───────────────────────────────────────────────────
 
@@ -1494,8 +1424,6 @@ pub fn draw_about<D>(display: &mut D, page: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use crate::RED;
-
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let center = TextStyleBuilder::new()
         .baseline(Baseline::Top)
@@ -1590,9 +1518,6 @@ pub fn draw_lora_radio<D>(display: &mut D, page: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use crate::RED;
-    use core::sync::atomic::Ordering::Relaxed;
-
     let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let center = TextStyleBuilder::new()
         .baseline(Baseline::Top)
@@ -1629,10 +1554,10 @@ where
     let (title, freq, bw, sf, cr) = if is_custom {
         (
             "Custom",
-            crate::LORA_FREQ_HZ.load(Relaxed),
-            crate::LORA_BW_HZ.load(Relaxed),
-            crate::LORA_SF.load(Relaxed),
-            crate::LORA_CR.load(Relaxed),
+            crate::LORA_FREQ_HZ.load(Ordering::Relaxed),
+            crate::LORA_BW_HZ.load(Ordering::Relaxed),
+            crate::LORA_SF.load(Ordering::Relaxed),
+            crate::LORA_CR.load(Ordering::Relaxed),
         )
     } else {
         let p = &LORA_PRESETS[page as usize];
@@ -1643,10 +1568,10 @@ where
     // atomics — i.e. the user pressed Fire on this preset. Custom is always
     // active (it reflects the live values by definition).
     let is_active = is_custom
-        || (crate::LORA_FREQ_HZ.load(Relaxed) == freq
-            && crate::LORA_BW_HZ.load(Relaxed) == bw
-            && crate::LORA_SF.load(Relaxed) == sf
-            && crate::LORA_CR.load(Relaxed) == cr);
+        || (crate::LORA_FREQ_HZ.load(Ordering::Relaxed) == freq
+            && crate::LORA_BW_HZ.load(Ordering::Relaxed) == bw
+            && crate::LORA_SF.load(Ordering::Relaxed) == sf
+            && crate::LORA_CR.load(Ordering::Relaxed) == cr);
 
     Rectangle::new(Point::new(6, y - 2), Size::new(140, 18))
         .into_styled(PrimitiveStyle::with_fill(BLACK))
@@ -1719,8 +1644,6 @@ pub fn draw_confirm<D>(display: &mut D, prompt: &str) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    use crate::RED;
-
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let center = TextStyleBuilder::new()
         .baseline(Baseline::Top)

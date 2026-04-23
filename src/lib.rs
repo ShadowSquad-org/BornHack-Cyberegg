@@ -1,5 +1,9 @@
-#![cfg_attr(feature = "embassy-base", no_std)]
+// The library only has meaningful content when building the main firmware
+// or simulator. Other binaries (e.g. `hwtest`) build against an empty
+// library so their builds don't drag in the full graphics/menu stack.
+#![cfg_attr(not(feature = "simulator"), no_std)]
 #![cfg_attr(feature = "embassy-base", no_main)]
+#![cfg(any(feature = "embassy-base", feature = "simulator"))]
 
 #[derive(Debug, PartialEq)]
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
@@ -22,31 +26,24 @@ use core::result::{Result, Result::Ok};
 use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
 #[cfg(feature = "embassy-base")]
 use core::sync::atomic::Ordering;
-use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
 use embedded_graphics::{
     mono_font::{
         MonoTextStyle,
-        ascii::FONT_7X13,
+        ascii::{FONT_7X13, FONT_7X13_BOLD},
     },
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 #[cfg(feature = "embassy-base")]
-#[cfg(feature = "simulator")]
-fn get_device_id() -> [u8; 4] {
-    *b"A3F7"
-}
-#[cfg(feature = "embassy-base")]
 use heapless::format;
 // Embassy: re-export Color from ssd1675 hardware driver
 #[cfg(feature = "embassy-base")]
 mod embassy_colors {
-    pub use ssd1675::graphics::Color;
     pub use ssd1675::graphics::Color as TriColor;
-    pub const BLACK: Color = Color::Black;
-    pub const WHITE: Color = Color::White;
-    pub const RED: Color = Color::Red;
+    pub const BLACK: TriColor = TriColor::Black;
+    pub const WHITE: TriColor = TriColor::White;
+    pub const RED: TriColor = TriColor::Red;
 }
 #[cfg(feature = "embassy-base")]
 pub use embassy_colors::*;
@@ -354,7 +351,6 @@ pub const SCREEN_MAIN: u8 = ScreenId::Main as u8;
 pub const SCREEN_PM: u8 = ScreenId::Pm as u8;
 pub const SCREEN_CHANNEL: u8 = ScreenId::Channel as u8;
 pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
-pub const SCREEN_BADGERCORN: u8 = ScreenId::Badgercorn as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -404,13 +400,11 @@ where
         #[cfg(feature = "mesh")]
         SCREEN_PM => draw_screen_pm(display, bat_prc),
         #[cfg(feature = "mesh")]
-        #[cfg(feature = "mesh")]
         SCREEN_CHANNEL => fw::mesh::channel_browser::draw(display, bat_prc),
         #[cfg(not(feature = "mesh"))]
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
         SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
-        // SCREEN_BADGERCORN is rendered via blit() in embassy.rs — nothing to draw here.
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 
@@ -703,7 +697,6 @@ where
 {
     let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let style_rssi = MonoTextStyle::new(&FONT_7X13, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     draw_header(display, "Direct Message", bat_prc)?;
@@ -742,7 +735,7 @@ where
 
                 // RSSI at bottom
                 let rssi_text = format!(16; "{} dBm", msg.rssi).unwrap();
-                Text::with_text_style(&rssi_text, Point::new(4, 152), style_rssi, bottom)
+                Text::with_text_style(&rssi_text, Point::new(4, 152), style_small, bottom)
                     .draw(display)?;
             }
         }
