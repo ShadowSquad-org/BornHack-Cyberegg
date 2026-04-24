@@ -30,6 +30,14 @@ diagnostic image.
 - `arm-none-eabi-size` (optional, used by the Makefile targets to print a
   size summary after each build).
 
+The firmware must be downloaded to the device over SWD. Without a
+bootloader, the nRF52840's USB port is inactive, so USB flashing is
+not available.
+
+The badge also needs to be powered while the test runs. If the SWD
+programmer does not supply power to the target, connect a USB-C cable
+to the badge to power it externally.
+
 The EPD panel does **not** need to be fitted during testing — `hwtest`
 treats the EPD signal lines as bare GPIOs. A populated panel is
 tolerated, see *Beep codes* below for the BUSY caveat.
