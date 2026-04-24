@@ -160,6 +160,10 @@ pub static NODE_NAME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signa
 /// When true, #blinkme channel LED commands are ignored.
 pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
 
+/// When true, the pet severity-change buzzer alert is suppressed.
+/// Toggled from the Bornagotchi → Mute menu entry.
+pub static GAME_MUTE: AtomicBool = AtomicBool::new(false);
+
 /// When true, the LoRa radio is put into standby and the meshcore task
 /// pauses all RX/TX until re-enabled.
 pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);

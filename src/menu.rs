@@ -762,6 +762,19 @@ fn label_telemetry_share() -> &'static str {
 
 // ── Ignore blink toggle ────────────────────────────────────────────────────
 
+fn label_game_mute() -> &'static str {
+    if crate::GAME_MUTE.load(Ordering::Relaxed) {
+        "Mute (On)"
+    } else {
+        "Mute (Off)"
+    }
+}
+
+fn action_game_mute_toggle() {
+    let cur = crate::GAME_MUTE.load(Ordering::Relaxed);
+    crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
+}
+
 fn label_ignore_blink() -> &'static str {
     if crate::IGNORE_BLINK.load(Ordering::Relaxed) {
         "Ignore Blink: ON"
@@ -1140,8 +1153,8 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
         kind: MenuItemKind::Back,
     },
     MenuItem {
-        label: || "Mute",
-        kind: MenuItemKind::Action(|| {}),
+        label: label_game_mute,
+        kind: MenuItemKind::Action(action_game_mute_toggle),
     },
     MenuItem {
         label: || "Disable Game",

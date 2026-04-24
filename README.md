@@ -356,7 +356,7 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make sim`               | Build and run the SDL2 simulator          |
 | `make monitor`           | Attach RTT log monitor to running device  |
 | `make bl`                | Build bootloader                          |
-| `make bl-flash`          | Full-chip erase + flash bootloader        |
+| `make flash-bl`          | Full-chip erase + flash bootloader        |
 
 ## Game engine
 

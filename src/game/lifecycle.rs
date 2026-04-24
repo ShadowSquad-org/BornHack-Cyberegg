@@ -9,7 +9,7 @@ use super::engine::{GameState, PetStats, DisplayAnim, PetRealm, PetRecord, PET_N
 #[cfg(feature = "mesh")]
 use super::engine::{SAVE_SIZE, REALM_SAVE_SIZE};
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 // ---------------------------------------------------------------------------
 // Static game state
@@ -234,7 +234,107 @@ pub fn random_default_name(seed: u32) -> &'static str {
 pub fn cycle() -> Option<PetStats> {
     let state = unsafe { (*GAME.get()).as_mut()? };
     let tick = now_tick();
-    Some(state.stats(tick))
+    let stats = state.stats(tick);
+    check_severity_transition(state);
+    Some(stats)
+}
+
+// ---------------------------------------------------------------------------
+// Severity-change buzzer alert
+//
+// Whenever the pet moves *up* a severity level — neutral → warning,
+// warning → severe, or severe → leaving — a short buzzer notification is
+// fired.  Transitions downward (player fed/healed the pet) and moves into
+// the terminal `Gone` state are silent.  Mute is honoured via the
+// `GAME_MUTE` atomic set from the menu.
+// ---------------------------------------------------------------------------
+
+/// Severity ladder used by the alert.  The numeric encoding is the value
+/// that `LAST_SEVERITY` stores between cycles; `Uninit` is only seen on
+/// the very first call after boot and suppresses a spurious alert for the
+/// seed transition.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Severity {
+    Uninit = 0,
+    Neutral = 1,
+    Warning = 2,
+    Severe = 3,
+    Leaving = 4,
+    Gone = 5,
+}
+
+static LAST_SEVERITY: AtomicU8 = AtomicU8::new(Severity::Uninit as u8);
+
+fn current_severity(state: &GameState) -> Severity {
+    use super::engine::Phase;
+    use super::engine::thresholds::{
+        SICK_TRIGGER_DRAINED, SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED,
+        WARNING_DRAINED, WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK,
+        WARNING_TIRED,
+    };
+
+    if state.phase == Phase::Gone {
+        return Severity::Gone;
+    }
+    if state.phase == Phase::Leaving {
+        return Severity::Leaving;
+    }
+    // Severity is derived from the underlying stats (not the display
+    // animation) so that active-action animations — Feeding/Healing/etc
+    // — don't "mask" an existing warning and suppress the alert when
+    // the action ends.
+    let severe = state.sick > SICK_TRIGGER_TIRED
+        || state.tired > SICK_TRIGGER_TIRED
+        || state.hunger > SICK_TRIGGER_HUNGER
+        || state.drained > SICK_TRIGGER_DRAINED;
+    if severe {
+        return Severity::Severe;
+    }
+    let warning = state.sick > WARNING_SICK
+        || state.tired > WARNING_TIRED
+        || state.hunger > WARNING_HUNGER
+        || state.drained > WARNING_DRAINED
+        || state.miserable > WARNING_MISERABLE;
+    if warning {
+        return Severity::Warning;
+    }
+    Severity::Neutral
+}
+
+fn check_severity_transition(state: &GameState) {
+    let now = current_severity(state) as u8;
+    let prev = LAST_SEVERITY.swap(now, Ordering::Relaxed);
+
+    // Suppress alerts during the very first cycle after boot so the
+    // seed transition Uninit → <current> stays silent.
+    if prev == Severity::Uninit as u8 {
+        return;
+    }
+
+    let muted = crate::GAME_MUTE.load(Ordering::Relaxed);
+
+    // Pet just left: play the "funny ending" melody.  Triggers on any
+    // transition into Gone so e.g. a natural Leaving → Gone fires the
+    // melody; `new_generation()` goes via Hatching, not Gone, so it
+    // does not trigger this path.
+    if now == Severity::Gone as u8 && prev != Severity::Gone as u8 {
+        if !muted {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::buzzer::play(crate::fw::buzzer::FUNNY_ENDING_INDEX);
+        }
+        return;
+    }
+
+    // Alert only on upward transitions between tracked levels:
+    //   Neutral(1) → Warning(2)
+    //   Warning(2) → Severe(3)
+    //   Severe(3)  → Leaving(4)
+    let upward = now > prev && now <= Severity::Leaving as u8;
+    if upward && !muted {
+        #[cfg(feature = "embassy-base")]
+        crate::fw::buzzer::play(crate::fw::buzzer::PET_WARN_INDEX);
+    }
 }
 
 /// Get the current display animation (cheap, no update).

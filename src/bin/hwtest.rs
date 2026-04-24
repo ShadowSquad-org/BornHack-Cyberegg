@@ -21,6 +21,15 @@
 //!   19    — PS_SYNC driven high by the power supply circuit (no
 //!            internal pull; any low reading is a real fault).
 //!   20    — Buzzer pin idles low via the 1 MΩ pull-down on the PCB.
+//!   21    — 32.768 kHz LFXO starts within 1 s of being requested.
+//!            Marginal solder joints or a damaged crystal prevent it
+//!            from oscillating, which breaks BLE connection timing in
+//!            the main firmware but leaves advertising working.
+//!   22    — 32 MHz HFXO starts within 1 s of being requested. The
+//!            main firmware falls back to the internal RC oscillator
+//!            without it, which is accurate enough to boot and to run
+//!            the CPU but **not** accurate enough for the LoRa radio
+//!            or BLE, so those features fail silently or drift.
 //!
 //! Visual/audible feedback:
 //!   - boot:    LED white, all checks run
@@ -35,7 +44,6 @@
 #![no_main]
 
 use embassy_executor::Spawner;
-use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::pwm::{DutyCycle, SimplePwm};
 use embassy_nrf::qspi::{self, Qspi};
@@ -122,6 +130,8 @@ const ERR_EPD_SCK:   u8 = 17;
 const ERR_EPD_MOSI:  u8 = 18;
 const ERR_PS_SYNC:   u8 = 19;
 const ERR_BUZZER:    u8 = 20;
+const ERR_LFXO:      u8 = 21;
+const ERR_HFXO:      u8 = 22;
 
 const VBAT_MIN_MV: u16 = 3000;
 const VBAT_MAX_MV: u16 = 4400;
@@ -135,9 +145,10 @@ const CYCLE_GAP_MS: u64 = 2000;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let mut config = embassy_nrf::config::Config::default();
-    config.hfclk_source = HfclkSource::ExternalXtal;
-    let p = embassy_nrf::init(config);
+    // Use the default clock config (HFINT / LFRC) — crystals are checked
+    // explicitly via probe_hfxo/probe_lfxo below, so requesting them in
+    // init() would just hang if a crystal were bad.
+    let p = embassy_nrf::init(embassy_nrf::config::Config::default());
 
     defmt::info!("hwtest: starting");
 
@@ -146,7 +157,7 @@ async fn main(_spawner: Spawner) {
     let mut led_green = Output::new(board!(p, led_green), Level::Low, OutputDrive::Standard);
     let mut led_blue = Output::new(board!(p, led_blue), Level::Low, OutputDrive::Standard);
 
-    let mut failures: heapless::Vec<u8, 20> = heapless::Vec::new();
+    let mut failures: heapless::Vec<u8, 22> = heapless::Vec::new();
 
     // Buzzer pin is held in a mutable binding so a short-lived `Input`
     // reborrow can probe it for the 1 MΩ pull-down before PWM takes it.
@@ -261,6 +272,18 @@ async fn main(_spawner: Spawner) {
         let _ = failures.push(ERR_LORA);
     }
 
+    // ── 32 MHz HFXO start ─────────────────────────────────────────────────
+    defmt::info!("hwtest: starting 32 MHz HFXO");
+    if !probe_hfxo().await {
+        let _ = failures.push(ERR_HFXO);
+    }
+
+    // ── 32.768 kHz LFXO start ─────────────────────────────────────────────
+    defmt::info!("hwtest: starting 32.768 kHz LFXO");
+    if !probe_lfxo().await {
+        let _ = failures.push(ERR_LFXO);
+    }
+
     // ── Battery voltage via SAADC ─────────────────────────────────────────
     let mv = read_battery_mv(p.SAADC, board!(p, vbat), board!(p, vbat_rd).into()).await;
     defmt::info!("hwtest: vbat = {} mV", mv);
@@ -326,7 +349,7 @@ async fn main(_spawner: Spawner) {
 fn check_all_high(
     pins: &[(u8, Flex<'_>)],
     group: &'static str,
-    failures: &mut heapless::Vec<u8, 20>,
+    failures: &mut heapless::Vec<u8, 22>,
 ) {
     for (code, pin) in pins {
         if pin.is_low() {
@@ -346,7 +369,7 @@ async fn check_shorts(
     pins: &mut [(u8, Flex<'_>)],
     restore_pull: Pull,
     group: &'static str,
-    failures: &mut heapless::Vec<u8, 20>,
+    failures: &mut heapless::Vec<u8, 22>,
 ) {
     for i in 0..pins.len() {
         let driver_code = pins[i].0;
@@ -433,6 +456,89 @@ fn probe_qspi(
         jedec[0], jedec[1], jedec[2]
     );
     jedec != [0x00; 3] && jedec != [0xFF; 3]
+}
+
+// nRF52840 CLOCK peripheral register addresses (@ 0x40000000).
+const CLOCK_TASKS_HFCLKSTART: *mut u32 = 0x4000_0000 as *mut u32;
+const CLOCK_TASKS_HFCLKSTOP: *mut u32 = 0x4000_0004 as *mut u32;
+const CLOCK_TASKS_LFCLKSTART: *mut u32 = 0x4000_0008 as *mut u32;
+const CLOCK_TASKS_LFCLKSTOP: *mut u32 = 0x4000_000C as *mut u32;
+const CLOCK_EVENTS_HFCLKSTARTED: *mut u32 = 0x4000_0100 as *mut u32;
+const CLOCK_EVENTS_LFCLKSTARTED: *mut u32 = 0x4000_0104 as *mut u32;
+const CLOCK_LFCLKSTAT: *const u32 = 0x4000_0418 as *const u32;
+const CLOCK_LFCLKSRC: *mut u32 = 0x4000_0518 as *mut u32;
+
+/// Request the 32 MHz HFXO and wait up to 1 s for `HFCLKSTARTED`.
+///
+/// HFCLK is on HFINT after `embassy_nrf::init()`, so the start task is a
+/// fresh request.  If the crystal never stabilises the event never fires;
+/// HFCLK stays on HFINT and the CPU keeps running, so the rest of the
+/// test remains intact.
+async fn probe_hfxo() -> bool {
+    unsafe {
+        CLOCK_EVENTS_HFCLKSTARTED.write_volatile(0);
+        CLOCK_TASKS_HFCLKSTART.write_volatile(1);
+    }
+    for _ in 0..100u16 {
+        if unsafe { CLOCK_EVENTS_HFCLKSTARTED.read_volatile() } != 0 {
+            defmt::info!("hwtest:   HFXO started");
+            return true;
+        }
+        Timer::after_millis(10).await;
+    }
+    // Abandon the request so the controller stops driving the XO.
+    unsafe { CLOCK_TASKS_HFCLKSTOP.write_volatile(1) };
+    defmt::warn!("hwtest:   HFXO FAIL (HFCLKSTARTED event never fired)");
+    false
+}
+
+/// Request the 32.768 kHz LFXO and wait up to 1 s for `LFCLKSTARTED`.
+///
+/// `embassy_nrf::init()` has already started LFCLK on the RC oscillator
+/// for its time driver (RTC1), so we must stop LFCLK, swap the source to
+/// XTAL, and restart.  The LFCLK-off window is kept short: Timer is
+/// unusable during it (RTC1 is LFCLK-driven) so we busy-wait on CPU
+/// cycles instead.  If the crystal never starts we fall back to the RC
+/// oscillator so embassy-time keeps ticking for the rest of the test.
+async fn probe_lfxo() -> bool {
+    const CYCLES_PER_MS: u32 = 64_000; // CPU clock = 64 MHz
+    unsafe {
+        // Stop the current LFCLK (RC).
+        CLOCK_TASKS_LFCLKSTOP.write_volatile(1);
+        while CLOCK_LFCLKSTAT.read_volatile() & (1 << 16) != 0 {
+            cortex_m::asm::nop();
+        }
+        // Select XTAL and request start.
+        CLOCK_LFCLKSRC.write_volatile(1); // 1 = Xtal
+        CLOCK_EVENTS_LFCLKSTARTED.write_volatile(0);
+        CLOCK_TASKS_LFCLKSTART.write_volatile(1);
+
+        // Poll for ~1 s using CPU cycle delays because RTC1 is stalled.
+        for _ in 0..1000u16 {
+            if CLOCK_EVENTS_LFCLKSTARTED.read_volatile() != 0 {
+                defmt::info!("hwtest:   LFXO started");
+                return true;
+            }
+            cortex_m::asm::delay(CYCLES_PER_MS);
+        }
+
+        // Timed out — fall back to the RC oscillator so Timer works again.
+        CLOCK_TASKS_LFCLKSTOP.write_volatile(1);
+        while CLOCK_LFCLKSTAT.read_volatile() & (1 << 16) != 0 {
+            cortex_m::asm::nop();
+        }
+        CLOCK_LFCLKSRC.write_volatile(0); // 0 = RC
+        CLOCK_EVENTS_LFCLKSTARTED.write_volatile(0);
+        CLOCK_TASKS_LFCLKSTART.write_volatile(1);
+        for _ in 0..100u16 {
+            if CLOCK_EVENTS_LFCLKSTARTED.read_volatile() != 0 {
+                break;
+            }
+            cortex_m::asm::delay(CYCLES_PER_MS);
+        }
+    }
+    defmt::warn!("hwtest:   LFXO FAIL (LFCLKSTARTED event never fired)");
+    false
 }
 
 /// Reset the SX1262 and read its status over SPI. Returns true if the chip

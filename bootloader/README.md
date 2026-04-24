@@ -114,7 +114,7 @@ A full chip erase is required before programming so that any stale content
 from a previous bootloader does not interfere:
 
 ```sh
-make bl-flash
+make flash-bl
 ```
 
 This runs `probe-rs erase --chip nRF52840_xxAA` followed by

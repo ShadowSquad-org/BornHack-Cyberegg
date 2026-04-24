@@ -10,7 +10,7 @@ FLASH_BASE = 0x0000D000
 .PHONY: fw fw-release fw-game fw-game-release fw-mesh fw-mesh-release \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
         sim flash flash-release flash-game flash-mesh \
-        monitor bl bl-flash dfu-flash dfu-flash-release
+        monitor bl flash-bl dfu-flash dfu-flash-release
 
 # ---------- Full build (game + mesh) ----------
 
@@ -112,7 +112,7 @@ bl-monitor:
 bl:
 	cd bootloader && cargo bl
 
-bl-flash:
+flash-bl:
 	probe-rs erase --chip nRF52840_xxAA
 	cd bootloader && cargo bl
 	probe-rs download --chip nRF52840_xxAA \

@@ -26,6 +26,40 @@ const S: u32 = 150;
 const H: u32 = 1200;
 const P: u32 = 50;
 
+/// Pet severity alert: two short A5 beeps with a brief gap.  Played
+/// whenever the pet state machine transitions upward between neutral,
+/// warning, severe-warning and leaving.  The two notes are currently
+/// identical — the structure is already in place if you want to swap the
+/// second note for a different pitch later.
+pub const PET_WARN: &[Tone] = &[
+    Tone::new(Note::A5, 120),
+    Tone::new(Note::Rest, 80),
+    Tone::new(Note::A5, 120),
+];
+
+/// "funny ending" (composed by LK) — a brief comedic send-off played
+/// when the pet finally leaves (transitions to `Phase::Gone`).
+/// Time signature 4/4 at ♩ = 180, so one beat = 333 ms.
+///
+/// The score's measure 2 ends on a stacked chord; the buzzer is
+/// monophonic so that chord is rendered as a quick Eb → G → Bb arpeggio
+/// into a held Bb for the remainder of the measure.
+pub const FUNNY_ENDING: &[Tone] = &[
+    // Measure 1: G | G A | Bb G | F — playful descending motif.
+    Tone::new(Note::G4,  333),
+    Tone::new(Note::G4,  166),
+    Tone::new(Note::A4,  166),
+    Tone::new(Note::As4, 166),
+    Tone::new(Note::G4,  166),
+    Tone::new(Note::F4,  333),
+    // Measure 2: rest, then arpeggiated Eb-G-Bb chord landing on a
+    // half-note Bb.
+    Tone::new(Note::Rest, 333),
+    Tone::new(Note::Ds4, 166),
+    Tone::new(Note::G4,  166),
+    Tone::new(Note::As4, 666),
+];
+
 pub const STARTUP: &[Tone] = &[
     Tone::new(Note::A3, 120),
     Tone::new(Note::C4, 120),
@@ -207,62 +241,54 @@ pub const IMPERIAL_MARCH: &[Tone] = &[
     Tone::new(Note::G3, H),   // G  half
 ];
 
-// "The Pink Panther Theme" — Henry Mancini
-// First clarinet melody (track 4), 25 seconds from the iconic sneaky motif.
-// Converted from MIDI: Tempo 120 BPM, 384 ppq.
+// "The Pink Panther Theme" — Henry Mancini, 1963.
+// Transcribed for PWM buzzer (monophonic) from the "Moderately Mysterious"
+// piano arrangement: three statements of the sneaky chromatic motif with
+// variations, ending on the fermata-held tonic (mirroring the `pp` fade
+// in the final measure of the score).
+//
+// Tempo: ♩ = 120 (swing feel).  Note durations in milliseconds:
+//   sixteenth = 125  eighth        = 250
+//   quarter   = 500  dotted qtr    = 750
+//   half      = 1000 fermata       = 1500
 pub const PINK_PANTHER: &[Tone] = &[
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 800),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 800),
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 333),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 333),
-    Tone::new(Note::As5, 166),
-    Tone::new(Note::A5, 333),
-    Tone::new(Note::D5, 166),
-    Tone::new(Note::F5, 333),
-    Tone::new(Note::A5, 166),
-    Tone::new(Note::Gs5, 800),
-    Tone::new(Note::G5, 166),
-    Tone::new(Note::F5, 166),
-    Tone::new(Note::D5, 166),
-    Tone::new(Note::C5, 166),
-    Tone::new(Note::D5, 800),
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 800),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 800),
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 333),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 333),
-    Tone::new(Note::As5, 166),
-    Tone::new(Note::A5, 333),
-    Tone::new(Note::F5, 166),
-    Tone::new(Note::A5, 333),
-    Tone::new(Note::D6, 166),
-    Tone::new(Note::Cs6, 800),
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 800),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 800),
-    Tone::new(Note::Cs5, 166),
-    Tone::new(Note::D5, 333),
-    Tone::new(Note::E5, 166),
-    Tone::new(Note::F5, 333),
-    Tone::new(Note::As5, 166),
-    Tone::new(Note::A5, 333),
-    Tone::new(Note::D5, 166),
-    Tone::new(Note::F5, 333),
-    Tone::new(Note::A5, 166),
-    Tone::new(Note::Gs5, 800),
-    Tone::new(Note::G5, 166),
-    Tone::new(Note::F5, 166),
-    Tone::new(Note::D5, 166),
-    Tone::new(Note::C5, 166),
-    Tone::new(Note::D5, 300),
+    // ── Statement 1 — sneaky motif with descending tag ─────────────
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
+    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
+    Tone::new(Note::D5,  125), Tone::new(Note::F5,  250),
+    Tone::new(Note::A5,  125), Tone::new(Note::Gs5, 750),
+    // Descending run
+    Tone::new(Note::G5,  125), Tone::new(Note::F5,  125),
+    Tone::new(Note::D5,  125), Tone::new(Note::C5,  125),
+    Tone::new(Note::D5,  1000),
+    Tone::new(Note::Rest, 250),
+
+    // ── Statement 2 — motif climbs to Cs6 instead of falling ───────
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
+    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
+    Tone::new(Note::F5,  125), Tone::new(Note::A5,  250),
+    Tone::new(Note::D6,  125), Tone::new(Note::Cs6, 1000),
+    Tone::new(Note::Rest, 250),
+
+    // ── Statement 3 — mirror of statement 1, ends on the fermata ───
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  750),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  750),
+    Tone::new(Note::Cs5, 125), Tone::new(Note::D5,  250),
+    Tone::new(Note::E5,  125), Tone::new(Note::F5,  250),
+    Tone::new(Note::As5, 125), Tone::new(Note::A5,  250),
+    Tone::new(Note::D5,  125), Tone::new(Note::F5,  250),
+    Tone::new(Note::A5,  125), Tone::new(Note::Gs5, 750),
+    Tone::new(Note::G5,  125), Tone::new(Note::F5,  125),
+    Tone::new(Note::D5,  125), Tone::new(Note::C5,  125),
+
+    // Final held tonic — fermata + pp fade.
+    Tone::new(Note::D5,  1500),
 ];
 
 // Eduard Khil – "Trololo" (vocal melody, first two phrases)

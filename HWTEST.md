@@ -128,6 +128,8 @@ left-to-right, long beeps first, then short beeps.
 |   18 | `— — — • • •`                          | long long long short short short       | EPD MOSI             |
 |   19 | `— — — • • • •`                        | long long long short short short short | PS_SYNC              |
 |   20 | `— — — —`                              | long long long long                    | Buzzer pin pull-down |
+|   21 | `— — — — •`                            | long long long long short              | 32.768 kHz LFXO start |
+|   22 | `— — — — • •`                          | long long long long short short        | 32 MHz HFXO start |
 
 ## Check list / beep codes
 
@@ -153,6 +155,8 @@ left-to-right, long beeps first, then short beeps.
 |   18 | EPD MOSI — same                                                                                                                                               |
 |   19 | PS_SYNC driven high by the power supply circuit (no internal pull; genuinely needs an external drive)                                                         |
 |   20 | Buzzer pin idles low through the 1 MΩ PCB pull-down                                                                                                           |
+|   21 | 32.768 kHz LFXO starts within 1 s of `TASKS_LFCLKSTART`; detects dry joints or a missing/damaged crystal that would otherwise only surface as bad BLE timing   |
+|   22 | 32 MHz HFXO starts within 1 s of `TASKS_HFCLKSTART`; the HFXO is required by the radio peripherals (LoRa, BLE). On a missing/bad crystal the chip still runs on HFINT, so the CPU boots and GPIO/SPI tests can pass while the radio would fail later |
 
 ### Short detection
 
@@ -204,3 +208,29 @@ Log level is controlled by the `DEFMT_LOG` env var in `.cargo/config.toml`
   test harness: the joystick must be at rest, QWIIC connector empty
   (unless you intend to pull the lines low), battery must be within
   range, and the EPD cable either fully seated or not fitted at all.
+
+## Known symptoms and fixes
+
+A running list of observed hardware faults, how they surface (either in
+`hwtest` beep codes or in the running main firmware), and what to do
+about them on the bench.  Add new entries here as they are found — one
+row per distinct symptom + fix pair.
+
+| Symptom                                                                                                                                           | How it surfaces                                                                                                                                                                                                                 | Likely cause                                                                                                                            | Fix                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BLE device is discoverable but pairing fails part-way through (SMP timeout, `PairingFailed` in the defmt log, or the phone shows a generic error); **or** the badge pairs but connections drop / reconnect intermittently and notifications come through erratically | `hwtest` beeps code 21 (LFXO start).  Main firmware: advertising still works (uses the HFXO started by `embassy_nrf::init`) while pairing and the connection interval depend on the 32.768 kHz LFXO for accurate timing. | LFXO (32 kHz) crystal has a bad solder joint or a dry pad.  The crystal either doesn't start, starts slowly, or drifts, so the radio's connection-event timing falls outside the negotiated window. | Reflow / resolder the 32.768 kHz crystal and its two load caps.                                                                                                |
+| One or more buttons always read low, or never change state                                                                                        | `hwtest` beeps codes 1–2 (Cancel / Execute) or 3–7 (joystick)                                                                                                                                                                   | Cold joints on the nRF52840 pins driving the affected GPIO lines (see `board.rs` pin map).                                              | Reflow / resolder the nRF52840 package.  Inspect the relevant corner of the BGA/QFN with a microscope.                                                         |
+| EPD refuses to respond, shows garbage, or `hwtest` reports EPD signal failures                                                                    | `hwtest` beeps codes 14–18 (EPD RESET / DC / CSN / SCK / MOSI shorts or stuck lines).  Code 13 (BUSY) is informational only — a real fault here usually surfaces on one of the other five.                                      | Cold joints on the nRF52840 pins connected to the EPD connector.                                                                        | Reflow / resolder the nRF52840.  If the BUSY line is the only one misbehaving with the panel fitted, also inspect the EPD FPC connector.                      |
+| LoRa radio never answers on SPI or the chip's 32 MHz TCXO does not start                                                                          | `hwtest` beeps code 8 (LoRa SX1262).  Main firmware logs `lora init failed` or `set_rx failed`.                                                                                                                                 | Cold joints on the nRF52840 pins driving SPI2 (SCK/MOSI/MISO/NSS) or on the SX1262 itself, or on the SX1262's TCXO/oscillator network.  | Reflow / resolder the nRF52840, then the SX1262 and its oscillator network if the fault persists.                                                              |
+| LoRa never transmits / receives, or BLE connection parameters drift enough for the phone to give up, but CPU and GPIO peripherals work fine      | `hwtest` beeps code 22 (HFXO start).  Main firmware's radio layer may appear "on" but never makes contact with peers.                                                                                                            | 32 MHz HFXO crystal has a bad joint / load cap, or the crystal itself is damaged.  HFCLK falls back to HFINT (±5 % accuracy) which is not enough for radio timing. | Reflow / resolder the 32 MHz crystal and its two load caps.                                                                                                    |
+
+### Notes
+
+- Many of the "resolder the MCU" entries collapse into the same
+  underlying cause: a single cold joint on the nRF52840 can affect any
+  subset of its peripherals. If two unrelated faults show up on the
+  same board, suspect the MCU package before suspecting two separate
+  components.
+- Crystals and their matching caps are surprisingly often the problem,
+  especially small 3225 packages that get dragged out of place by
+  neighbouring components during reflow.
