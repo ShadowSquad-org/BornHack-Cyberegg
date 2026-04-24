@@ -14,13 +14,10 @@ line. The workflow is:
 1. `make flash-hwtest` — erases the chip, programs `hwtest`, releases
    reset. Total time: ~3 seconds.
 1. Observe the LED and buzzer:
-   - **Green + short ascending chime** → all checks passed. Board is
-     ready for production firmware.
+   - **Green + short ascending chime** → all checks passed.
    - **Red + repeating beep sequence** → one or more checks failed.
      Decode the beeps (see below) to identify the faulty circuits,
      repair, re-test.
-1. Before loading the production firmware, run `probe-rs erase` again
-   (this is handled automatically by `make flash`).
 
 `hwtest` is *not* meant to ship with the device. It is a factory-only
 diagnostic image.
@@ -62,13 +59,7 @@ build.
 ## Memory layout
 
 `hwtest` uses a dedicated `memory-hwtest.x` that places the image at
-`0x0000_0000` — **no bootloader required**. The project-root `memory-fw.x`
-is used only by the main firmware, which still lives at `0x0001_0000`
-behind the `embassy-boot-nrf` bootloader.
-
-The production flash layout is unchanged; factory test and production
-firmware live in mutually exclusive flash regions and never coexist on a
-device.
+`0x0000_0000` — **no bootloader required**.
 
 ## LED feedback
 
@@ -193,8 +184,7 @@ Log level is controlled by the `DEFMT_LOG` env var in `.cargo/config.toml`
 
 ## Interpreting the result
 
-- **Green LED, pass chime** → board is good. Erase and flash the
-  production firmware.
+- **Green LED, pass chime** → board is good.
 - **Red LED, any beep sequence** → decode each beep group, look up the
   code, repair that area of the PCB, re-test. If multiple codes sound
   together and share a pair of adjacent pins, suspect a solder bridge
