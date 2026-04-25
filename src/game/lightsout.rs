@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use embedded_graphics::{
     mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
     prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, StrokeAlignment},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
@@ -27,8 +27,10 @@ const BOARD_X: i32 = 16;
 const BOARD_Y: i32 = 10;
 /// Size of each cell in pixels.
 const CELL: i32 = 24;
-/// Inner fill inset from cell border.
-const INSET: i32 = 2;
+/// Inner fill inset from cell border.  Wider inset = more white margin
+/// around each lit-cell square so the red cursor stands out clearly on
+/// low-contrast EPDs.
+const INSET: i32 = 4;
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
@@ -192,13 +194,20 @@ where
             .draw(display)?;
         }
 
-        // Cursor: red border.
+        // Cursor: thick red border.  Drawn with `Inside` alignment so
+        // the 6 px stroke sits inside the rectangle, leaving the black
+        // cell outline visible around it.
         if i == cursor && !solved {
+            let cursor_style = PrimitiveStyleBuilder::new()
+                .stroke_color(crate::RED)
+                .stroke_width(6)
+                .stroke_alignment(StrokeAlignment::Inside)
+                .build();
             Rectangle::new(
                 Point::new(x + 1, y + 1),
                 Size::new((CELL - 2) as u32, (CELL - 2) as u32),
             )
-            .into_styled(PrimitiveStyle::with_stroke(crate::RED, 3))
+            .into_styled(cursor_style)
             .draw(display)?;
         }
     }
