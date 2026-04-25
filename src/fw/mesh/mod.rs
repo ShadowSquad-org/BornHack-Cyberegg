@@ -66,7 +66,7 @@ pub struct ChannelMsgEntry {
     pub repeat_count: u8,
 }
 
-const CHANNEL_MSG_RING_SIZE: usize = 32;
+pub const CHANNEL_MSG_RING_SIZE: usize = 32;
 
 pub struct ChannelMsgRing {
     entries: [Option<ChannelMsgEntry>; CHANNEL_MSG_RING_SIZE],

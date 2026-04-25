@@ -27,7 +27,19 @@ use crate::{BLACK, TriColor, WHITE};
 #[derive(Clone, Copy)]
 enum BrowserState {
     ChannelList { cursor: u8 },
-    ChannelView { channel_idx: u8, scroll: u8 },
+    /// Channel message browser.  `anchor` identifies which message sits
+    /// at the bottom of the visible body:
+    ///
+    /// * `None` → pinned to the newest message.  New arrivals stay
+    ///   visible at the bottom; older messages flow upward.  This is
+    ///   the default when the view is opened.
+    /// * `Some(content_hash)` → anchored on a specific message.  The
+    ///   anchor survives eviction of *other* messages — the user's
+    ///   place is preserved.  If the anchor itself is evicted from the
+    ///   ring, the renderer falls back to the oldest available message
+    ///   in the channel (the closest still-known position to where the
+    ///   user was reading).
+    ChannelView { channel_idx: u8, anchor: Option<u32> },
 }
 
 pub struct ChannelBrowser {
@@ -78,7 +90,7 @@ pub fn dispatch(btn: ButtonId) -> bool {
                     if let Some(idx) = ch_idx {
                         b.state = BrowserState::ChannelView {
                             channel_idx: idx,
-                            scroll: 0,
+                            anchor: None, // open at newest
                         };
                     }
                 }
@@ -86,21 +98,38 @@ pub fn dispatch(btn: ButtonId) -> bool {
             },
             BrowserState::ChannelView {
                 channel_idx,
-                scroll,
+                anchor,
             } => match btn {
                 ButtonId::Up => {
-                    if scroll > 0 {
+                    // Up = older messages.  Resolve the current anchor
+                    // to an index, step one back, and store the new
+                    // neighbour's content_hash as the new anchor.
+                    let (_total, anchor_idx) = resolve_anchor(channel_idx, anchor);
+                    if anchor_idx > 0 {
+                        let new_anchor = hash_at(channel_idx, anchor_idx - 1);
                         b.state = BrowserState::ChannelView {
                             channel_idx,
-                            scroll: scroll - 1,
+                            anchor: new_anchor,
                         };
                     }
                 }
                 ButtonId::Down => {
-                    b.state = BrowserState::ChannelView {
-                        channel_idx,
-                        scroll: scroll + 1,
-                    };
+                    // Down = newer messages.  When the step lands on
+                    // the newest message we re-pin to `None` so the
+                    // view follows future arrivals.
+                    let (total, anchor_idx) = resolve_anchor(channel_idx, anchor);
+                    if total > 0 && anchor_idx + 1 < total {
+                        let new_idx = anchor_idx + 1;
+                        let new_anchor = if new_idx == total - 1 {
+                            None
+                        } else {
+                            hash_at(channel_idx, new_idx)
+                        };
+                        b.state = BrowserState::ChannelView {
+                            channel_idx,
+                            anchor: new_anchor,
+                        };
+                    }
                 }
                 ButtonId::Execute | ButtonId::Fire => {
                     let ci = channel_idx;
@@ -145,6 +174,57 @@ const FONT: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13_BOL
 const FONT_INV: MonoTextStyle<'static, TriColor> = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
 const LH: i32 = 14;
 
+/// Resolve `anchor` to a position in the channel's oldest→newest
+/// message list.  Returns `(total_messages, anchor_index)`.
+///
+/// The fallback rules let the view tolerate ring eviction:
+/// * `None`                       → newest message (`total - 1`).
+/// * `Some(h)` and hash present   → that message's index.
+/// * `Some(h)` and hash *missing* → `0` (oldest still-available),
+///                                  i.e. the closest known position to
+///                                  where the user was reading.
+fn resolve_anchor(channel_idx: u8, anchor: Option<u32>) -> (usize, usize) {
+    crate::CHANNEL_MSG_RING.lock(|cell| {
+        let ring = cell.borrow();
+        let mut total = 0usize;
+        let mut found_at: Option<usize> = None;
+        for entry in ring.iter() {
+            if entry.channel_idx != channel_idx {
+                continue;
+            }
+            if let Some(h) = anchor {
+                if found_at.is_none() && entry.content_hash == h {
+                    found_at = Some(total);
+                }
+            }
+            total += 1;
+        }
+        let anchor_idx = if total == 0 {
+            0
+        } else {
+            match (anchor, found_at) {
+                (None, _) => total - 1,
+                (Some(_), Some(i)) => i,
+                (Some(_), None) => 0,
+            }
+        };
+        (total, anchor_idx)
+    })
+}
+
+/// Look up the `content_hash` of the message at `index` in the channel's
+/// oldest→newest list.  Returns `None` if `index` is out of range or
+/// the ring changed under us.
+fn hash_at(channel_idx: u8, index: usize) -> Option<u32> {
+    crate::CHANNEL_MSG_RING.lock(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|m| m.channel_idx == channel_idx)
+            .nth(index)
+            .map(|m| m.content_hash)
+    })
+}
+
 pub fn draw<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -159,8 +239,8 @@ where
             BrowserState::ChannelList { cursor } => draw_channel_list(display, cursor, bat_prc),
             BrowserState::ChannelView {
                 channel_idx,
-                scroll,
-            } => draw_channel_view(display, channel_idx, scroll),
+                anchor,
+            } => draw_channel_view(display, channel_idx, anchor),
         }
     })
 }
@@ -255,7 +335,7 @@ where
 fn draw_channel_view<D>(
     display: &mut D,
     channel_idx: u8,
-    _scroll: u8,
+    anchor: Option<u32>,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -282,26 +362,30 @@ where
             })
     });
 
-    // Collect the last 16 messages for this channel.
-    let mut msgs: heapless::Vec<(heapless::String<16>, heapless::String<{ crate::CHANNEL_MSG_TEXT_MAX }>, bool, u8), 16> =
-        heapless::Vec::new();
-    let mut msg_total: usize = 0;
+    // Collect every message for this channel from oldest → newest,
+    // including the content_hash so we can resolve the anchor below.
+    type MsgEntry = (
+        heapless::String<16>,
+        heapless::String<{ crate::CHANNEL_MSG_TEXT_MAX }>,
+        bool, // is_own
+        u8,   // repeat_count
+        u32,  // content_hash — used to locate the anchor message
+    );
+    let mut msgs: heapless::Vec<MsgEntry, { crate::CHANNEL_MSG_RING_SIZE }> = heapless::Vec::new();
     crate::CHANNEL_MSG_RING.lock(|cell| {
         for entry in cell.borrow().iter() {
             if entry.channel_idx == channel_idx {
-                msg_total += 1;
-                if msgs.is_full() {
-                    msgs.remove(0);
-                }
                 let _ = msgs.push((
                     entry.sender.clone(),
                     entry.text.clone(),
                     entry.is_own,
                     entry.repeat_count,
+                    entry.content_hash,
                 ));
             }
         }
     });
+    let msg_total = msgs.len();
 
     // Header: channel name (capped at 16 chars) + message count
     let mut header: heapless::String<24> = heapless::String::new();
@@ -317,42 +401,78 @@ where
 
     let chars_per_line = 20usize;
     let max_lines = 8usize;
+    // Body width is 148 px (152 minus a 4 px right margin reserved for
+    // the scroll bar) — text wraps at chars_per_line so this isn't
+    // currently used for layout, just kept as a visual guideline.
 
     if msgs.is_empty() {
         Text::with_text_style("No messages", Point::new(76, 60), FONT, center).draw(display)?;
     } else {
-        // Calculate lines per message (1 header + ceil(text_len / chars_per_line))
-        // working backwards from newest, fitting as many as possible in max_lines.
-        let candidate_count = msgs.len().min(4);
-        let candidates = &msgs[msgs.len() - candidate_count..];
+        // Resolve the anchor to an index in the freshly-collected list.
+        // Eviction handling:
+        //   * `None`                     → newest (msg_total - 1)
+        //   * `Some(h)` and hash present → that message's position
+        //   * `Some(h)` and hash missing → oldest available (0), the
+        //     closest known position to where the user was reading
+        let anchor_idx = match anchor {
+            None => msg_total - 1,
+            Some(h) => msgs
+                .iter()
+                .position(|m| m.4 == h)
+                .unwrap_or(0),
+        };
 
-        // Count lines per candidate
-        let mut lines_per: heapless::Vec<usize, 4> = heapless::Vec::new();
-        for (_, text, _, _) in candidates.iter() {
+        // Lines required by each message: 1 (sender header) + the
+        // wrapped-text line count.
+        let mut lines_per: heapless::Vec<usize, { crate::CHANNEL_MSG_RING_SIZE }> =
+            heapless::Vec::new();
+        for (_, text, _, _, _) in msgs.iter() {
             let text_lines = if text.is_empty() {
                 0
             } else {
-                (text.len() + chars_per_line - 1) / chars_per_line
+                text.len().div_ceil(chars_per_line)
             };
-            let _ = lines_per.push(1 + text_lines); // 1 for header
+            let _ = lines_per.push(1 + text_lines);
         }
 
-        // Walk backwards from newest, accumulating lines until we exceed max_lines.
-        let mut total_lines = 0usize;
-        let mut first_visible = candidates.len();
-        for i in (0..candidates.len()).rev() {
-            let needed = lines_per[i];
+        // Two-phase window expansion around the anchor.
+        //
+        // Phase 1 (backward): greedily prepend older messages above the
+        // anchor — preserves the chat-style "anchor at the bottom"
+        // feel for the common case.
+        //
+        // Phase 2 (forward): if the screen still has room (typically
+        // when the anchor is the oldest available message), append
+        // newer messages below the anchor to fill the body.  Without
+        // this phase, scrolling all the way back leaves the screen
+        // empty save for one message.
+        //
+        // The anchor itself is always counted first so even an
+        // overflowing single message is rendered (clipped at the top).
+        let mut first_visible = anchor_idx;
+        let mut last_visible = anchor_idx;
+        let mut total_lines = lines_per[anchor_idx];
+        while first_visible > 0 {
+            let needed = lines_per[first_visible - 1];
             if total_lines + needed > max_lines {
                 break;
             }
+            first_visible -= 1;
             total_lines += needed;
-            first_visible = i;
+        }
+        while last_visible + 1 < msg_total {
+            let needed = lines_per[last_visible + 1];
+            if total_lines + needed > max_lines {
+                break;
+            }
+            last_visible += 1;
+            total_lines += needed;
         }
 
-        // Render from first_visible to end (oldest visible → newest).
+        // Render first_visible → last_visible (oldest to newest in window).
         let mut y = 20i32;
-        for i in first_visible..candidates.len() {
-            let (ref sender, ref text, is_own, repeat_count) = candidates[i];
+        for i in first_visible..=last_visible {
+            let (ref sender, ref text, is_own, repeat_count, _hash) = msgs[i];
 
             // Sender line — inverted (white on black)
             let nick: heapless::String<24> = if is_own {
@@ -373,7 +493,7 @@ where
                 let _ = lbl.push_str(truncate_bytes(s, 16));
                 lbl
             };
-            let nick_w = (nick.len() as u32 * 7).min(148) + 4;
+            let nick_w = (nick.len() as u32 * 7).min(144) + 4;
             Rectangle::new(Point::new(2, y), Size::new(nick_w, LH as u32))
                 .into_styled(PrimitiveStyle::with_fill(BLACK))
                 .draw(display)?;
@@ -397,6 +517,43 @@ where
                 y += LH;
                 offset = end;
             }
+        }
+
+        // Scroll bar on the right edge of the body — only when there's
+        // something off-screen (above or below).
+        let visible = last_visible + 1 - first_visible;
+        if visible < msg_total {
+            const TRACK_X: i32 = 149;
+            const TRACK_W: u32 = 2;
+            const TRACK_Y: i32 = 20;
+            const TRACK_H: i32 = 120; // body region: y=20..140
+            // Track outline so the thumb has something to sit in.
+            Rectangle::new(
+                Point::new(TRACK_X, TRACK_Y),
+                Size::new(TRACK_W, TRACK_H as u32),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+            .draw(display)?;
+            // Thumb size proportional to visible window.
+            let thumb_h = ((visible as i32 * TRACK_H) / msg_total as i32).max(8);
+            // Thumb position: anchor at the newest message → thumb at
+            // the bottom; older anchor → thumb moves up.  Equivalent to
+            // the old (max_scroll - scroll) form, with the offset
+            // recomputed from the anchor's position.
+            let max_scroll = msg_total.saturating_sub(1) as i32;
+            let scroll_i = max_scroll - anchor_idx as i32;
+            let travel = TRACK_H - thumb_h;
+            let thumb_y = if max_scroll == 0 {
+                TRACK_Y
+            } else {
+                TRACK_Y + travel - (scroll_i * travel) / max_scroll
+            };
+            Rectangle::new(
+                Point::new(TRACK_X, thumb_y),
+                Size::new(TRACK_W, thumb_h as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
         }
     }
 
