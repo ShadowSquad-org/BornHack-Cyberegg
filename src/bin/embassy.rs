@@ -237,7 +237,6 @@ async fn main(spawner: Spawner) {
         BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
         RED_BUF.init([0; EpdConfig::BUF_SIZE]),
         WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        Some(temp_celsius),
         LutMode::NoInvert,
     )
     .await
@@ -363,10 +362,6 @@ async fn display_loop(
 
         let sprite_advance = match select(
             async {
-                // Re-read temperature and reload OTP LUT if drift > 2°C.
-                // Must happen while display is in deep sleep (SPI3 idle).
-                hello_graphics::fw::epd::maybe_reload_lut(display).await;
-
                 let _ = display.reset().await;
                 let _ = display.update_bw(UpdateMode::Mode1).await;
                 let _ = display.deep_sleep().await;

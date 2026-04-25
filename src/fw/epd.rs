@@ -7,7 +7,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use static_cell::StaticCell;
 
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicPtr, Ordering};
 use embassy_nrf::gpio::{Pin as GpioPin, Port};
 use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
 pub use ssd1675::LutMode;
@@ -50,145 +50,25 @@ pub type EpdGfx<'a> = GraphicDisplay<
 static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
 static OTP_LUT_PTR: AtomicPtr<[u8; 107]> = AtomicPtr::new(core::ptr::null_mut());
 
-// Pin numbers cached at init for OTP LUT reload.
-static EPD_PIN_SCK:  AtomicU8 = AtomicU8::new(0);
-static EPD_PIN_DATA: AtomicU8 = AtomicU8::new(0);
-static EPD_PIN_CS:   AtomicU8 = AtomicU8::new(0);
-static EPD_PIN_DC:   AtomicU8 = AtomicU8::new(0);
-static EPD_PIN_RST:  AtomicU8 = AtomicU8::new(0);
-static EPD_PIN_BUSY: AtomicU8 = AtomicU8::new(0);
-
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
     let port = match p.port() { Port::Port0 => 0u8, Port::Port1 => 1u8 };
     port * 32 + p.pin()
-}
-
-/// TR zone index (0..=7) of the currently-loaded OTP LUT, or 0xFF if no LUT
-/// has been loaded yet.  Used to detect TR-boundary crossings so we reload
-/// only when the zone would actually change.
-static LUT_TR: AtomicU8 = AtomicU8::new(0xFF);
-
-/// Map a temperature (in 0.1 °C units) to its SSD1675 TR zone index (0..=7).
-///
-/// Boundaries match the datasheet's TR0..TR7 table:
-///     TR0  T ≤ 5 °C
-///     TR1  5 < T ≤ 10 °C
-///     TR2  10 < T ≤ 15 °C
-///     TR3  15 < T ≤ 20 °C
-///     TR4  20 < T ≤ 25 °C
-///     TR5  25 < T ≤ 30 °C
-///     TR6  30 < T ≤ 33 °C
-///     TR7  33 °C < T
-///
-/// The datasheet's TR6 nominally extends to 35 °C and overlaps TR7 (which
-/// starts at 33 °C).  We split at 33 °C so our local bookkeeping matches
-/// whichever zone the chip actually loads.
-fn tr_index(t_c10: i16) -> u8 {
-    if      t_c10 <=  50 { 0 }
-    else if t_c10 <= 100 { 1 }
-    else if t_c10 <= 150 { 2 }
-    else if t_c10 <= 200 { 3 }
-    else if t_c10 <= 250 { 4 }
-    else if t_c10 <= 300 { 5 }
-    else if t_c10 <= 330 { 6 }
-    else                 { 7 }
-}
-
-/// Check if the current temperature has crossed a TR-zone boundary since the
-/// last LUT probe.  If so, re-read the OTP LUT from the display controller at
-/// the new temperature, patch it (NoInvert), and update the display's cached
-/// LUT.
-///
-/// Uses 1 °C hysteresis: we only commit to a new TR when the temperature is
-/// at least 1 °C past the boundary in the direction of change — this prevents
-/// flapping when the reading hovers right at a boundary.
-///
-/// Must be called while the display is in deep sleep (SPI3 idle).
-/// The `display` reference is needed to update its stored LUT and temperature.
-pub async fn maybe_reload_lut<'a>(display: &mut EpdGfx<'a>) {
-    // Read current temperature via MPSL (safe after init, synchronous).
-    // MPSL is only available when the mesh feature (nrf-mpsl) is enabled.
-    #[cfg(feature = "mesh")]
-    let current_c10 = super::temperature::read_via_mpsl();
-    #[cfg(not(feature = "mesh"))]
-    let current_c10 = super::temperature::last_c10();
-
-    let last_tr = LUT_TR.load(Ordering::Relaxed);
-    let naive_tr = tr_index(current_c10);
-    let target_tr = if last_tr == 0xFF {
-        // First call after boot — always load.
-        naive_tr
-    } else if naive_tr == last_tr {
-        // Same zone; nothing to do.
-        return;
-    } else {
-        // Candidate zone differs.  Shift the temperature 1 °C back toward the
-        // previous zone and re-evaluate.  If the adjusted reading still sits
-        // in the old zone, we haven't crossed the boundary decisively — hold.
-        let adjusted = if naive_tr > last_tr {
-            current_c10 - 10
-        } else {
-            current_c10 + 10
-        };
-        if tr_index(adjusted) == last_tr {
-            return;
-        }
-        naive_tr
-    };
-
-    // 1/16 °C units, preserving 0.1 °C precision from `current_c10`.
-    // Previous code did `(c10 / 10) * 16`, throwing away the fractional
-    // degree before scaling — lining up with the TR-change check requires
-    // the chip to receive the same precision we used for the decision.
-    let temp_raw = (current_c10 as i32 * 16 / 10) as u16;
-    defmt::info!(
-        "EPD: TR change {} → {} at {} °C×10, reloading OTP LUT (raw 0x{:04x})",
-        last_tr, target_tr, current_c10, temp_raw,
-    );
-
-    // Re-read the OTP LUT at the new temperature using stolen peripherals.
-    // Safe: display is in deep_sleep, SPI3 is idle.
-    let sck  = unsafe { AnyPin::steal(EPD_PIN_SCK.load(Ordering::Relaxed)) };
-    let data = unsafe { AnyPin::steal(EPD_PIN_DATA.load(Ordering::Relaxed)) };
-    let cs   = unsafe { AnyPin::steal(EPD_PIN_CS.load(Ordering::Relaxed)) };
-    let dc   = unsafe { AnyPin::steal(EPD_PIN_DC.load(Ordering::Relaxed)) };
-    let rst  = unsafe { AnyPin::steal(EPD_PIN_RST.load(Ordering::Relaxed)) };
-    let busy = unsafe { AnyPin::steal(EPD_PIN_BUSY.load(Ordering::Relaxed)) };
-
-    let new_lut = probe_lut(
-        &sck.into(), &data.into(), &cs.into(),
-        &dc.into(), &rst.into(), &busy.into(),
-        temp_raw,
-    ).await;
-
-    // Overwrite the static LUT buffer in-place and re-patch.
-    let lut_ptr = OTP_LUT_PTR.load(Ordering::Relaxed);
-    if !lut_ptr.is_null() {
-        let lut_ref = unsafe { &mut *lut_ptr };
-        lut_ref.copy_from_slice(&new_lut);
-        display.set_otp_lut(lut_ref, ssd1675::display::LutMode::NoInvert);
-        display.set_temperature(temp_raw);
-    }
-
-    LUT_TR.store(target_tr, Ordering::Relaxed);
-    defmt::info!(
-        "EPD: OTP LUT reloaded (TR={}, {} °C×10)",
-        target_tr,
-        current_c10,
-    );
 }
 
 /// Read back the OTP LUT register (command 0x33) using stolen peripherals.
 ///
 /// Sequence (per SSD1619 reference driver):
 ///   1. Hardware reset + 100 ms settle
-///   2. Write temperature (0x18 internal sensor, 0x1A = measured value)
+///   2. Select the on-chip internal temperature sensor (0x18 = 0x80) —
+///      the SSD1675 will use its own die measurement when the next
+///      LoadTemp step runs.  The SoC's idea of temperature is *not*
+///      written: the panel's internal sensor is more representative
+///      of the panel itself than the nRF52840's die.
 ///   3. Send 0x22 / 0xB1 — EnableClock | LoadTemp | LoadLUT-Mode1 | DisableClock
 ///   4. Send 0x20 — Master Activation (BUSY goes HIGH while controller loads OTP zone)
 ///   5. Wait for BUSY LOW (controller has loaded the temperature zone into the LUT register)
 ///   6. Send 0x33 command then read 107 bytes — the loaded LUT zone
 ///
-/// `temp_raw`: temperature in SSD1675 format (1 LSB = 1/16 °C, e.g. 25 °C = 0x0190).
 /// All stolen resources are dropped before returning.
 async fn probe_lut(
     sck: &Peri<'_, AnyPin>,
@@ -197,7 +77,6 @@ async fn probe_lut(
     dc: &Peri<'_, AnyPin>,
     rst: &Peri<'_, AnyPin>,
     busy: &Peri<'_, AnyPin>,
-    temp_raw: u16,
 ) -> [u8; 107] {
     let sck_nr = pin_nr(sck);
     let data_nr = pin_nr(data);
@@ -242,20 +121,15 @@ async fn probe_lut(
             unsafe { AnyPin::steal(data_nr) },
             cfg.clone(),
         );
-        // 0x18: Temperature Sensor Selection = Internal
+        // 0x18: Temperature Sensor Selection = Internal.  The SSD1675's
+        // own die sensor will be sampled by the LoadTemp step below;
+        // we deliberately do NOT write a manual value via 0x1A — that
+        // would override the on-chip sensor with the (unrelated) MCU
+        // die temperature.
         dc_out.set_low();
         spi_tx.write(&[0x18]).await.ok();
         dc_out.set_high();
         spi_tx.write(&[0x80]).await.ok();
-        // 0x1A: Write Temperature (1 LSB = 1/16 °C).
-        // Datasheet packing: byte 1 = bits [11:4], byte 2 = bits [3:0] in the
-        // high nibble.  Plain to_be_bytes would off-shift the value by 4 bits.
-        dc_out.set_low();
-        spi_tx.write(&[0x1A]).await.ok();
-        dc_out.set_high();
-        let temp_b1 = ((temp_raw >> 4) & 0xFF) as u8;
-        let temp_b2 = ((temp_raw & 0x0F) << 4) as u8;
-        spi_tx.write(&[temp_b1, temp_b2]).await.ok();
         // 0x22 / 0xB1: EnableClock | LoadTemp | LoadLUT-OTP-Mode1 | DisableClock
         dc_out.set_low();
         spi_tx.write(&[0x22]).await.ok();
@@ -344,11 +218,10 @@ async fn probe_lut(
 
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
 ///
-/// Reads the factory OTP LUT from the display controller before consuming the
-/// peripheral tokens. Pass the measured temperature so the controller selects
-/// the correct OTP waveform zone.
-///
-/// `temperature`: temperature in °C. `None` defaults to 20 °C.
+/// Reads the factory OTP LUT from the display controller before consuming
+/// the peripheral tokens.  The SSD1675's on-chip temperature sensor is
+/// selected and used for waveform compensation — no external temperature
+/// is supplied or required.
 pub async fn init_epd<'a>(
     spi: Peri<'a, peripherals::SPI3>,
     sck_pin: Peri<'a, AnyPin>,
@@ -361,34 +234,12 @@ pub async fn init_epd<'a>(
     black_buffer: &'a mut [u8],
     red_buffer: &'a mut [u8],
     work_buffer: &'a mut [u8],
-    temperature: Option<i16>,
     lut_mode: LutMode,
 ) -> Result<EpdGfx<'a>, Infallible> {
-    let temp_celsius = temperature.unwrap_or(20);
-    let temp_raw: u16 = ((temp_celsius) as i32 * 16) as u16;
-    defmt::debug!(
-        "EPD: temperature {} °C (raw 0x{:04x})",
-        temp_celsius,
-        temp_raw
-    );
-
-    // Cache pin numbers for OTP LUT reload at runtime.
-    EPD_PIN_SCK.store(pin_nr(&sck_pin), Ordering::Relaxed);
-    EPD_PIN_DATA.store(pin_nr(&mosi_pin), Ordering::Relaxed);
-    EPD_PIN_CS.store(pin_nr(&csn_pin), Ordering::Relaxed);
-    EPD_PIN_DC.store(pin_nr(&dc_pin), Ordering::Relaxed);
-    EPD_PIN_RST.store(pin_nr(&resetn_pin), Ordering::Relaxed);
-    EPD_PIN_BUSY.store(pin_nr(&busy_pin), Ordering::Relaxed);
-
-    // Record the TR zone the chip will select for the initial load so the
-    // first `maybe_reload_lut` call doesn't spuriously reload the same zone.
-    let initial_c10 = temperature.unwrap_or(20) as i16 * 10;
-    LUT_TR.store(tr_index(initial_c10), Ordering::Relaxed);
-
     // Read OTP LUT via stolen peripherals before consuming the real tokens.
     // Move raw bytes into static storage immediately — keeps the 107-byte buffer off the stack.
     let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(
-        probe_lut(&sck_pin, &mosi_pin, &csn_pin, &dc_pin, &resetn_pin, &busy_pin, temp_raw).await,
+        probe_lut(&sck_pin, &mosi_pin, &csn_pin, &dc_pin, &resetn_pin, &busy_pin).await,
     );
     OTP_LUT_PTR.store(otp_lut as *mut _, Ordering::Relaxed);
 
@@ -411,8 +262,7 @@ pub async fn init_epd<'a>(
         .rotation(Rotation::Rotate0)
         .build()
         .unwrap();
-    let mut display = Display::new(controller, config);
-    display.set_temperature(temp_raw);
+    let display = Display::new(controller, config);
     let mut gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
     gfx.set_otp_lut(otp_lut, lut_mode);
     defmt::info!(
