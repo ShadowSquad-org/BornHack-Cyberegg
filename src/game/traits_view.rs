@@ -6,13 +6,13 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
+    text::{Baseline, Text, TextStyleBuilder},
 };
 
 use super::stat_bar::draw_stat_bar;
+use crate::ui::{self, TEXT_BOLD_BLACK};
 use crate::{BLACK, TriColor, WHITE};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -39,23 +39,8 @@ where
         .draw(display)?;
 
     // Title bar.
-    Rectangle::new(Point::zero(), Size::new(152, 18))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-    let title_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(
-        "Rolled Stats",
-        Point::new(76, 9),
-        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
-        title_style,
-    )
-    .draw(display)?;
+    ui::draw_title_bar(display, "Rolled Stats", Point::zero(), 152)?;
 
-    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
 
     // Header: name (if any), kind, generation.
@@ -74,22 +59,12 @@ where
             format_args!("{} Gen {}", kind_name, generation),
         );
     }
-    Text::with_text_style(header.as_str(), Point::new(4, 24), font_bold, left)
+    Text::with_text_style(header.as_str(), Point::new(4, 24), TEXT_BOLD_BLACK, left)
         .draw(display)?;
 
     // Fetch traits — if no game is active, show a placeholder.
     let Some((vit, cur, res)) = super::lifecycle::pet_traits() else {
-        let centered = TextStyleBuilder::new()
-            .baseline(Baseline::Middle)
-            .alignment(Alignment::Center)
-            .build();
-        Text::with_text_style(
-            "No pet yet",
-            Point::new(76, 85),
-            font,
-            centered,
-        )
-        .draw(display)?;
+        ui::draw_centered_message(display, "No pet yet", Point::new(76, 85))?;
         return Ok(());
     };
 

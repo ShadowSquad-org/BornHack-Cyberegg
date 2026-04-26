@@ -6,7 +6,6 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -14,6 +13,7 @@ use embedded_graphics::{
 
 use crate::{BLACK, TriColor, WHITE};
 use super::engine::PetKind;
+use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_WHITE};
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -96,24 +96,9 @@ where
         .draw(display)?;
 
     // Title bar.
-    Rectangle::new(Point::zero(), Size::new(152, 18))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-    let title_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(
-        "Choose your Pet",
-        Point::new(76, 9),
-        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
-        title_style,
-    )
-    .draw(display)?;
+    ui::draw_title_bar(display, "Choose your Pet", Point::zero(), 152)?;
 
     // Pet list.
-    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let font_inv = MonoTextStyle::new(&FONT_7X13_BOLD, WHITE);
     let centered = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
@@ -135,7 +120,7 @@ where
             .draw(display)?;
         }
 
-        let f = if is_selected { font_inv } else { font };
+        let f = if is_selected { TEXT_BOLD_WHITE } else { TEXT_BLACK };
         Text::with_text_style(kind.name(), Point::new(76, y), f, centered)
             .draw(display)?;
     }
@@ -145,13 +130,8 @@ where
         .baseline(Baseline::Bottom)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style(
-        "Fire to confirm",
-        Point::new(76, 148),
-        MonoTextStyle::new(&FONT_7X13, BLACK),
-        hint_style,
-    )
-    .draw(display)?;
+    Text::with_text_style("Fire to confirm", Point::new(76, 148), TEXT_BLACK, hint_style)
+        .draw(display)?;
 
     Ok(())
 }

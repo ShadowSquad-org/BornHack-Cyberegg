@@ -6,12 +6,12 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text, TextStyleBuilder},
 };
 
+use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK};
 use crate::{BLACK, TriColor, WHITE};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -54,38 +54,14 @@ where
         .draw(display)?;
 
     // Title bar.
-    Rectangle::new(Point::zero(), Size::new(152, 18))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-    let title_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .build();
-    Text::with_text_style(
-        " Unicorn Realm",
-        Point::new(2, 9),
-        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
-        title_style,
-    )
-    .draw(display)?;
+    ui::draw_title_bar(display, "Unicorn Realm", Point::zero(), 152)?;
 
     if count == 0 {
-        let centered = TextStyleBuilder::new()
-            .baseline(Baseline::Middle)
-            .alignment(embedded_graphics::text::Alignment::Center)
-            .build();
-        Text::with_text_style(
-            "No past pets yet",
-            Point::new(76, 85),
-            MonoTextStyle::new(&FONT_7X13, BLACK),
-            centered,
-        )
-        .draw(display)?;
+        ui::draw_centered_message(display, "No past pets yet", Point::new(76, 85))?;
         return Ok(());
     }
 
     // Show up to 4 pets per screen.
-    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
-    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
 
     let visible = 4usize.min(count as usize - scroll);
@@ -110,7 +86,7 @@ where
                 format_args!("{} Gen {} - {}", kind_name, pet.generation, pet.age_str()),
             );
         }
-        Text::with_text_style(line.as_str(), Point::new(4, y), font_bold, left)
+        Text::with_text_style(line.as_str(), Point::new(4, y), TEXT_BOLD_BLACK, left)
             .draw(display)?;
 
         // Traits line.
@@ -122,7 +98,7 @@ where
             &mut traits,
             format_args!("V:{}% C:{}% R:{}%", vit_pct, cur_pct, res_pct),
         );
-        Text::with_text_style(traits.as_str(), Point::new(4, y + 14), font, left)
+        Text::with_text_style(traits.as_str(), Point::new(4, y + 14), TEXT_BLACK, left)
             .draw(display)?;
 
         // Separator.
@@ -144,7 +120,7 @@ where
             .baseline(Baseline::Bottom)
             .alignment(embedded_graphics::text::Alignment::Right)
             .build();
-        Text::with_text_style(indicator.as_str(), Point::new(148, 150), font, right)
+        Text::with_text_style(indicator.as_str(), Point::new(148, 150), TEXT_BLACK, right)
             .draw(display)?;
     }
 

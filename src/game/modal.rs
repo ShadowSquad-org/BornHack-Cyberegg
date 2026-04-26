@@ -18,7 +18,6 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -26,6 +25,7 @@ use embedded_graphics::{
 
 use crate::{BLACK, TriColor, WHITE};
 use super::nav::Row;
+use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
 
 // ── Modal kind ────────────────────────────────────────────────────────────────
 
@@ -260,35 +260,19 @@ where
     let pos   = MODAL_POS.load(Ordering::Relaxed) as usize;
     let items = kind.items();
 
-    // White background
-    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
+    // White popover frame with 2 px black border.
+    ui::draw_popover_frame(
+        display,
+        Point::new(MARGIN, MARGIN),
+        Size::new(MODAL_W, MODAL_H),
+        BORDER,
+    )?;
 
-    // 2 px black border
-    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, BORDER))
-        .draw(display)?;
-
-    // Title bar — black fill, white text
-    let inner_x  = MARGIN + BORDER as i32;
-    let inner_y  = MARGIN + BORDER as i32;
-    let inner_w  = MODAL_W - BORDER * 2;
-    Rectangle::new(Point::new(inner_x, inner_y), Size::new(inner_w, TITLE_H as u32))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-
-    let title_style = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(
-        kind.title(),
-        Point::new(MARGIN + MODAL_W as i32 / 2, inner_y + TITLE_H / 2),
-        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
-        title_style,
-    )
-    .draw(display)?;
+    // Title bar — black fill, bold white text.
+    let inner_x = MARGIN + BORDER as i32;
+    let inner_y = MARGIN + BORDER as i32;
+    let inner_w = MODAL_W - BORDER * 2;
+    ui::draw_title_bar(display, kind.title(), Point::new(inner_x, inner_y), inner_w)?;
 
     // Item list
     let left_style = TextStyleBuilder::new()
@@ -324,7 +308,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                MonoTextStyle::new(&FONT_7X13, WHITE),
+                TEXT_WHITE,
                 left_style,
             )
             .draw(display)?;
@@ -338,7 +322,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                MonoTextStyle::new(&FONT_7X13, BLACK),
+                TEXT_BLACK,
                 left_style,
             )
             .draw(display)?;
@@ -347,7 +331,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                MonoTextStyle::new(&FONT_7X13, BLACK),
+                TEXT_BLACK,
                 left_style,
             )
             .draw(display)?;
@@ -424,31 +408,19 @@ where
         None => return Ok(()),
     };
 
-    // White background + border.
-    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
-        .into_styled(PrimitiveStyle::with_fill(WHITE))
-        .draw(display)?;
-    Rectangle::new(Point::new(MARGIN, MARGIN), Size::new(MODAL_W, MODAL_H))
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, BORDER))
-        .draw(display)?;
+    // White popover frame + black border.
+    ui::draw_popover_frame(
+        display,
+        Point::new(MARGIN, MARGIN),
+        Size::new(MODAL_W, MODAL_H),
+        BORDER,
+    )?;
 
     // Title bar.
     let inner_x = MARGIN + BORDER as i32;
     let inner_y = MARGIN + BORDER as i32;
     let inner_w = MODAL_W - BORDER * 2;
-    Rectangle::new(Point::new(inner_x, inner_y), Size::new(inner_w, TITLE_H as u32))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
-        .draw(display)?;
-    Text::with_text_style(
-        "Pet Stats",
-        Point::new(MARGIN + MODAL_W as i32 / 2, inner_y + TITLE_H / 2),
-        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
-        TextStyleBuilder::new()
-            .baseline(Baseline::Middle)
-            .alignment(Alignment::Center)
-            .build(),
-    )
-    .draw(display)?;
+    ui::draw_title_bar(display, "Pet Stats", Point::new(inner_x, inner_y), inner_w)?;
 
     // Stat bars.
     let bars: [(&str, u8); 5] = [
@@ -504,7 +476,7 @@ where
     Text::with_text_style(
         footer.as_str(),
         Point::new(MARGIN + MODAL_W as i32 / 2, footer_y),
-        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        TEXT_BOLD_BLACK,
         TextStyleBuilder::new()
             .baseline(Baseline::Bottom)
             .alignment(Alignment::Center)

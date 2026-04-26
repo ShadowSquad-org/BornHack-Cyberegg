@@ -17,6 +17,7 @@ pub enum ScreenError {
 pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
+pub mod ui;
 pub mod menu;
 pub mod text_entry;
 use core::cell::RefCell;
@@ -26,11 +27,9 @@ use core::result::{Result, Result::Ok};
 use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, AtomicU32};
 #[cfg(feature = "embassy-base")]
 use core::sync::atomic::Ordering;
+#[cfg(feature = "embassy-base")]
+use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::{
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_7X13, FONT_7X13_BOLD},
-    },
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -447,7 +446,7 @@ where
     Text::with_text_style(
         "BT PIN:",
         Point::new(76, 66),
-        MonoTextStyle::new(&FONT_7X13, BLACK),
+        ui::TEXT_BLACK,
         centered,
     )
     .draw(display)?;
@@ -486,11 +485,10 @@ pub fn draw_frame<D>(
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let font_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     let body_start = if let Some((title, bat_prc)) = header {
-        Text::with_text_style(title, Point::new(4, 14), font_bold, bottom).draw(display)?;
+        Text::with_text_style(title, Point::new(4, 14), ui::TEXT_BOLD_BLACK, bottom).draw(display)?;
         draw_battery_icon(display, 128, 2, *bat_prc)?;
         Rectangle::new(Point::new(0, 16), Size::new(152, 1))
             .into_styled(PrimitiveStyle::with_fill(BLACK))
@@ -508,7 +506,7 @@ where
         Text::with_text_style(
             text,
             Point::new(76, footer_y + 5),
-            font_bold,
+            ui::TEXT_BOLD_BLACK,
             TextStyleBuilder::new()
                 .baseline(Baseline::Middle)
                 .alignment(Alignment::Center)
@@ -699,8 +697,8 @@ fn draw_screen_pm<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_bold = ui::TEXT_BOLD_BLACK;
+    let style_small = ui::TEXT_BLACK;
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     draw_header(display, "Direct Message", bat_prc)?;
@@ -752,12 +750,11 @@ fn draw_screen_lora<D>(display: &mut D, _bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let font = MonoTextStyle::new(&FONT_7X13, BLACK);
     let center = TextStyleBuilder::new()
         .baseline(Baseline::Middle)
         .alignment(Alignment::Center)
         .build();
-    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), font, center).draw(display)?;
+    Text::with_text_style("Channels (no mesh)", Point::new(76, 76), ui::TEXT_BLACK, center).draw(display)?;
     Ok(())
 }
 
@@ -766,8 +763,8 @@ fn draw_screen_advert<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style_bold = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
-    let style_small = MonoTextStyle::new(&FONT_7X13, BLACK);
+    let style_bold = ui::TEXT_BOLD_BLACK;
+    let style_small = ui::TEXT_BLACK;
     let bottom = TextStyleBuilder::new().baseline(Baseline::Bottom).build();
 
     draw_header(display, "Adverts", bat_prc)?;
@@ -827,11 +824,7 @@ where
                 } else {
                     "Sig: INVALID"
                 };
-                let sig_style = if adv.sig_ok {
-                    MonoTextStyle::new(&FONT_7X13, BLACK)
-                } else {
-                    MonoTextStyle::new(&FONT_7X13, RED)
-                };
+                let sig_style = if adv.sig_ok { ui::TEXT_BLACK } else { ui::TEXT_RED };
                 Text::with_text_style(sig_text, Point::new(4, 72), sig_style, bottom)
                     .draw(display)?;
 
