@@ -86,6 +86,7 @@ impl ModalKind {
                 "Play now",
                 "Tic Tac Toe",
                 "Lights Out",
+                "Maze",
                 "Play music",
                 "Cancel",
             ],
@@ -121,7 +122,7 @@ fn is_item_available(label: &str) -> bool {
         "Relax" => stats.can_relax,
         "Play now" => stats.can_play,
         "Play music" => true,
-        "Tic Tac Toe" | "Lights Out" => stats.can_play_minigame,
+        "Tic Tac Toe" | "Lights Out" | "Maze" => stats.can_play_minigame,
         "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
         "Hibernate" => !stats.hibernating,
         "Wake up" => stats.hibernating,
@@ -258,6 +259,10 @@ pub fn activate() {
         "Lights Out" => {
             super::lightsout::open();
             close();
+        }
+        "Maze" => {
+            super::maze::open();
+            close(); 
         }
         "Play music" => {
             open(ModalKind::Music);
