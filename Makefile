@@ -10,7 +10,8 @@ FLASH_BASE = 0x0000D000
 .PHONY: fw fw-release fw-game fw-game-release fw-mesh fw-mesh-release \
         fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
         sim flash flash-release flash-game flash-mesh \
-        monitor bl flash-bl dfu-flash dfu-flash-release
+        monitor bl flash-bl dfu-flash dfu-flash-release \
+        fw-watch flash-watch
 
 # ---------- Full build (game + mesh) ----------
 
@@ -64,6 +65,19 @@ flash-mesh:
 
 flash-mesh-release:
 	cargo fw-mesh-release
+	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
+
+# ---------- Watch app ----------
+
+fw-watch:
+	cargo fw-watch
+
+flash-watch:
+	cargo fw-watch
+	probe-rs download --chip nRF52840_xxAA $(ELF)
+
+flash-watch-release:
+	cargo fw-watch-release
 	probe-rs download --chip nRF52840_xxAA $(ELF_REL)
 
 # ---------- Factory hardware test (standalone, no bootloader) ----------

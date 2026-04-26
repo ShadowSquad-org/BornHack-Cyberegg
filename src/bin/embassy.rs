@@ -27,8 +27,8 @@ use hello_graphics::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use hello_graphics::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, board, draw_graphics, health_err,
-    unix_now, with_health,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
+    draw_graphics, health_err, unix_now, with_health,
 };
 use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
@@ -501,6 +501,7 @@ async fn wait_display_event(
                 Either::First(Either3::First(_)) => return false,
                 Either::First(Either3::Second(_)) => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
+                Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
                 Either::Second(Either4::Second(_)) if active_screen == SCREEN_PM => return false,
                 Either::Second(Either4::Third(_)) if active_screen == SCREEN_CHANNEL => {
                     return false;
@@ -527,6 +528,7 @@ async fn wait_display_event(
             Either::First(Either3::First(_)) => return false,
             Either::First(Either3::Second(_)) => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
+            Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
             _ => {}
         }
     }
