@@ -977,6 +977,70 @@ fn action_tz_dec() {
     }
 }
 
+#[cfg(feature = "watch")]
+static ALARM_HOUR_LABELS: [&str; 24] = [
+    "Hour: 00", "Hour: 01", "Hour: 02", "Hour: 03", "Hour: 04", "Hour: 05", "Hour: 06", "Hour: 07",
+    "Hour: 08", "Hour: 09", "Hour: 10", "Hour: 11", "Hour: 12", "Hour: 13", "Hour: 14", "Hour: 15",
+    "Hour: 16", "Hour: 17", "Hour: 18", "Hour: 19", "Hour: 20", "Hour: 21", "Hour: 22", "Hour: 23",
+];
+
+#[cfg(feature = "watch")]
+static ALARM_MIN_LABELS: [&str; 60] = [
+    "Min: 00", "Min: 01", "Min: 02", "Min: 03", "Min: 04", "Min: 05", "Min: 06", "Min: 07",
+    "Min: 08", "Min: 09", "Min: 10", "Min: 11", "Min: 12", "Min: 13", "Min: 14", "Min: 15",
+    "Min: 16", "Min: 17", "Min: 18", "Min: 19", "Min: 20", "Min: 21", "Min: 22", "Min: 23",
+    "Min: 24", "Min: 25", "Min: 26", "Min: 27", "Min: 28", "Min: 29", "Min: 30", "Min: 31",
+    "Min: 32", "Min: 33", "Min: 34", "Min: 35", "Min: 36", "Min: 37", "Min: 38", "Min: 39",
+    "Min: 40", "Min: 41", "Min: 42", "Min: 43", "Min: 44", "Min: 45", "Min: 46", "Min: 47",
+    "Min: 48", "Min: 49", "Min: 50", "Min: 51", "Min: 52", "Min: 53", "Min: 54", "Min: 55",
+    "Min: 56", "Min: 57", "Min: 58", "Min: 59",
+];
+
+#[cfg(feature = "watch")]
+fn label_alarm_hour() -> &'static str {
+    ALARM_HOUR_LABELS[crate::watch::alarm_hour().min(23) as usize]
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_minute() -> &'static str {
+    ALARM_MIN_LABELS[crate::watch::alarm_minute().min(59) as usize]
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_enabled() -> &'static str {
+    if crate::watch::alarm_enabled() {
+        "Enabled: On"
+    } else {
+        "Enabled: Off"
+    }
+}
+
+#[cfg(feature = "watch")]
+static ALARM_ITEMS: [MenuItem; 4] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: label_alarm_hour,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_hour,
+            dec: crate::watch::alarm_dec_hour,
+        },
+    },
+    MenuItem {
+        label: label_alarm_minute,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_minute,
+            dec: crate::watch::alarm_dec_minute,
+        },
+    },
+    MenuItem {
+        label: label_alarm_enabled,
+        kind: MenuItemKind::Action(crate::watch::alarm_toggle_enabled),
+    },
+];
+
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
@@ -1152,7 +1216,12 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     },
 ];
 
-static SETTINGS_ITEMS: [MenuItem; 8] = [
+#[cfg(feature = "watch")]
+const SETTINGS_ITEMS_LEN: usize = 9;
+#[cfg(not(feature = "watch"))]
+const SETTINGS_ITEMS_LEN: usize = 8;
+
+static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1175,6 +1244,11 @@ static SETTINGS_ITEMS: [MenuItem; 8] = [
             inc: action_tz_inc,
             dec: action_tz_dec,
         },
+    },
+    #[cfg(feature = "watch")]
+    MenuItem {
+        label: || "Alarm",
+        kind: MenuItemKind::Submenu(&ALARM_ITEMS),
     },
     MenuItem {
         label: || "",

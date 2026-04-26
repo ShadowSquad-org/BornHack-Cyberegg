@@ -110,6 +110,13 @@ async fn main(spawner: Spawner) {
     // task reads or writes flash-backed state.
     kv::init().await;
 
+    // ── Watch app — load persisted alarm state and start the persister ───
+    #[cfg(feature = "watch")]
+    {
+        hello_graphics::watch::load_alarm_from_kv().await;
+        spawner.must_spawn(hello_graphics::watch::alarm_persister_task());
+    }
+
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
     // Must come before temperature/EPD because it consumes p.RNG, p.RTC0,
     // p.TIMER0, p.TEMP, and PPI channels.
@@ -592,6 +599,8 @@ async fn minute_tick_task() {
         let secs = unix_now().map(|t| 60 - (t % 60) as u64).unwrap_or(60);
         Timer::after(embassy_time::Duration::from_secs(secs)).await;
         MINUTE_TICK.signal(());
+        #[cfg(feature = "watch")]
+        hello_graphics::watch::check_and_fire_alarm();
     }
 }
 

@@ -2,11 +2,12 @@
 //!
 //! Up/Down on the watch screen toggles between faces.
 //!
-//! Renders without using the red plane: the current weekday is shown
-//! inverted (white-on-black) so the screen survives the fast B&W refresh
-//! used on every minute tick.
+//! The current weekday is highlighted in red (white-on-red) for visual punch.
+//! Note: the red plane only updates on a full tri-color refresh; on the fast
+//! B&W minute-tick refresh the red pixels won't redraw, so the current-day
+//! highlight may look stale until the next full refresh.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_6X10, ascii::FONT_7X13_BOLD},
@@ -15,7 +16,7 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
-use crate::{BLACK, TriColor, WHITE, draw_frame, menu::ButtonId};
+use crate::{BLACK, RED, TriColor, WHITE, draw_frame, menu::ButtonId};
 
 // ── Face selection ───────────────────────────────────────────────────────────
 
@@ -51,6 +52,115 @@ pub fn dispatch(btn: ButtonId) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+// ── Alarm state ──────────────────────────────────────────────────────────────
+//
+// Persisted to flash via the `kv` namespace `"watch"`. Loaded once at boot
+// (`load_alarm_from_kv`) and re-saved by `alarm_persister_task` whenever a
+// menu action signals `ALARM_CHANGED_SIGNAL`.
+static ALARM_HOUR: AtomicU8 = AtomicU8::new(7);
+static ALARM_MINUTE: AtomicU8 = AtomicU8::new(0);
+static ALARM_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "embassy-base")]
+pub static ALARM_CHANGED_SIGNAL: embassy_sync::signal::Signal<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    (),
+> = embassy_sync::signal::Signal::new();
+
+#[cfg(feature = "embassy-base")]
+fn signal_alarm_changed() {
+    ALARM_CHANGED_SIGNAL.signal(());
+}
+
+#[cfg(not(feature = "embassy-base"))]
+fn signal_alarm_changed() {}
+
+pub fn alarm_hour() -> u8 {
+    ALARM_HOUR.load(Ordering::Relaxed)
+}
+pub fn alarm_minute() -> u8 {
+    ALARM_MINUTE.load(Ordering::Relaxed)
+}
+pub fn alarm_enabled() -> bool {
+    ALARM_ENABLED.load(Ordering::Relaxed)
+}
+
+pub fn alarm_inc_hour() {
+    let h = ALARM_HOUR.load(Ordering::Relaxed);
+    ALARM_HOUR.store((h + 1) % 24, Ordering::Relaxed);
+    signal_alarm_changed();
+}
+pub fn alarm_dec_hour() {
+    let h = ALARM_HOUR.load(Ordering::Relaxed);
+    ALARM_HOUR.store(if h == 0 { 23 } else { h - 1 }, Ordering::Relaxed);
+    signal_alarm_changed();
+}
+pub fn alarm_inc_minute() {
+    let m = ALARM_MINUTE.load(Ordering::Relaxed);
+    ALARM_MINUTE.store((m + 1) % 60, Ordering::Relaxed);
+    signal_alarm_changed();
+}
+pub fn alarm_dec_minute() {
+    let m = ALARM_MINUTE.load(Ordering::Relaxed);
+    ALARM_MINUTE.store(if m == 0 { 59 } else { m - 1 }, Ordering::Relaxed);
+    signal_alarm_changed();
+}
+pub fn alarm_toggle_enabled() {
+    let v = ALARM_ENABLED.load(Ordering::Relaxed);
+    ALARM_ENABLED.store(!v, Ordering::Relaxed);
+    signal_alarm_changed();
+}
+
+/// Load the persisted alarm state from the `"watch"` kv namespace.
+/// Call once at boot, after `kv::init()`. Silently leaves defaults
+/// in place if a key is missing or invalid.
+#[cfg(feature = "embassy-base")]
+pub async fn load_alarm_from_kv() {
+    let ns = crate::fw::kv::namespace("watch");
+    let mut b = [0u8; 1];
+    if let Ok(1) = ns.get("alarm_h", &mut b).await
+        && b[0] < 24
+    {
+        ALARM_HOUR.store(b[0], Ordering::Relaxed);
+    }
+    if let Ok(1) = ns.get("alarm_m", &mut b).await
+        && b[0] < 60
+    {
+        ALARM_MINUTE.store(b[0], Ordering::Relaxed);
+    }
+    if let Ok(1) = ns.get("alarm_on", &mut b).await {
+        ALARM_ENABLED.store(b[0] != 0, Ordering::Relaxed);
+    }
+}
+
+/// Embassy task that persists alarm state whenever a menu action mutates it.
+#[cfg(feature = "embassy-base")]
+#[embassy_executor::task]
+pub async fn alarm_persister_task() {
+    let ns = crate::fw::kv::namespace("watch");
+    loop {
+        ALARM_CHANGED_SIGNAL.wait().await;
+        let _ = ns.set("alarm_h", &[alarm_hour()], true).await;
+        let _ = ns.set("alarm_m", &[alarm_minute()], true).await;
+        let _ = ns.set("alarm_on", &[alarm_enabled() as u8], true).await;
+    }
+}
+
+/// Called from the minute-tick task: if the alarm is enabled and the local
+/// time matches `HH:MM`, fire the buzzer once. Idempotent within a minute.
+#[cfg(feature = "embassy-base")]
+pub fn check_and_fire_alarm() {
+    if !alarm_enabled() {
+        return;
+    }
+    let Some(clock) = wall_clock() else {
+        return;
+    };
+    if clock.hour == alarm_hour() && clock.minute == alarm_minute() {
+        crate::fw::buzzer::play(crate::fw::buzzer::ALARM_INDEX);
     }
 }
 
@@ -443,11 +553,11 @@ where
         let is_current = i == weekday as usize;
         let rect = Rectangle::new(Point::new(x, DAY_Y), Size::new(DAY_W as u32, DAY_H as u32));
         let fg = if is_current {
-            rect.into_styled(PrimitiveStyle::with_fill(BLACK))
+            rect.into_styled(PrimitiveStyle::with_fill(RED))
                 .draw(display)?;
             WHITE
         } else {
-            rect.into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+            rect.into_styled(PrimitiveStyle::with_stroke(RED, 1))
                 .draw(display)?;
             BLACK
         };
@@ -462,12 +572,49 @@ where
     Ok(())
 }
 
+/// Black box with white text in the header showing `ALM HH:MM` when an alarm
+/// is armed. Uses pure B&W so it survives the fast minute-tick refresh.
+fn draw_alarm_indicator<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    if !alarm_enabled() {
+        return Ok(());
+    }
+    let mut buf: heapless::String<12> = heapless::String::new();
+    let _ = core::fmt::write(
+        &mut buf,
+        format_args!("ALM {:02}:{:02}", alarm_hour(), alarm_minute()),
+    );
+
+    let box_x = 44i32;
+    let box_y = 1i32;
+    let box_w = 62u32;
+    let box_h = 14u32;
+    Rectangle::new(Point::new(box_x, box_y), Size::new(box_w, box_h))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    Text::with_text_style(
+        &buf,
+        Point::new(box_x + box_w as i32 / 2, box_y + box_h as i32 / 2),
+        MonoTextStyle::new(&FONT_6X10, WHITE),
+        centered,
+    )
+    .draw(display)?;
+    Ok(())
+}
+
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
     let bat = battery_pct();
     draw_frame(display, Some(("Watch", &bat)), None)?;
+    draw_alarm_indicator(display)?;
 
     let Some(clock) = wall_clock() else {
         let centered = TextStyleBuilder::new()
