@@ -21,13 +21,14 @@ pub enum ScreenId {
     Pm = 2,
     Channel = 3,
     Advert = 4,
+    Watch = 5,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -452,6 +453,13 @@ impl<const M: usize> DisplayState<M> {
             } else {
                 return;
             }
+        }
+
+        // Watch screen consumes Up/Down to toggle digital/analog face.
+        // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
+        #[cfg(feature = "watch")]
+        if self.active_screen == crate::SCREEN_WATCH && crate::watch::dispatch(btn) {
+            return;
         }
 
         let screen = &self.screens[self.active_screen as usize];
@@ -1429,7 +1437,13 @@ static LORA_ITEMS: [MenuItem; 1] = [MenuItem {
 }];
 
 static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Adverts",
+    label: || "Advert",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
+#[cfg(feature = "watch")]
+static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Watch",
     kind: MenuItemKind::Action(|| {}),
 }];
 
@@ -1451,6 +1465,11 @@ const GAME_ENABLED: bool = true;
 #[cfg(not(feature = "game"))]
 const GAME_ENABLED: bool = false;
 
+#[cfg(feature = "watch")]
+const WATCH_ENABLED: bool = true;
+#[cfg(not(feature = "watch"))]
+const WATCH_ENABLED: bool = false;
+
 #[cfg(feature = "simulator")]
 use std::sync::Mutex;
 
@@ -1469,8 +1488,10 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&PM_ITEMS),
         ScreenState::new(&LORA_ITEMS),
         ScreenState::new(&ADVERT_ITEMS),
+        #[cfg(feature = "watch")]
+        ScreenState::new(&WATCH_ITEMS),
     ],
-    [GAME_ENABLED, true, true, true, true],
+    [GAME_ENABLED, true, true, true, true, WATCH_ENABLED],
 )));
 
 // ── Scrolling menu renderer

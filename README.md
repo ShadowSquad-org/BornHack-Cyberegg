@@ -123,6 +123,17 @@ The badge has a 152x152 e-paper display and a 4-direction joystick with Fire, Ex
 | Fire / Execute | Select / confirm                                           |
 | Cancel         | Go back / dismiss                                          |
 
+### Watch
+
+A standalone watch screen — accessible from the main icon grid via Left/Right — with two switchable faces:
+
+- **Digital** — Casio-style 7-segment LCD with hex (lozenge) segments that meet at 45° miters. Big `HH:MM` digits, ISO date underneath, and a bottom-anchored weekday strip with the current day shown inverted (white-on-black).
+- **Analog** — circular dial with 12 hour ticks (longer at 12/3/6/9), thick hour hand and thin minute hand. The hour hand carries the minute fraction so it advances smoothly between hour marks. Same date and weekday strip below the dial.
+
+Press **Up** or **Down** on the watch screen to toggle between faces. Left/Right still navigate to adjacent screens. The screen redraws on every minute boundary via the shared `MINUTE_TICK` signal — no second hand and no per-second redraws, since the e-paper refresh is too slow for that anyway.
+
+The watch reads `unix_now()` (set via the MeshCore companion `SET_DEVICE_TIME` 0x06 command) and applies `TIMEZONE_OFFSET` (configured under Settings → Timezone). When the clock has not yet been synced the screen shows "Clock not set".
+
 ### Channel browser
 
 Navigate to the **Channels** screen (left/right from the main screen). When no BLE client is connected, the on-device channel browser is shown.
@@ -270,19 +281,23 @@ cd cyberegg/embedded_graphics/hello-graphics
 
 ### Firmware (nRF52840)
 
-The firmware can be built in three configurations:
+The firmware can be built in four configurations:
 
-| Variant                    | Game | Mesh (LoRa/BLE) | Use case                                             |
-| -------------------------- | ---- | --------------- | ---------------------------------------------------- |
-| Full (`make fw`)           | yes  | yes             | Production — everything enabled                      |
-| Game only (`make fw-game`) | yes  | no              | Game development when full build exceeds flash       |
-| Mesh only (`make fw-mesh`) | no   | yes             | Mesh/radio development when full build exceeds flash |
+| Variant                      | Game | Mesh (LoRa/BLE) | Watch | Use case                                                |
+| ---------------------------- | ---- | --------------- | ----- | ------------------------------------------------------- |
+| Full (`make fw`)             | yes  | yes             | yes   | Production — everything enabled                         |
+| Game only (`make fw-game`)   | yes  | no              | yes   | Game development when full build exceeds flash          |
+| Mesh only (`make fw-mesh`)   | no   | yes             | yes   | Mesh/radio development when full build exceeds flash    |
+| Watch only (`make fw-watch`) | no   | no              | yes   | Minimal ~130 KiB build for watch-face / clock work only |
+
+The watch face is part of `embassy-base` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD.
 
 ```bash
-make fw              # Full debug build (game + mesh)
+make fw              # Full debug build (game + mesh + watch)
 make fw-release      # Full release build (optimised for size)
-make fw-game         # Game only (no mesh)
-make fw-mesh         # Mesh only (no game)
+make fw-game         # Game + watch (no mesh)
+make fw-mesh         # Mesh + watch (no game)
+make fw-watch        # Watch only (no game, no mesh)
 ```
 
 All print flash and RAM usage after building. Release builds use full LTO and `opt-level = "z"` for minimum binary size.
@@ -296,6 +311,7 @@ make flash              # Build + flash full debug firmware (SWD)
 make flash-release      # Build + flash full release firmware (SWD)
 make flash-game         # Build + flash game-only debug firmware (SWD)
 make flash-mesh         # Build + flash mesh-only debug firmware (SWD)
+make flash-watch        # Build + flash watch-only debug firmware (SWD)
 ```
 
 For USB DFU flashing (hold the execute button while powering on to enter DFU mode):
@@ -347,10 +363,13 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 | `make fw-game-release`   | Build game-only release firmware          |
 | `make fw-mesh`           | Build mesh-only debug firmware            |
 | `make fw-mesh-release`   | Build mesh-only release firmware          |
+| `make fw-watch`          | Build watch-only debug firmware           |
+| `make fw-watch-release`  | Build watch-only release firmware         |
 | `make flash`             | Build + flash full debug firmware (SWD)   |
 | `make flash-release`     | Build + flash full release firmware (SWD) |
 | `make flash-game`        | Build + flash game-only firmware (SWD)    |
 | `make flash-mesh`        | Build + flash mesh-only firmware (SWD)    |
+| `make flash-watch`       | Build + flash watch-only firmware (SWD)   |
 | `make dfu-flash`         | Build + flash debug firmware (USB DFU)    |
 | `make dfu-flash-release` | Build + flash release firmware (USB DFU)  |
 | `make sim`               | Build and run the SDL2 simulator          |

@@ -20,6 +20,8 @@ pub mod game;
 pub mod menu;
 pub mod text_entry;
 pub mod ui;
+#[cfg(feature = "watch")]
+pub mod watch;
 use core::cell::RefCell;
 use core::result::Result;
 use core::result::Result::Ok;
@@ -359,6 +361,7 @@ pub const SCREEN_MAIN: u8 = ScreenId::Main as u8;
 pub const SCREEN_PM: u8 = ScreenId::Pm as u8;
 pub const SCREEN_CHANNEL: u8 = ScreenId::Channel as u8;
 pub const SCREEN_ADVERT: u8 = ScreenId::Advert as u8;
+pub const SCREEN_WATCH: u8 = ScreenId::Watch as u8;
 
 /// Dispatch to the correct screen renderer based on the active screen.
 pub fn draw_graphics<D>(display: &mut D, health_str: &str, bat_prc: &u8) -> Result<(), D::Error>
@@ -413,6 +416,8 @@ where
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
         SCREEN_ADVERT => draw_screen_advert(display, bat_prc),
+        #[cfg(feature = "watch")]
+        SCREEN_WATCH => watch::draw(display),
         _ => draw_screen_main(display, health_str, bat_prc),
     }?;
 

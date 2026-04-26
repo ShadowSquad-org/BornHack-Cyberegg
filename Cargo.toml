@@ -49,6 +49,7 @@ sx126x = { version = "0.3.0", optional = true }
 embedded-hal = { version = "1.0", optional = true }
 embedded-hal-bus = { version = "0.2", features = ["async"], optional = true }
 heapless = { version = "0.9.2", optional = true }
+fasttime = { version = "0.1", default-features = false, optional = true }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "df7e3b4f363275e2c9ad42005758cf3eb8a798e0", features = [
     "nrf52840",
 ], optional = true }
@@ -118,6 +119,7 @@ opt-level = "z"
 # default = ["simulator"]
 # default = ["embassy"]
 game = []
+watch = ["heapless", "fasttime"]
 mesh = [
     "sx126x",
     "nrf-mpsl",
@@ -128,7 +130,7 @@ mesh = [
     "meshcore-companion",
 ]
 usb-storage = ["embassy-usb"]
-simulator = ["embedded-graphics-simulator", "heapless", "game"]
+simulator = ["embedded-graphics-simulator", "heapless", "game", "watch"]
 # Base nRF52840 embassy runtime (display, buttons, LEDs, buzzer — no radio/BLE).
 embassy-base = [
     "cortex-m",
@@ -147,6 +149,7 @@ embassy-base = [
     "panic-probe",
     "ssd1675",
     "static_cell",
+    "watch",
 ]
 # Full build: game + mesh + USB storage.
 embassy      = ["embassy-base", "game", "mesh", "usb-storage"]
@@ -154,6 +157,8 @@ embassy      = ["embassy-base", "game", "mesh", "usb-storage"]
 embassy-game = ["embassy-base", "game", "usb-storage"]
 # Mesh only (no game, no USB storage).
 embassy-mesh = ["embassy-base", "mesh"]
+# Watch only (no game, no mesh) — `watch` is already pulled in by embassy-base.
+embassy-watch = ["embassy-base"]
 # Factory hardware test — minimal standalone firmware, no bootloader required.
 # Verifies buttons, joystick, LoRa, battery, QSPI flash and drives LED/buzzer.
 hwtest = [
