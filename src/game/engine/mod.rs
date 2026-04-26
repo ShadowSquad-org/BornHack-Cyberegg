@@ -112,6 +112,9 @@ pub struct GameState {
     pub cooldown_heal: u16,
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
+    /// Cooldown after winning a mini-game (Tic Tac Toe or Lights Out).
+    /// Not persisted to flash — rebooting clears it.
+    pub cooldown_minigame: u16,
 
     // Interval counters (track ticks since last interval fire).
     drained_interval_counter: u32,
@@ -194,6 +197,7 @@ impl GameState {
             cooldown_heal: 0,
             cooldown_relax: 0,
             cooldown_play: 0,
+            cooldown_minigame: 0,
 
             drained_interval_counter: 0,
             miserable_interval_counter: 0,
@@ -619,6 +623,7 @@ impl GameState {
         self.cooldown_heal = self.cooldown_heal.saturating_sub(d);
         self.cooldown_relax = self.cooldown_relax.saturating_sub(d);
         self.cooldown_play = self.cooldown_play.saturating_sub(d);
+        self.cooldown_minigame = self.cooldown_minigame.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -878,12 +883,15 @@ impl GameState {
     }
 
     /// Award inspiration (reduce drained) as a reward for mini-game wins.
+    /// Also starts the mini-game cooldown so the player can't farm
+    /// inspiration by replaying the same game back-to-back.
     pub fn award_inspiration(&mut self) {
         if self.phase != Phase::Active {
             return;
         }
         // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
         self.drained = sat_sub(self.drained, RELAX_DRAINED_RELIEF * 2);
+        self.cooldown_minigame = MINIGAME_COOLDOWN;
     }
 
     /// Total hours the pet has spent in hibernation during its life.
@@ -1051,6 +1059,9 @@ pub struct PetStats {
     pub can_play: bool,
     pub can_sleep: bool,
     pub can_wake: bool,
+    /// Whether the player can start a mini-game (Tic Tac Toe / Lights Out).
+    /// False while the post-win cooldown is running.
+    pub can_play_minigame: bool,
 
     /// Whether the pet is hibernating (all progression frozen).
     pub hibernating: bool,
@@ -1101,6 +1112,7 @@ impl GameState {
             can_play: awake_active && action_idle && self.cooldown_play == 0,
             can_sleep: alive && !self.is_sleeping,
             can_wake: self.is_sleeping,
+            can_play_minigame: awake_active && action_idle && self.cooldown_minigame == 0,
 
             hibernating: self.hibernating,
             hibernate_hours: self.hibernate_hours(),
@@ -1313,6 +1325,8 @@ impl GameState {
             cooldown_heal,
             cooldown_relax,
             cooldown_play,
+            // Not persisted: rebooting clears the mini-game cooldown.
+            cooldown_minigame: 0,
             drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,

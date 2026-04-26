@@ -148,6 +148,14 @@ pub const RELAX_HUNGER_COST: u16 = 13100;
 /// Play: duration, cooldown.
 pub const PLAY_DURATION: u8 = 4;
 pub const PLAY_COOLDOWN: u16 = 48;
+
+/// Mini-game cooldown (Tic Tac Toe / Lights Out).
+///
+/// Triggered when `award_inspiration` runs, i.e. when the player
+/// successfully completes either mini-game.  Same magnitude as the
+/// `Play` action's cooldown for parity — both award the same kind of
+/// reward (drained relief) on the same Play menu.
+pub const MINIGAME_COOLDOWN: u16 = 48;
 /// Play: base costs per action tick (modified by curiosity).
 pub const PLAY_HUNGER_COST: u16 = 655;
 pub const PLAY_TIRED_COST: u16 = 1310;

@@ -23,6 +23,7 @@ pub mod sprite_loader;
 pub mod lightsout;
 pub mod pet_select;
 pub mod realm_view;
+pub mod stat_bar;
 pub mod tictactoe;
 pub mod traits_view;
 pub use nav::{GameNav, Row};

@@ -18,7 +18,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_7X13, MonoTextStyle},
+    mono_font::{ascii::{FONT_7X13, FONT_7X13_BOLD}, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -108,7 +108,7 @@ fn is_item_available(label: &str) -> bool {
         "Relax"      => stats.can_relax,
         "Play now"   => stats.can_play,
         "Play music" => true,
-        "Tic Tac Toe" | "Lights Out" => true,
+        "Tic Tac Toe" | "Lights Out" => stats.can_play_minigame,
         "Startup" | "Rickroll" | "Imp. March" | "Sandstorm" | "Pink Panther" | "Trololo" => true,
         "Hibernate"  => !stats.hibernating,
         "Wake up"    => stats.hibernating,
@@ -285,7 +285,7 @@ where
     Text::with_text_style(
         kind.title(),
         Point::new(MARGIN + MODAL_W as i32 / 2, inner_y + TITLE_H / 2),
-        MonoTextStyle::new(&FONT_7X13, WHITE),
+        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
         title_style,
     )
     .draw(display)?;
@@ -329,7 +329,9 @@ where
             )
             .draw(display)?;
         } else if i == pos && !available {
-            // Selected but on cooldown: dashed outline, not filled.
+            // Selected but on cooldown: outline only, black text on
+            // white.  The dim pass below halftones both into grey so
+            // the row reads as "selected but locked out".
             Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
                 .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
                 .draw(display)?;
@@ -350,21 +352,63 @@ where
             )
             .draw(display)?;
         }
+
+        // Apply the grey-out overlay last so it covers everything we
+        // just drew for this row.
+        if !available {
+            dim_rect(
+                display,
+                Rectangle::new(
+                    Point::new(inner_x, row_top),
+                    Size::new(inner_w, ITEM_H as u32),
+                ),
+            )?;
+        }
     }
 
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
+// Disabled-state dimming
+// ---------------------------------------------------------------------------
+
+/// Overdraw a rectangle with a 1-in-2 white checkerboard, halftoning
+/// any black pixels underneath into a perceived "grey".  Used to mark
+/// menu rows whose action is currently on cooldown or otherwise
+/// unavailable — solid black fills become 50 % black, black text on
+/// white becomes 50 % black on white, both reading visibly dimmer
+/// than their available siblings.
+fn dim_rect<D>(display: &mut D, rect: Rectangle) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let x0 = rect.top_left.x;
+    let y0 = rect.top_left.y;
+    let x1 = x0 + rect.size.width as i32;
+    let y1 = y0 + rect.size.height as i32;
+    let pixels = (y0..y1).flat_map(move |y| {
+        (x0..x1).filter_map(move |x| {
+            if (x + y) & 1 == 0 {
+                Some(Pixel(Point::new(x, y), WHITE))
+            } else {
+                None
+            }
+        })
+    });
+    display.draw_iter(pixels)
+}
+
+// ---------------------------------------------------------------------------
 // Stats view — 5 labeled bars showing pet health at a glance
 // ---------------------------------------------------------------------------
 
-/// Bar width in pixels for a 0–100 value (fits within modal: 128 - label - margins).
+/// Bar width in pixels (modal inner is 128 px; subtract label width + margins).
 const BAR_MAX_W: u32 = 60;
-/// Bar height.
-const BAR_H: u32 = 8;
-/// Vertical spacing between bars (compact to fit 5 bars + footer in modal).
-const BAR_SPACING: i32 = 16;
+/// Bar height — tall enough to render the inline percentage text.
+const BAR_H: u32 = 16;
+/// Vertical spacing between bars (height + small gap).
+const BAR_SPACING: i32 = 18;
 
 fn draw_stats_view<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -372,6 +416,7 @@ where
 {
     use crate::RED;
     use super::lifecycle;
+    use super::stat_bar::draw_stat_bar;
 
     // Get fresh stats (triggers an update if needed).
     let stats = match lifecycle::cycle() {
@@ -397,7 +442,7 @@ where
     Text::with_text_style(
         "Pet Stats",
         Point::new(MARGIN + MODAL_W as i32 / 2, inner_y + TITLE_H / 2),
-        MonoTextStyle::new(&FONT_7X13, WHITE),
+        MonoTextStyle::new(&FONT_7X13_BOLD, WHITE),
         TextStyleBuilder::new()
             .baseline(Baseline::Middle)
             .alignment(Alignment::Center)
@@ -414,53 +459,36 @@ where
         ("Happy",    stats.happy),
     ];
 
-    let bar_x = inner_x + 4;
-    let label_style = TextStyleBuilder::new()
-        .baseline(Baseline::Bottom)
-        .alignment(Alignment::Left)
-        .build();
+    // Layout: label at left margin, bar to the right of the longest
+    // label ("Inspired" = 8 chars × 7 px = 56 px from `label_x`).
+    let label_x = inner_x + 4;
+    let bar_x   = label_x + 60; // 4 px clearance after the longest label
 
     for (i, (label, value)) in bars.iter().enumerate() {
-        let y_base = inner_y + TITLE_H + 4 + i as i32 * BAR_SPACING;
+        let y = inner_y + TITLE_H + 4 + i as i32 * BAR_SPACING;
+        // Label vertically centred against the bar.
+        let label_y = y + (BAR_H as i32 - 13) / 2;
+        // Critical (< 25 %) values are highlighted in red.
+        let fill_color = if *value < 25 { RED } else { BLACK };
 
-        // Label.
-        Text::with_text_style(
+        draw_stat_bar(
+            display,
             label,
-            Point::new(bar_x, y_base + 9),
-            MonoTextStyle::new(&FONT_7X13, BLACK),
-            label_style,
-        )
-        .draw(display)?;
-
-        // Bar background (empty).
-        let bar_left = bar_x + 50;
-        let bar_y = y_base;
-        Rectangle::new(
-            Point::new(bar_left, bar_y),
+            *value,
+            Point::new(label_x, label_y),
+            Point::new(bar_x, y),
             Size::new(BAR_MAX_W, BAR_H),
-        )
-        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
-        .draw(display)?;
-
-        // Bar fill.
-        let fill_w = (*value as u32 * BAR_MAX_W) / 100;
-        if fill_w > 0 {
-            // Color: red when critical (< 25%), black otherwise.
-            let fill_color = if *value < 25 { RED } else { BLACK };
-            Rectangle::new(
-                Point::new(bar_left + 1, bar_y + 1),
-                Size::new(fill_w.min(BAR_MAX_W - 2), BAR_H - 2),
-            )
-            .into_styled(PrimitiveStyle::with_fill(fill_color))
-            .draw(display)?;
-        }
+            fill_color,
+        )?;
     }
 
     // Footer: name, generation + age.
     let name = super::lifecycle::pet_name();
     let age_hours = stats.age_ticks / 360;
     let age_days = age_hours / 24;
-    let footer_y = MARGIN + MODAL_H as i32 - BORDER as i32 - 14;
+    // Footer baseline; moved down 8 px so it no longer collides with
+    // the bottom of the last stat bar (which now occupies y ≤ 122).
+    let footer_y = MARGIN + MODAL_H as i32 - BORDER as i32 - 6;
     let mut footer: heapless::String<32> = heapless::String::new();
     if !name.is_empty() {
         let _ = core::fmt::Write::write_fmt(
@@ -476,7 +504,7 @@ where
     Text::with_text_style(
         footer.as_str(),
         Point::new(MARGIN + MODAL_W as i32 / 2, footer_y),
-        MonoTextStyle::new(&FONT_7X13, BLACK),
+        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
         TextStyleBuilder::new()
             .baseline(Baseline::Bottom)
             .alignment(Alignment::Center)

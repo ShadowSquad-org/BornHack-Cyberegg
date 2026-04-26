@@ -12,6 +12,7 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
 
+use super::stat_bar::draw_stat_bar;
 use crate::{BLACK, TriColor, WHITE};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -92,10 +93,14 @@ where
         return Ok(());
     };
 
-    // Trait bars.
-    const BAR_MAX_W: u32 = 80;
-    const BAR_H:     u32 = 10;
-    const BAR_X:     i32 = 60;
+    // Trait bars — geometry chosen so the longest label ("Resilience",
+    // 10 chars × 7 px = 70 px) clears the bar, and the bar extends close
+    // to the right edge of the display now that the percentage lives
+    // inside the bar rather than in a separate column.
+    const BAR_X:     i32 = 78;
+    const BAR_RIGHT: i32 = 148;
+    const BAR_W:     u32 = (BAR_RIGHT - BAR_X) as u32; // 70
+    const BAR_H:     u32 = 16;
     const LABEL_X:   i32 = 4;
     const ROW_H:     i32 = 22;
     const ROWS_Y:    i32 = 50;
@@ -106,45 +111,21 @@ where
         ("Resilience", res),
     ];
 
-    let right = TextStyleBuilder::new()
-        .baseline(Baseline::Top)
-        .alignment(Alignment::Right)
-        .build();
-
     for (i, (label, value)) in bars.iter().enumerate() {
         let y = ROWS_Y + i as i32 * ROW_H;
+        // Label vertically centred against the taller bar.
+        let label_y = y + (BAR_H as i32 - 13) / 2;
+        let pct = (*value as u32 * 100 / 65535) as u8;
 
-        // Label.
-        Text::with_text_style(label, Point::new(LABEL_X, y), font, left)
-            .draw(display)?;
-
-        // Bar outline.
-        Rectangle::new(Point::new(BAR_X, y), Size::new(BAR_MAX_W, BAR_H))
-            .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
-            .draw(display)?;
-
-        // Bar fill — value is u16 (0..=65535), scale to BAR_MAX_W - 2.
-        let pct = *value as u32 * 100 / 65535;
-        let fill_w = (*value as u32 * (BAR_MAX_W - 2)) / 65535;
-        if fill_w > 0 {
-            Rectangle::new(
-                Point::new(BAR_X + 1, y + 1),
-                Size::new(fill_w, BAR_H - 2),
-            )
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
-            .draw(display)?;
-        }
-
-        // Percentage to the right of the bar.
-        let mut pct_str: heapless::String<8> = heapless::String::new();
-        let _ = core::fmt::Write::write_fmt(&mut pct_str, format_args!("{}%", pct));
-        Text::with_text_style(
-            pct_str.as_str(),
-            Point::new(148, y),
-            font,
-            right,
-        )
-        .draw(display)?;
+        draw_stat_bar(
+            display,
+            label,
+            pct,
+            Point::new(LABEL_X, label_y),
+            Point::new(BAR_X, y),
+            Size::new(BAR_W, BAR_H),
+            BLACK,
+        )?;
     }
 
     Ok(())
