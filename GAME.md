@@ -46,7 +46,7 @@ you — 0% means the pet is perfectly content):
 | **Tired**     | Pet is exhausted                         | Put to sleep      |
 | **Drained**   | Pet lacks inspiration                    | Relax, mini-games |
 | **Sick**      | Pet's health deteriorates                | Give medicine     |
-| **Miserable** | Pet is unhappy, everything decays faster | Play              |
+| **Miserable** | Pet is unhappy; speeds up drained decay and sick-condition decay | Play              |
 
 Stats interact: if multiple stats are bad, the pet becomes miserable
 faster, and miserable makes everything else worse too. Keep on top of
@@ -154,16 +154,36 @@ One game tick = 10 seconds.
 
 | Stat          | Fills in         | What makes it worse                             | What helps                      |
 | ------------- | ---------------- | ----------------------------------------------- | ------------------------------- |
-| **Hunger**    | ~20 hours        | Time, miserable boost                           | Feed action                     |
-| **Tired**     | ~13 hours        | Time, miserable boost                           | Sleep (tiered recovery)         |
-| **Drained**   | Interval-based   | Activity, miserable boost                       | Relax action, sleep, mini-games |
+| **Hunger**    | ~20 hours        | Time only                                       | Feed action                     |
+| **Tired**     | ~13 hours        | Time only                                       | Sleep (tiered recovery)         |
+| **Drained**   | Interval-based   | Activity; interval shortens 90→30 ticks when miserable ≥ 80 % | Relax action, sleep, mini-games |
 | **Sick**      | ~7.6 days (base) | Time + condition decay when other stats are bad | Heal action                     |
 | **Miserable** | Interval-based   | Multiple stats above 60%                        | Play action (zeroes it)         |
 
-Stats interact through feedback loops: high miserable boosts
-hunger/tired/drained decay rates, bad hunger/tired/drained trigger
-accelerated sick decay, and multiple bad stats increase miserable's
-growth rate.
+Stats interact through feedback loops: a bad miserable accelerates the
+drained interval and the sick condition rate, bad hunger/tired/drained
+trigger sick condition decay, and multiple bad stats increase
+miserable's growth rate.
+
+### Happiness floor when stats are bad
+
+The internal `miserable` value (which the displayed Happy bar inverts)
+has a hard floor whenever the pet is in trouble:
+
+| Condition                         | Floor on `miserable` (= cap on Happy) |
+| --------------------------------- | ------------------------------------- |
+| Pet is in the **Leaving** phase   | 50 % (Happy ≤ 50 %)                   |
+| Each primary stat above critical  | +20 % per stat (Happy ≤ 80 / 60 / 40 / 20 %) |
+
+The two rules evaluate independently and the **higher** floor wins, so
+a leaving pet with 4 critical stats sits at the severe floor of 80 %
+miserable rather than the leaving floor of 50 %.
+
+`Play` still resets miserable, but only down to whichever floor is
+currently active — so playing with a critically distressed pet brings
+it to "as happy as it can be right now", not all the way to 100 %
+happy.  Once stats clear and the pet is back in the Active phase, the
+floor drops to 0 again and Play's reset works as before.
 
 ### Action durations and cooldowns
 
@@ -172,7 +192,7 @@ growth rate.
 | **Feed**  | 2 ticks      | 12 ticks | Reduces hunger and drained                    |
 | **Heal**  | 3 ticks      | 24 ticks | Reduces sick                                  |
 | **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                |
-| **Play**  | 4 ticks      | 48 ticks | Zeroes miserable (costs hunger/tired/drained) |
+| **Play**  | 4 ticks      | 48 ticks | Resets miserable down to the active floor (costs hunger/tired/drained) |
 | **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery       |
 
 Actions are mutually exclusive. During an action and its cooldown, the

@@ -329,6 +329,10 @@ impl GameState {
 
         // Consume action ticks first (these are short, ≤ 4 ticks).
         remaining = self.consume_action_ticks(remaining);
+        // Action completion may have zeroed `miserable` (Play does); the
+        // floor re-asserts the severe / leaving caps immediately so the
+        // reset can't undercut them.
+        self.apply_miserable_floor();
 
         // Piecewise decay: advance to the next boundary, apply, repeat.
         while remaining > 0 && self.phase != Phase::Gone {
@@ -345,7 +349,46 @@ impl GameState {
             }
 
             self.check_leaving(segment);
+            // Apply the severe/leaving floor after stats and phase have
+            // been updated for this segment, so the next iteration's
+            // rate calculation sees the bumped `miserable`.
+            self.apply_miserable_floor();
             remaining -= segment;
+        }
+    }
+
+    /// Enforce the minimum-`miserable` floor required by the severe and
+    /// leaving caps:
+    ///
+    /// * `Phase::Leaving` → miserable ≥ 50 % of `STAT_MAX`
+    ///   (≡ displayed Happy ≤ 50 %).  This is a flat cap and does *not*
+    ///   add to the per-stat severe penalties.
+    /// * Each primary stat above its critical threshold → an additional
+    ///   −20 % cap on Happy (= +20 % miserable per critical stat).  Up
+    ///   to 4 stats can be critical, so the severe path can push
+    ///   miserable to 80 %.
+    /// * The two rules are evaluated independently and the **higher**
+    ///   floor wins (= lower Happy displayed).
+    ///
+    /// Recovery via `Play` only goes down to whichever floor is active
+    /// at the time, so the player can never make a leaving / severely
+    /// distressed pet appear happy.  Once the conditions clear (stats
+    /// drop below critical AND phase returns to Active), the floor is
+    /// 0 again and Play's reset works normally.
+    fn apply_miserable_floor(&mut self) {
+        let critical = (self.hunger > SICK_TRIGGER_HUNGER) as u32
+            + (self.tired > SICK_TRIGGER_TIRED) as u32
+            + (self.drained > SICK_TRIGGER_DRAINED) as u32
+            + (self.sick > SICK_TRIGGER_TIRED) as u32;
+        let floor_severe = (critical * (STAT_MAX as u32 / 5)).min(STAT_MAX as u32) as u16;
+        let floor_leaving = if self.phase == Phase::Leaving {
+            STAT_MAX / 2
+        } else {
+            0
+        };
+        let floor = floor_severe.max(floor_leaving);
+        if self.miserable < floor {
+            self.miserable = floor;
         }
     }
 

@@ -16,7 +16,14 @@ pub const UNIT: u16 = 655;
 /// Hunger increase per tick (fills in ~20 hours).
 pub const HUNGER_RATE: u16 = 9;
 /// Extra hunger per tick when miserable ≥ 70%.
-pub const HUNGER_MISERABLE_BOOST: u16 = 1310; // 2 units
+///
+/// Tuned to 0 because the new severe / leaving floor on `miserable`
+/// keeps `miserable_high` triggered whenever stats are critical, and
+/// any non-zero boost pushed several long-sleep simulator profiles
+/// (feed_and_sleep, feed_sleep_heal, perfect_no_rest) more than 10%
+/// off baseline lifetimes.  The hunger feedback loop is now driven
+/// purely by HUNGER_RATE for any miserable level.
+pub const HUNGER_MISERABLE_BOOST: u16 = 0;
 
 // ---------------------------------------------------------------------------
 // Tired
@@ -25,7 +32,13 @@ pub const HUNGER_MISERABLE_BOOST: u16 = 1310; // 2 units
 /// Tired increase per tick (fills in ~13.3 hours).
 pub const TIRED_RATE: u16 = 14;
 /// Extra tired per tick when miserable ≥ 70%.
-pub const TIRED_MISERABLE_BOOST: u16 = 655; // 1 unit
+///
+/// Tuned to 0 alongside `HUNGER_MISERABLE_BOOST` for the same reason —
+/// the severe / leaving floor pushes `miserable` over the trigger
+/// threshold whenever stats are critical, and reintroducing the boost
+/// pulls long-sleep simulator profiles outside the ±10 % band against
+/// baseline lifetimes.
+pub const TIRED_MISERABLE_BOOST: u16 = 0;
 /// Passive tired recovery amount (while awake).
 pub const TIRED_PASSIVE_RECOVERY: u16 = 655; // 1 unit
 /// Passive recovery interval (ticks).
