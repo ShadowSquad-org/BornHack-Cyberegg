@@ -15,6 +15,7 @@ pub const MELODIES: &[&[Tone]] = &[
     melodies::TROLOLO,        // 5
     melodies::PET_WARN,       // 6 — pet severity alert (not in the menu)
     melodies::FUNNY_ENDING,   // 7 — played when the pet leaves
+    melodies::ALARM,          // 8 — watch-app wake alarm
 ];
 
 /// Index of [`melodies::PET_WARN`] in [`MELODIES`].  Triggered by
@@ -24,6 +25,11 @@ pub const PET_WARN_INDEX: usize = 6;
 /// Index of [`melodies::FUNNY_ENDING`] in [`MELODIES`].  Triggered by
 /// `game::lifecycle::cycle()` when the pet transitions to `Phase::Gone`.
 pub const FUNNY_ENDING_INDEX: usize = 7;
+
+/// Index of [`melodies::ALARM`] in [`MELODIES`].  Triggered by the
+/// watch-app `minute_tick_task` when the wall-clock matches the armed
+/// alarm time.
+pub const ALARM_INDEX: usize = 8;
 
 /// Signal a melody index to the buzzer task.
 /// If a melody is already playing it will be interrupted at the next note
@@ -36,6 +42,14 @@ pub fn play(index: usize) {
     if index < MELODIES.len() {
         MELODY_SIGNAL.signal(index);
     }
+}
+
+/// Silence the buzzer.  The currently-playing tone finishes, then the task
+/// returns to waiting for the next [`play`] call.  Implemented by signalling
+/// an out-of-range index — the playback loop's `MELODIES.get(index)` returns
+/// `None`, so no further tones are played.
+pub fn stop() {
+    MELODY_SIGNAL.signal(MELODIES.len());
 }
 
 /// Embassy task that owns the buzzer and plays melodies on demand.

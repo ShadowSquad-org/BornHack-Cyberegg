@@ -430,3 +430,24 @@ pub const TROLOLO: &[Tone] = &[
     Tone::new(Note::A3, 166),
     Tone::new(Note::B3, 166),
 ];
+
+/// Watch alarm — classic clock-radio buzz pattern.  Four "beep beep"
+/// pairs with a longer rest between pairs, total ~3.0 s.  Plays once
+/// per minute boundary when the watch alarm matches the wall clock.
+pub const ALARM: &[Tone] = &[
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 100),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 250),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 100),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 250),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 100),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 250),
+    Tone::new(Note::A5, 150),
+    Tone::new(Note::Rest, 100),
+    Tone::new(Note::A5, 150),
+];

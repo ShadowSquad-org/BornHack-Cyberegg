@@ -399,6 +399,14 @@ impl<const M: usize> DisplayState<M> {
     /// Dispatch a button press to the menu layer.
     /// Called when the game layer did not consume the event.
     pub fn dispatch_button(&mut self, btn: ButtonId) {
+        // A ringing alarm eats the first button press anywhere in the UI:
+        // silence the buzzer and consume the event so the user has to press
+        // again to actually navigate.
+        #[cfg(all(feature = "watch", feature = "embassy-base"))]
+        if crate::watch::dismiss_alarm_if_ringing() {
+            return;
+        }
+
         // Text entry intercepts all input when active.
         if crate::text_entry::is_active() {
             let done = {
@@ -977,6 +985,199 @@ fn action_tz_dec() {
     }
 }
 
+#[cfg(feature = "watch")]
+static ALARM_HOUR_LABELS: [&str; 24] = [
+    "Hour: 00", "Hour: 01", "Hour: 02", "Hour: 03", "Hour: 04", "Hour: 05", "Hour: 06", "Hour: 07",
+    "Hour: 08", "Hour: 09", "Hour: 10", "Hour: 11", "Hour: 12", "Hour: 13", "Hour: 14", "Hour: 15",
+    "Hour: 16", "Hour: 17", "Hour: 18", "Hour: 19", "Hour: 20", "Hour: 21", "Hour: 22", "Hour: 23",
+];
+
+#[cfg(feature = "watch")]
+static ALARM_MIN_LABELS: [&str; 60] = [
+    "Min: 00", "Min: 01", "Min: 02", "Min: 03", "Min: 04", "Min: 05", "Min: 06", "Min: 07",
+    "Min: 08", "Min: 09", "Min: 10", "Min: 11", "Min: 12", "Min: 13", "Min: 14", "Min: 15",
+    "Min: 16", "Min: 17", "Min: 18", "Min: 19", "Min: 20", "Min: 21", "Min: 22", "Min: 23",
+    "Min: 24", "Min: 25", "Min: 26", "Min: 27", "Min: 28", "Min: 29", "Min: 30", "Min: 31",
+    "Min: 32", "Min: 33", "Min: 34", "Min: 35", "Min: 36", "Min: 37", "Min: 38", "Min: 39",
+    "Min: 40", "Min: 41", "Min: 42", "Min: 43", "Min: 44", "Min: 45", "Min: 46", "Min: 47",
+    "Min: 48", "Min: 49", "Min: 50", "Min: 51", "Min: 52", "Min: 53", "Min: 54", "Min: 55",
+    "Min: 56", "Min: 57", "Min: 58", "Min: 59",
+];
+
+#[cfg(feature = "watch")]
+fn label_alarm_hour() -> &'static str {
+    ALARM_HOUR_LABELS[crate::watch::alarm_hour().min(23) as usize]
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_minute() -> &'static str {
+    ALARM_MIN_LABELS[crate::watch::alarm_minute().min(59) as usize]
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_enabled() -> &'static str {
+    crate::watch::alarm_enabled_label()
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_days() -> &'static str {
+    crate::watch::alarm_days_label()
+}
+
+#[cfg(feature = "watch")]
+fn label_alarm_tone() -> &'static str {
+    crate::watch::alarm_tone_label()
+}
+
+// Per-day toggle labels — one fn per day so the menu's `fn()`-typed action
+// pointers can call them.
+#[cfg(feature = "watch")]
+mod alarm_day_actions {
+    pub fn toggle_mon() {
+        crate::watch::alarm_toggle_day(0)
+    }
+    pub fn toggle_tue() {
+        crate::watch::alarm_toggle_day(1)
+    }
+    pub fn toggle_wed() {
+        crate::watch::alarm_toggle_day(2)
+    }
+    pub fn toggle_thu() {
+        crate::watch::alarm_toggle_day(3)
+    }
+    pub fn toggle_fri() {
+        crate::watch::alarm_toggle_day(4)
+    }
+    pub fn toggle_sat() {
+        crate::watch::alarm_toggle_day(5)
+    }
+    pub fn toggle_sun() {
+        crate::watch::alarm_toggle_day(6)
+    }
+    pub fn label_mon() -> &'static str {
+        if crate::watch::alarm_day_enabled(0) {
+            "Mon: On"
+        } else {
+            "Mon: Off"
+        }
+    }
+    pub fn label_tue() -> &'static str {
+        if crate::watch::alarm_day_enabled(1) {
+            "Tue: On"
+        } else {
+            "Tue: Off"
+        }
+    }
+    pub fn label_wed() -> &'static str {
+        if crate::watch::alarm_day_enabled(2) {
+            "Wed: On"
+        } else {
+            "Wed: Off"
+        }
+    }
+    pub fn label_thu() -> &'static str {
+        if crate::watch::alarm_day_enabled(3) {
+            "Thu: On"
+        } else {
+            "Thu: Off"
+        }
+    }
+    pub fn label_fri() -> &'static str {
+        if crate::watch::alarm_day_enabled(4) {
+            "Fri: On"
+        } else {
+            "Fri: Off"
+        }
+    }
+    pub fn label_sat() -> &'static str {
+        if crate::watch::alarm_day_enabled(5) {
+            "Sat: On"
+        } else {
+            "Sat: Off"
+        }
+    }
+    pub fn label_sun() -> &'static str {
+        if crate::watch::alarm_day_enabled(6) {
+            "Sun: On"
+        } else {
+            "Sun: Off"
+        }
+    }
+}
+
+#[cfg(feature = "watch")]
+static ALARM_DAYS_ITEMS: [MenuItem; 8] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: alarm_day_actions::label_mon,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_mon),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_tue,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_tue),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_wed,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_wed),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_thu,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_thu),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_fri,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_fri),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_sat,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_sat),
+    },
+    MenuItem {
+        label: alarm_day_actions::label_sun,
+        kind: MenuItemKind::Action(alarm_day_actions::toggle_sun),
+    },
+];
+
+#[cfg(feature = "watch")]
+static ALARM_ITEMS: [MenuItem; 6] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: label_alarm_hour,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_hour,
+            dec: crate::watch::alarm_dec_hour,
+        },
+    },
+    MenuItem {
+        label: label_alarm_minute,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_minute,
+            dec: crate::watch::alarm_dec_minute,
+        },
+    },
+    MenuItem {
+        label: label_alarm_days,
+        kind: MenuItemKind::Submenu(&ALARM_DAYS_ITEMS),
+    },
+    MenuItem {
+        label: label_alarm_tone,
+        kind: MenuItemKind::Stepper {
+            inc: crate::watch::alarm_inc_melody,
+            dec: crate::watch::alarm_dec_melody,
+        },
+    },
+    MenuItem {
+        label: label_alarm_enabled,
+        kind: MenuItemKind::Action(crate::watch::alarm_toggle_enabled),
+    },
+];
+
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
@@ -1152,7 +1353,12 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     },
 ];
 
-static SETTINGS_ITEMS: [MenuItem; 8] = [
+#[cfg(feature = "watch")]
+const SETTINGS_ITEMS_LEN: usize = 9;
+#[cfg(not(feature = "watch"))]
+const SETTINGS_ITEMS_LEN: usize = 8;
+
+static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1175,6 +1381,11 @@ static SETTINGS_ITEMS: [MenuItem; 8] = [
             inc: action_tz_inc,
             dec: action_tz_dec,
         },
+    },
+    #[cfg(feature = "watch")]
+    MenuItem {
+        label: || "Alarm",
+        kind: MenuItemKind::Submenu(&ALARM_ITEMS),
     },
     MenuItem {
         label: || "",
