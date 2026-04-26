@@ -1,6 +1,13 @@
 //! Watch app — switchable Casio-style digital face and analog face.
 //!
-//! Up/Down on the watch screen toggles between faces.
+//! Normal mode buttons:
+//!   * Up/Down       — toggle digital ↔ analog face
+//!   * Fire/Execute  — enter alarm-edit mode
+//!
+//! Alarm-edit mode buttons:
+//!   * Left/Right    — cycle selected field (Hour → Minute → Enabled → Hour)
+//!   * Up/Down       — increment / decrement the selected field
+//!   * Fire/Cancel   — exit edit mode (changes are live, no save needed)
 //!
 //! The current weekday is highlighted in red (white-on-red) for visual punch.
 //! Note: the red plane only updates on a full tri-color refresh; on the fast
@@ -42,41 +49,134 @@ fn toggle_face() {
         WatchFace::Analog => WatchFace::Digital,
     };
     WATCH_FACE.store(next as u8, Ordering::Relaxed);
+    signal_settings_dirty();
+}
+
+// ── Edit-mode state ─────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum WatchMode {
+    Normal = 0,
+    AlarmEdit = 1,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum EditField {
+    Hour = 0,
+    Minute = 1,
+    Enabled = 2,
+}
+
+static WATCH_MODE: AtomicU8 = AtomicU8::new(WatchMode::Normal as u8);
+static EDIT_FIELD: AtomicU8 = AtomicU8::new(EditField::Hour as u8);
+
+fn current_mode() -> WatchMode {
+    match WATCH_MODE.load(Ordering::Relaxed) {
+        1 => WatchMode::AlarmEdit,
+        _ => WatchMode::Normal,
+    }
+}
+
+fn current_field() -> EditField {
+    match EDIT_FIELD.load(Ordering::Relaxed) {
+        1 => EditField::Minute,
+        2 => EditField::Enabled,
+        _ => EditField::Hour,
+    }
+}
+
+fn enter_edit() {
+    WATCH_MODE.store(WatchMode::AlarmEdit as u8, Ordering::Relaxed);
+    EDIT_FIELD.store(EditField::Hour as u8, Ordering::Relaxed);
+}
+
+fn exit_edit() {
+    WATCH_MODE.store(WatchMode::Normal as u8, Ordering::Relaxed);
+}
+
+fn cycle_field(forward: bool) {
+    let next = match (current_field(), forward) {
+        (EditField::Hour, true) => EditField::Minute,
+        (EditField::Minute, true) => EditField::Enabled,
+        (EditField::Enabled, true) => EditField::Hour,
+        (EditField::Hour, false) => EditField::Enabled,
+        (EditField::Minute, false) => EditField::Hour,
+        (EditField::Enabled, false) => EditField::Minute,
+    };
+    EDIT_FIELD.store(next as u8, Ordering::Relaxed);
+}
+
+fn step_current_field(up: bool) {
+    match current_field() {
+        EditField::Hour => {
+            if up {
+                alarm_inc_hour();
+            } else {
+                alarm_dec_hour();
+            }
+        }
+        EditField::Minute => {
+            if up {
+                alarm_inc_minute();
+            } else {
+                alarm_dec_minute();
+            }
+        }
+        EditField::Enabled => alarm_toggle_enabled(),
+    }
 }
 
 /// Returns `true` if the button was consumed by the watch screen.
 pub fn dispatch(btn: ButtonId) -> bool {
-    match btn {
-        ButtonId::Up | ButtonId::Down => {
-            toggle_face();
+    match current_mode() {
+        WatchMode::AlarmEdit => {
+            match btn {
+                ButtonId::Up => step_current_field(true),
+                ButtonId::Down => step_current_field(false),
+                ButtonId::Left => cycle_field(false),
+                ButtonId::Right => cycle_field(true),
+                ButtonId::Fire | ButtonId::Execute | ButtonId::Cancel => exit_edit(),
+            }
             true
         }
-        _ => false,
+        WatchMode::Normal => match btn {
+            ButtonId::Up | ButtonId::Down => {
+                toggle_face();
+                true
+            }
+            ButtonId::Fire | ButtonId::Execute => {
+                enter_edit();
+                true
+            }
+            _ => false,
+        },
     }
 }
 
-// ── Alarm state ──────────────────────────────────────────────────────────────
+// ── Persisted state (alarm + face choice) ───────────────────────────────────
 //
-// Persisted to flash via the `kv` namespace `"watch"`. Loaded once at boot
-// (`load_alarm_from_kv`) and re-saved by `alarm_persister_task` whenever a
-// menu action signals `ALARM_CHANGED_SIGNAL`.
+// Saved to the `kv` namespace `"watch"`. Loaded once at boot
+// (`load_settings_from_kv`) and re-saved by `settings_persister_task` whenever
+// a setter signals `SETTINGS_DIRTY_SIGNAL`.
 static ALARM_HOUR: AtomicU8 = AtomicU8::new(7);
 static ALARM_MINUTE: AtomicU8 = AtomicU8::new(0);
 static ALARM_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "embassy-base")]
-pub static ALARM_CHANGED_SIGNAL: embassy_sync::signal::Signal<
+pub static SETTINGS_DIRTY_SIGNAL: embassy_sync::signal::Signal<
     embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
     (),
 > = embassy_sync::signal::Signal::new();
 
 #[cfg(feature = "embassy-base")]
-fn signal_alarm_changed() {
-    ALARM_CHANGED_SIGNAL.signal(());
+fn signal_settings_dirty() {
+    SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
 #[cfg(not(feature = "embassy-base"))]
-fn signal_alarm_changed() {}
+fn signal_settings_dirty() {}
 
 pub fn alarm_hour() -> u8 {
     ALARM_HOUR.load(Ordering::Relaxed)
@@ -91,34 +191,34 @@ pub fn alarm_enabled() -> bool {
 pub fn alarm_inc_hour() {
     let h = ALARM_HOUR.load(Ordering::Relaxed);
     ALARM_HOUR.store((h + 1) % 24, Ordering::Relaxed);
-    signal_alarm_changed();
+    signal_settings_dirty();
 }
 pub fn alarm_dec_hour() {
     let h = ALARM_HOUR.load(Ordering::Relaxed);
     ALARM_HOUR.store(if h == 0 { 23 } else { h - 1 }, Ordering::Relaxed);
-    signal_alarm_changed();
+    signal_settings_dirty();
 }
 pub fn alarm_inc_minute() {
     let m = ALARM_MINUTE.load(Ordering::Relaxed);
     ALARM_MINUTE.store((m + 1) % 60, Ordering::Relaxed);
-    signal_alarm_changed();
+    signal_settings_dirty();
 }
 pub fn alarm_dec_minute() {
     let m = ALARM_MINUTE.load(Ordering::Relaxed);
     ALARM_MINUTE.store(if m == 0 { 59 } else { m - 1 }, Ordering::Relaxed);
-    signal_alarm_changed();
+    signal_settings_dirty();
 }
 pub fn alarm_toggle_enabled() {
     let v = ALARM_ENABLED.load(Ordering::Relaxed);
     ALARM_ENABLED.store(!v, Ordering::Relaxed);
-    signal_alarm_changed();
+    signal_settings_dirty();
 }
 
-/// Load the persisted alarm state from the `"watch"` kv namespace.
-/// Call once at boot, after `kv::init()`. Silently leaves defaults
+/// Load persisted watch settings (alarm + face choice) from the `"watch"` kv
+/// namespace. Call once at boot, after `kv::init()`. Silently leaves defaults
 /// in place if a key is missing or invalid.
 #[cfg(feature = "embassy-base")]
-pub async fn load_alarm_from_kv() {
+pub async fn load_settings_from_kv() {
     let ns = crate::fw::kv::namespace("watch");
     let mut b = [0u8; 1];
     if let Ok(1) = ns.get("alarm_h", &mut b).await
@@ -134,18 +234,27 @@ pub async fn load_alarm_from_kv() {
     if let Ok(1) = ns.get("alarm_on", &mut b).await {
         ALARM_ENABLED.store(b[0] != 0, Ordering::Relaxed);
     }
+    if let Ok(1) = ns.get("face", &mut b).await
+        && b[0] <= 1
+    {
+        WATCH_FACE.store(b[0], Ordering::Relaxed);
+    }
 }
 
-/// Embassy task that persists alarm state whenever a menu action mutates it.
+/// Embassy task that persists watch settings (alarm + face) whenever a setter
+/// signals `SETTINGS_DIRTY_SIGNAL`.
 #[cfg(feature = "embassy-base")]
 #[embassy_executor::task]
-pub async fn alarm_persister_task() {
+pub async fn settings_persister_task() {
     let ns = crate::fw::kv::namespace("watch");
     loop {
-        ALARM_CHANGED_SIGNAL.wait().await;
+        SETTINGS_DIRTY_SIGNAL.wait().await;
         let _ = ns.set("alarm_h", &[alarm_hour()], true).await;
         let _ = ns.set("alarm_m", &[alarm_minute()], true).await;
         let _ = ns.set("alarm_on", &[alarm_enabled() as u8], true).await;
+        let _ = ns
+            .set("face", &[WATCH_FACE.load(Ordering::Relaxed)], true)
+            .await;
     }
 }
 
@@ -608,12 +717,90 @@ where
     Ok(())
 }
 
+/// Render the alarm-edit screen: HH:MM in 7-seg digits, an `[On]/[Off]` toggle
+/// below, and a black underline beneath the currently-selected field.
+fn draw_alarm_edit<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let h = alarm_hour();
+    let m = alarm_minute();
+
+    draw_digit(display, HH_TENS_X, DIGIT_Y, h / 10)?;
+    draw_digit(display, HH_ONES_X, DIGIT_Y, h % 10)?;
+
+    let dot = PrimitiveStyle::with_fill(BLACK);
+    Rectangle::new(
+        Point::new(COLON_X, COLON_TOP_Y),
+        Size::new(COLON_W as u32, COLON_W as u32),
+    )
+    .into_styled(dot)
+    .draw(display)?;
+    Rectangle::new(
+        Point::new(COLON_X, COLON_BOT_Y),
+        Size::new(COLON_W as u32, COLON_W as u32),
+    )
+    .into_styled(dot)
+    .draw(display)?;
+
+    draw_digit(display, MM_TENS_X, DIGIT_Y, m / 10)?;
+    draw_digit(display, MM_ONES_X, DIGIT_Y, m % 10)?;
+
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+
+    let enabled_label = if alarm_enabled() { "[ On ]" } else { "[ Off ]" };
+    let enabled_y = 116i32;
+    Text::with_text_style(
+        enabled_label,
+        Point::new(76, enabled_y),
+        MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+        centered,
+    )
+    .draw(display)?;
+
+    // Black bar under the selected field.
+    const UL_THICK: u32 = 3;
+    let (ul_x, ul_w, ul_y) = match current_field() {
+        EditField::Hour => (HH_TENS_X, PAIR_W as u32, DIGIT_Y + DIGIT_H + 2),
+        EditField::Minute => (MM_TENS_X, PAIR_W as u32, DIGIT_Y + DIGIT_H + 2),
+        EditField::Enabled => {
+            // [ Off ] is widest at 7 chars × 7 = 49 px. Centre under x=76.
+            (51, 50, enabled_y + 9)
+        }
+    };
+    Rectangle::new(Point::new(ul_x, ul_y), Size::new(ul_w, UL_THICK))
+        .into_styled(PrimitiveStyle::with_fill(BLACK))
+        .draw(display)?;
+
+    Text::with_text_style(
+        "L/R field   U/D value",
+        Point::new(76, 142),
+        MonoTextStyle::new(&FONT_6X10, BLACK),
+        centered,
+    )
+    .draw(display)?;
+
+    Ok(())
+}
+
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
     let bat = battery_pct();
-    draw_frame(display, Some(("Watch", &bat)), None)?;
+    let title = match current_mode() {
+        WatchMode::AlarmEdit => "Edit Alarm",
+        WatchMode::Normal => "Watch",
+    };
+    draw_frame(display, Some((title, &bat)), None)?;
+
+    if matches!(current_mode(), WatchMode::AlarmEdit) {
+        return draw_alarm_edit(display);
+    }
+
     draw_alarm_indicator(display)?;
 
     let Some(clock) = wall_clock() else {

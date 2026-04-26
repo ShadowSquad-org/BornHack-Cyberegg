@@ -113,8 +113,8 @@ async fn main(spawner: Spawner) {
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
-        hello_graphics::watch::load_alarm_from_kv().await;
-        spawner.must_spawn(hello_graphics::watch::alarm_persister_task());
+        hello_graphics::watch::load_settings_from_kv().await;
+        spawner.must_spawn(hello_graphics::watch::settings_persister_task());
     }
 
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
