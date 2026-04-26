@@ -115,6 +115,7 @@ async fn main(spawner: Spawner) {
     {
         hello_graphics::watch::load_settings_from_kv().await;
         spawner.must_spawn(hello_graphics::watch::settings_persister_task());
+        spawner.must_spawn(hello_graphics::watch::alarm_ring_timeout_task());
     }
 
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────

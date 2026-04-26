@@ -163,6 +163,8 @@ pub fn dispatch(btn: ButtonId) -> bool {
 static ALARM_HOUR: AtomicU8 = AtomicU8::new(7);
 static ALARM_MINUTE: AtomicU8 = AtomicU8::new(0);
 static ALARM_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Day-of-week mask: bit 0 = Mon .. bit 6 = Sun. Default = every day.
+static ALARM_DAYS: AtomicU8 = AtomicU8::new(0b0111_1111);
 
 #[cfg(feature = "embassy-base")]
 pub static SETTINGS_DIRTY_SIGNAL: embassy_sync::signal::Signal<
@@ -214,6 +216,24 @@ pub fn alarm_toggle_enabled() {
     signal_settings_dirty();
 }
 
+pub fn alarm_days() -> u8 {
+    ALARM_DAYS.load(Ordering::Relaxed) & 0x7F
+}
+
+/// `day` is 0 = Mon .. 6 = Sun.
+pub fn alarm_day_enabled(day: u8) -> bool {
+    day < 7 && (alarm_days() >> day) & 1 != 0
+}
+
+pub fn alarm_toggle_day(day: u8) {
+    if day >= 7 {
+        return;
+    }
+    let v = ALARM_DAYS.load(Ordering::Relaxed);
+    ALARM_DAYS.store((v ^ (1 << day)) & 0x7F, Ordering::Relaxed);
+    signal_settings_dirty();
+}
+
 /// Load persisted watch settings (alarm + face choice) from the `"watch"` kv
 /// namespace. Call once at boot, after `kv::init()`. Silently leaves defaults
 /// in place if a key is missing or invalid.
@@ -234,6 +254,9 @@ pub async fn load_settings_from_kv() {
     if let Ok(1) = ns.get("alarm_on", &mut b).await {
         ALARM_ENABLED.store(b[0] != 0, Ordering::Relaxed);
     }
+    if let Ok(1) = ns.get("alarm_days", &mut b).await {
+        ALARM_DAYS.store(b[0] & 0x7F, Ordering::Relaxed);
+    }
     if let Ok(1) = ns.get("face", &mut b).await
         && b[0] <= 1
     {
@@ -252,14 +275,27 @@ pub async fn settings_persister_task() {
         let _ = ns.set("alarm_h", &[alarm_hour()], true).await;
         let _ = ns.set("alarm_m", &[alarm_minute()], true).await;
         let _ = ns.set("alarm_on", &[alarm_enabled() as u8], true).await;
+        let _ = ns.set("alarm_days", &[alarm_days()], true).await;
         let _ = ns
             .set("face", &[WATCH_FACE.load(Ordering::Relaxed)], true)
             .await;
     }
 }
 
-/// Called from the minute-tick task: if the alarm is enabled and the local
-/// time matches `HH:MM`, fire the buzzer once. Idempotent within a minute.
+/// True while the alarm melody is playing and the user hasn't yet dismissed
+/// it. Cleared by [`dismiss_alarm_if_ringing`] or after a short timeout.
+#[cfg(feature = "embassy-base")]
+static ALARM_RINGING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "embassy-base")]
+static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    (),
+> = embassy_sync::signal::Signal::new();
+
+/// Called from the minute-tick task: if the alarm is enabled, today is in the
+/// day mask, and the local time matches `HH:MM`, fire the buzzer. The
+/// alarm-ring task then repeats the melody up to a few times unless dismissed.
 #[cfg(feature = "embassy-base")]
 pub fn check_and_fire_alarm() {
     if !alarm_enabled() {
@@ -268,8 +304,53 @@ pub fn check_and_fire_alarm() {
     let Some(clock) = wall_clock() else {
         return;
     };
+    if !alarm_day_enabled(clock.weekday) {
+        return;
+    }
     if clock.hour == alarm_hour() && clock.minute == alarm_minute() {
+        ALARM_RINGING.store(true, Ordering::Relaxed);
+        ALARM_RING_SIGNAL.signal(());
         crate::fw::buzzer::play(crate::fw::buzzer::ALARM_INDEX);
+    }
+}
+
+/// Returns `true` if there was an active alarm to silence; in that case the
+/// buzzer is stopped and the ringing flag cleared. Called by the menu dispatch
+/// before any other button handling.
+#[cfg(feature = "embassy-base")]
+pub fn dismiss_alarm_if_ringing() -> bool {
+    if ALARM_RINGING.swap(false, Ordering::Relaxed) {
+        crate::fw::buzzer::stop();
+        true
+    } else {
+        false
+    }
+}
+
+/// Re-plays the alarm melody up to `ALARM_REPEATS` times (every
+/// `ALARM_REPEAT_INTERVAL_SECS`) unless the user dismisses it, then clears
+/// the ringing flag so an un-dismissed alarm stops eating button presses.
+///
+/// The first play is triggered by `check_and_fire_alarm`; this task handles
+/// the repeats and the final cleanup.
+#[cfg(feature = "embassy-base")]
+#[embassy_executor::task]
+pub async fn alarm_ring_timeout_task() {
+    const ALARM_REPEATS: u8 = 4; // total plays = 1 initial + 4 repeats
+    const ALARM_REPEAT_INTERVAL_SECS: u64 = 8;
+    loop {
+        ALARM_RING_SIGNAL.wait().await;
+        for _ in 0..ALARM_REPEATS {
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(
+                ALARM_REPEAT_INTERVAL_SECS,
+            ))
+            .await;
+            if !ALARM_RINGING.load(Ordering::Relaxed) {
+                break;
+            }
+            crate::fw::buzzer::play(crate::fw::buzzer::ALARM_INDEX);
+        }
+        ALARM_RINGING.store(false, Ordering::Relaxed);
     }
 }
 

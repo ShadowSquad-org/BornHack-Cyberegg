@@ -44,6 +44,14 @@ pub fn play(index: usize) {
     }
 }
 
+/// Silence the buzzer.  The currently-playing tone finishes, then the task
+/// returns to waiting for the next [`play`] call.  Implemented by signalling
+/// an out-of-range index — the playback loop's `MELODIES.get(index)` returns
+/// `None`, so no further tones are played.
+pub fn stop() {
+    MELODY_SIGNAL.signal(MELODIES.len());
+}
+
 /// Embassy task that owns the buzzer and plays melodies on demand.
 /// Spawn once from `main`; use [`play`] to trigger melodies from anywhere.
 #[embassy_executor::task]
