@@ -230,8 +230,10 @@ fn try_move_dir(dir: u8) {
         _ => return,
     };
 
-    // Bounds check.
+    // Bounds check — if the move would leave the grid the player is either
+    // stepping through an exit (win!) or hitting a corner gap (ignore).
     if new_row >= H || new_col >= W {
+        check_exit_escape(row, col, dir);
         return;
     }
 
@@ -239,18 +241,22 @@ fn try_move_dir(dir: u8) {
     PLAYER.store(((new_row as u32) << 8) | new_col as u32, Ordering::Relaxed);
     STEPS.fetch_add(1, Ordering::Relaxed);
     mark_visited(new_row, new_col);
-
-    // Check exit.
-    check_exit(new_row, new_col);
 }
 
-fn check_exit(row: usize, col: usize) {
+/// Called when the player presses a direction while already standing on an
+/// exit cell and the move would take them off the grid edge.  That is the
+/// moment they actually escape — not when they first step onto the exit.
+fn check_exit_escape(row: usize, col: usize, dir: u8) {
+    // Is this cell an exit whose open wall faces in `dir`?
     let packed = ((row as u32) << 8) | col as u32;
-    for slot in &EXITS {
-        if slot.load(Ordering::Relaxed) == packed {
-            WON.store(true, Ordering::Relaxed);
-            return;
-        }
+    let is_exit = EXITS.iter().any(|s| s.load(Ordering::Relaxed) == packed);
+    if !is_exit { return; }
+
+    // The exit wall must be open in that direction.
+    let walls = WALLS[row * W + col].load(Ordering::Relaxed);
+    let dir_bit = 1u8 << dir; // 0=N,1=E,2=S,3=W → NORTH/EAST/SOUTH/WEST bits
+    if walls & dir_bit != 0 {
+        WON.store(true, Ordering::Relaxed);
     }
 }
 
@@ -702,10 +708,6 @@ where
 
             let visited = is_visited(row, col);
 
-            // Is this cell an exit?
-            let cpacked = ((row as u32) << 8) | col as u32;
-            let is_exit = EXITS.iter().any(|s| s.load(Ordering::Relaxed) == cpacked);
-
             if !visited {
                 // Unvisited: draw solid black (fog of war).
                 Rectangle::new(Point::new(px, py), Size::new(CELL as u32, CELL as u32))
@@ -717,12 +719,6 @@ where
             // Visited cell: draw floor (white) with walls.
             // Floor is already white from the background clear.
 
-            // Draw exit cells in red.
-            if is_exit {
-                Rectangle::new(Point::new(px + 1, py + 1), Size::new((CELL - 2) as u32, (CELL - 2) as u32))
-                    .into_styled(PrimitiveStyle::with_fill(crate::RED))
-                    .draw(display)?;
-            }
 
             // Draw walls as black edges only where a wall is CLOSED.
             let walls = WALLS[row * W + col].load(Ordering::Relaxed);
@@ -774,20 +770,21 @@ where
         .into_styled(PrimitiveStyle::with_fill(BLACK))
         .draw(display)?;
 
-    // Clear exit passages through the border (so exits are visible).
+    // Draw exit gaps in the border — only if the player has visited the exit cell.
     for slot in &EXITS {
         let ev = slot.load(Ordering::Relaxed);
         if ev == 0xFFFF { continue; }
         let er = (ev >> 8) as usize;
         let ec = (ev & 0xFF) as usize;
-        let walls = WALLS[er * W + ec].load(Ordering::Relaxed);
 
+        // Only reveal the exit once the player has stood on that border cell.
+        if !is_visited(er, ec) { continue; }
+
+        let walls = WALLS[er * W + ec].load(Ordering::Relaxed);
         let px = BORDER + (ec as i32) * CELL;
         let py = BORDER + (er as i32) * CELL;
 
-        // Clear the appropriate border segment to show the exit opening.
         if walls & NORTH != 0 && er == 0 {
-            // Exit on north side: clear a gap in the top border.
             Rectangle::new(Point::new(px + 1, 0), Size::new((CELL - 2) as u32, BORDER as u32))
                 .into_styled(PrimitiveStyle::with_fill(crate::RED))
                 .draw(display)?;
