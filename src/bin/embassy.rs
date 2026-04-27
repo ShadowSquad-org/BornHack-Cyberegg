@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
@@ -30,10 +31,10 @@ use hello_graphics::{
     BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
     draw_graphics, health_err, unix_now, with_health,
 };
+use panic_probe as _;
 use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // Main

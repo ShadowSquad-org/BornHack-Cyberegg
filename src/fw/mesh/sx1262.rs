@@ -2,11 +2,13 @@ use core::convert::Infallible;
 use core::fmt::Debug;
 use core::sync::atomic::Ordering;
 
+use defmt_rtt as _;
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::spim::{self, Frequency, InterruptHandler, Spim};
 use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_time::{Delay, Timer};
 use embedded_hal_bus::spi::ExclusiveDevice;
+use panic_probe as _;
 use sx126x::SX126x;
 use sx126x::conf::Config as LoRaConfig;
 use sx126x::op::PacketType::LoRa;
@@ -16,7 +18,6 @@ use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
 use sx126x::op::*;
 use sx126x::reg::Register;
-use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // MeshCore LoRa configuration

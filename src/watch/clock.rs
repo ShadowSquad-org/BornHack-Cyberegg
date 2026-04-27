@@ -94,7 +94,8 @@ const COLON_X: i32 = TIME_X + PAIR_W + COLON_GAP;
 pub(super) const MM_TENS_X: i32 = COLON_X + COLON_W + COLON_GAP;
 pub(super) const MM_ONES_X: i32 = MM_TENS_X + DIGIT_PITCH;
 
-// Colon dots aligned with the inner blank rows between top/middle and middle/bottom.
+// Colon dots aligned with the inner blank rows between top/middle and
+// middle/bottom.
 const COLON_TOP_Y: i32 = DIGIT_Y + STROKE + VERT_LEN / 2 - COLON_W / 2;
 const COLON_BOT_Y: i32 = DIGIT_Y + 2 * STROKE + VERT_LEN + VERT_LEN / 2 - COLON_W / 2;
 
@@ -366,8 +367,8 @@ where
     Ok(())
 }
 
-/// Compute the endpoint of a hand of `length` rooted at `(cx, cy)` pointing at `angle_deg`,
-/// where 0° is 12 o'clock and angles increase clockwise.
+/// Compute the endpoint of a hand of `length` rooted at `(cx, cy)` pointing at
+/// `angle_deg`, where 0° is 12 o'clock and angles increase clockwise.
 fn polar(cx: i32, cy: i32, length: i32, angle_deg: i32) -> Point {
     let dx = (length * sin_deg(angle_deg)) >> 14;
     let dy = -((length * cos_deg(angle_deg)) >> 14);
