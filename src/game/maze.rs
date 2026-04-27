@@ -365,6 +365,121 @@ fn gen_clear() {
 }
 
 /// Generate a new perfect maze using iterative Recursive Backtracker DFS.
+// ── Exit reachability validation ─────────────────────────────────────────────
+
+/// BFS/flood-fill scratch queue — fixed size, allocated on the call stack.
+/// Maximum reachable cells = CELLS = 324.  Each entry is a packed cell index
+/// stored as u16.  Queue is 648 bytes on the call stack — fine.
+struct Queue {
+    buf: [u16; CELLS],
+    head: usize,
+    tail: usize,
+}
+
+impl Queue {
+    fn new() -> Self { Self { buf: [0u16; CELLS], head: 0, tail: 0 } }
+    fn push(&mut self, v: u16) {
+        if self.tail < CELLS { self.buf[self.tail] = v; self.tail += 1; }
+    }
+    fn pop(&mut self) -> Option<u16> {
+        if self.head == self.tail { None }
+        else { let v = self.buf[self.head]; self.head += 1; Some(v) }
+    }
+}
+
+/// Returns true when the new candidate exit at (`cand_row`, `cand_col`) is
+/// reachable from all `already_placed` exits (slots 0..already_placed in
+/// EXITS) without passing through any of those exits.
+///
+/// We do a single BFS from the candidate cell.  Exit cells that are already
+/// placed act as blocked nodes — the BFS must reach every one of them from
+/// their *neighbour*, not by entering them.  Specifically, we check that
+/// each existing exit cell has at least one non-exit visited neighbour that
+/// has a passage into it, which means the player can walk up to the exit
+/// from a non-exit cell.
+///
+/// Simpler stated: flood from the candidate; every existing exit must be
+/// adjacent to a visited (reachable) non-exit cell with an open passage.
+fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_placed: usize) -> bool {
+    if already_placed == 0 {
+        // First exit — nothing to validate against yet.
+        return true;
+    }
+
+    // Build a quick lookup of already-placed exit positions.
+    let mut exit_cells = [0u32; MAX_EXITS];
+    for i in 0..already_placed {
+        exit_cells[i] = EXITS[i].load(Ordering::Relaxed);
+    }
+
+    let is_existing_exit = |r: usize, c: usize| -> bool {
+        let p = ((r as u32) << 8) | c as u32;
+        exit_cells[..already_placed].iter().any(|&e| e == p)
+    };
+
+    // BFS from candidate, treating existing exit cells as walls (blocked).
+    gen_clear(); // reuse GEN_VISITED as the BFS visited set
+
+    let start = (cand_row * W + cand_col) as u16;
+    let mut q = Queue::new();
+    q.push(start);
+    gen_mark(start as usize);
+
+    while let Some(idx) = q.pop() {
+        let r = idx as usize / W;
+        let c = idx as usize % W;
+        let walls = WALLS[r * W + c].load(Ordering::Relaxed);
+
+        // Explore all four open passages.
+        let neighbours: [(u8, usize, usize); 4] = [
+            (NORTH, r.wrapping_sub(1), c),
+            (EAST,  r, c + 1),
+            (SOUTH, r + 1, c),
+            (WEST,  r, c.wrapping_sub(1)),
+        ];
+
+        for (dir_bit, nr, nc) in neighbours {
+            if nr >= H || nc >= W { continue; }
+            if walls & dir_bit == 0 { continue; }           // wall blocks
+            if gen_is_visited(nr * W + nc) { continue; }    // already seen
+            if is_existing_exit(nr, nc) { continue; }       // treat as wall
+
+            gen_mark(nr * W + nc);
+            q.push((nr * W + nc) as u16);
+        }
+    }
+
+    // Every existing exit must be reachable: at least one of its interior
+    // neighbours must have been visited by the BFS.
+    for i in 0..already_placed {
+        let ev = exit_cells[i];
+        let er = (ev >> 8) as usize;
+        let ec = (ev & 0xFF) as usize;
+
+        let exit_walls = WALLS[er * W + ec].load(Ordering::Relaxed);
+
+        let reachable = [
+            (NORTH, er.wrapping_sub(1), ec),
+            (EAST,  er, ec + 1),
+            (SOUTH, er + 1, ec),
+            (WEST,  er, ec.wrapping_sub(1)),
+        ]
+        .iter()
+        .any(|&(dir_bit, nr, nc)| {
+            nr < H && nc < W
+                && exit_walls & dir_bit != 0          // passage exists
+                && gen_is_visited(nr * W + nc)        // neighbour was reached
+                && !is_existing_exit(nr, nc)          // neighbour isn't another exit
+        });
+
+        if !reachable {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn generate() {
     // Seed the PRNG.
     RNG.store(rng_seed(), Ordering::Relaxed);
@@ -438,6 +553,13 @@ fn generate() {
     }
 
     // ── Place exits (1–4, on the outer border) ────────────────────────────
+    //
+    // Exits are placed one at a time.  After each placement we do a
+    // flood-fill from that exit that is *blocked* at every other already-
+    // placed exit.  If the fill can reach all other exits without passing
+    // through any of them, the placement is valid.  This guarantees that
+    // every exit has an independent path — the player will never be forced
+    // through one exit to reach another.
     let n_exits = 1 + (rng_next() % 4) as usize; // 1..=4
 
     // Initialise exit slots to 0xFFFF (unused).
@@ -445,29 +567,23 @@ fn generate() {
         slot.store(0xFFFF, Ordering::Relaxed);
     }
 
-    // Border cells: top row, bottom row, left col, right col (excluding corners).
-    // We build a short list of candidates and pick from it.
-    // For 18×18: 4*(18-2) = 64 border edge cells (not counting corners which
-    // appear in two sides).  We pick without replacement using the PRNG.
-
     let mut placed = 0usize;
     let mut attempts = 0usize;
 
-    while placed < n_exits && attempts < 256 {
+    while placed < n_exits && attempts < 512 {
         attempts += 1;
 
         // Pick a random border segment and position.
         let side = (rng_next() % 4) as usize;
-        let pos = (rng_next() as usize) % (if side < 2 { W } else { H });
+        let pos  = (rng_next() as usize) % (if side < 2 { W } else { H });
 
         let (row, col) = match side {
-            0 => (0, pos),           // top row
-            1 => (H - 1, pos),       // bottom row
-            2 => (pos, 0),           // left col
-            _ => (pos, W - 1),       // right col
+            0 => (0, pos),       // top row
+            1 => (H - 1, pos),   // bottom row
+            2 => (pos, 0),       // left col
+            _ => (pos, W - 1),   // right col
         };
 
-        // Punch a wall in the outward direction.
         let out_dir = match side {
             0 => NORTH,
             1 => SOUTH,
@@ -475,18 +591,28 @@ fn generate() {
             _ => EAST,
         };
 
-        // Check this cell is not already an exit.
+        // Reject if this cell is already an exit.
         let packed = ((row as u32) << 8) | col as u32;
-        let already = EXITS.iter().any(|s| s.load(Ordering::Relaxed) == packed);
-        if already {
+        if EXITS.iter().any(|s| s.load(Ordering::Relaxed) == packed) {
             continue;
         }
 
-        // Open the exit wall.
+        // Tentatively open the exit wall so flood-fill sees the opening.
         open_wall(row, col, out_dir);
 
-        EXITS[placed].store(packed, Ordering::Relaxed);
-        placed += 1;
+        // Validate: every previously placed exit must be reachable from
+        // this candidate WITHOUT stepping through any other exit.
+        // We flood-fill from the candidate cell, treating all other
+        // already-placed exit cells as impassable walls.
+        let valid = exits_independently_reachable(row, col, placed);
+
+        if valid {
+            EXITS[placed].store(packed, Ordering::Relaxed);
+            placed += 1;
+        } else {
+            // Undo the wall opening — close the wall again.
+            WALLS[row * W + col].fetch_and(!out_dir, Ordering::Relaxed);
+        }
     }
 
     // ── Place player: random interior cell far from all exits ─────────────
