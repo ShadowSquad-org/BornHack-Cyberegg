@@ -43,16 +43,37 @@ static UPTIME_TICKS: AtomicU32 = AtomicU32::new(0);
 // ---------------------------------------------------------------------------
 
 /// Get the current game tick (uptime-based, starts at 0 on boot).
-/// 1 tick = 10 seconds.  Uses embassy uptime when available.
+/// 1 tick = 10 seconds.  Uses embassy uptime on hardware, the std
+/// monotonic clock in the simulator (so animations / hatching /
+/// stat decay actually progress when running `make sim`), and the
+/// manually-advanced `UPTIME_TICKS` counter elsewhere (tests).
 pub fn now_tick() -> u32 {
     #[cfg(feature = "embassy-base")]
     {
         (embassy_time::Instant::now().as_secs() / 10) as u32
     }
-    #[cfg(not(feature = "embassy-base"))]
+    #[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+    {
+        (sim_elapsed_ms() / 10_000) as u32
+    }
+    #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
     {
         UPTIME_TICKS.load(Ordering::Relaxed)
     }
+}
+
+/// Milliseconds elapsed since the simulator process started.  Pinned
+/// to a `OnceLock<Instant>` so every call returns wall-clock-monotonic
+/// values from the same epoch.  Used by `now_tick` (10 s per tick)
+/// and by the in-game sprite-frame pacer (sub-tick resolution for
+/// visible animation).
+#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+pub fn sim_elapsed_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    start.elapsed().as_millis() as u64
 }
 
 /// Advance the uptime tick by `delta` ticks (for tests/simulator only).

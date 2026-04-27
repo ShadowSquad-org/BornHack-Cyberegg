@@ -316,6 +316,38 @@ where
         crate::draw_battery_icon(display, 128, 2, pct)?;
     }
 
+    // Sim-only sprite blit: in firmware the async `render()` blits sprites
+    // from FAT12 between display refreshes; the simulator has no flash, so
+    // we resolve PCX assets directly from `assets/to-badge/` here.  Drawn
+    // before icons/modals so the UI overlays it the same way it would on
+    // hardware.  Sprite frame is driven from wall-clock elapsed time so
+    // multi-frame animations actually cycle.
+    #[cfg(feature = "simulator")]
+    {
+        use engine::anim_files;
+        if !lifecycle::is_started() {
+            sprite_loader::blit_pcx_sim(display, &anim_files::start_screen_filename(), 0, 0);
+        } else {
+            let kind = lifecycle::pet_kind();
+            let anim = lifecycle::display_anim();
+            let count = anim_files::frame_count(kind, anim);
+            if count > 0 {
+                // ~1.5 s per sprite frame, matching the firmware sprite
+                // tick.  Hatching clamps to the last frame instead of
+                // wrapping (same rule as embassy.rs::display_loop).
+                let elapsed_ms = lifecycle::sim_elapsed_ms();
+                let raw = (elapsed_ms / 1500) as u32;
+                let frame = if matches!(anim, engine::DisplayAnim::Hatching { .. }) {
+                    raw.min(count.saturating_sub(1) as u32) as u8
+                } else {
+                    (raw % count as u32) as u8
+                };
+                let name = anim_files::anim_filename(kind, anim, frame);
+                sprite_loader::blit_pcx_sim(display, &name, 0, PET_AREA_TOP as i32);
+            }
+        }
+    }
+
     // ── Not started ──────────────────────────────────────────────────────
     if !lifecycle::is_started() {
         // Start screen graphic is blitted by render(); only battery shown here.

@@ -28,7 +28,6 @@ const DISP_HEIGHT: usize = 152;
 const DISP_ROW_STRIDE: usize = DISP_WIDTH / 8;
 
 /// PCX header size.
-#[cfg(feature = "embassy-base")]
 const PCX_HEADER_SIZE: usize = 128;
 
 /// Maximum number of sprite files.
@@ -121,17 +120,15 @@ pub fn frame_count() -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// PCX header
+// PCX header (shared between embedded blit_file and the simulator helper)
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "embassy-base")]
 struct PcxInfo {
     width: u16,
     height: u16,
     bytes_per_line: u16,
 }
 
-#[cfg(feature = "embassy-base")]
 fn parse_pcx_header(hdr: &[u8]) -> Option<PcxInfo> {
     if hdr.len() < PCX_HEADER_SIZE {
         return None;
@@ -175,7 +172,6 @@ fn parse_pcx_header(hdr: &[u8]) -> Option<PcxInfo> {
 /// `src` is the compressed data starting at the current position.
 /// `dst` receives exactly `bytes_per_line` decoded bytes.
 /// Returns the number of bytes consumed from `src`.
-#[cfg(feature = "embassy-base")]
 fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
     let mut si = 0;
     let mut di = 0;
@@ -355,4 +351,95 @@ pub async fn blit_file(display: &mut EpdGfx<'_>, file: &fat12::FileRef, x: i32, 
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Simulator helper — load + blit a PCX from the host filesystem
+// ---------------------------------------------------------------------------
+//
+// The embedded path streams sprites from the FAT12 partition on QSPI flash;
+// the simulator has no flash, so it loads PCX bytes directly from
+// `<CARGO_MANIFEST_DIR>/assets/to-badge/<name>.PCX`.  Path is resolved at
+// compile time so the working directory at run time doesn't matter.
+
+#[cfg(feature = "simulator")]
+const SIM_ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/to-badge/");
+
+/// Convert an FAT12 8.3 padded filename like `b"010F00  PCX"` to the
+/// dotted form `"010F00.PCX"`.
+#[cfg(feature = "simulator")]
+fn fat_name_to_dotted(name: &[u8; 11]) -> std::string::String {
+    use std::string::String;
+    let mut out = String::with_capacity(12);
+    for &b in &name[..8] {
+        if b != b' ' {
+            out.push(b as char);
+        }
+    }
+    out.push('.');
+    for &b in &name[8..11] {
+        if b != b' ' {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+/// Blit a PCX file from `assets/to-badge/<name>.PCX` onto a `DrawTarget`.
+/// Silently does nothing if the file is missing or malformed — same
+/// "best effort" stance as the embedded blitter.
+///
+/// Used by the simulator binary; the embedded firmware uses
+/// [`blit_file`] which streams from FAT12 instead.
+#[cfg(feature = "simulator")]
+pub fn blit_pcx_sim<D>(display: &mut D, name: &[u8; 11], x: i32, y: i32)
+where
+    D: embedded_graphics::draw_target::DrawTarget<Color = crate::TriColor>,
+{
+    use embedded_graphics::Pixel;
+    use embedded_graphics::geometry::Point;
+
+    let path = std::format!("{}{}", SIM_ASSET_DIR, fat_name_to_dotted(name));
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if bytes.len() < PCX_HEADER_SIZE {
+        return;
+    }
+    let info = match parse_pcx_header(&bytes[..PCX_HEADER_SIZE]) {
+        Some(i) => i,
+        None => return,
+    };
+    let bpl = info.bytes_per_line as usize;
+    let pcx_w = info.width as i32;
+    let pcx_h = info.height as i32;
+
+    let mut data = &bytes[PCX_HEADER_SIZE..];
+    let mut line = std::vec![0u8; bpl];
+    let mut pixels: std::vec::Vec<Pixel<crate::TriColor>> = std::vec::Vec::new();
+
+    for pcx_row in 0..pcx_h {
+        let consumed = decode_rle_line(data, &mut line, bpl);
+        data = &data[consumed.min(data.len())..];
+
+        let screen_y = y + pcx_row;
+        for pixel_x in 0..pcx_w {
+            let screen_x = x + pixel_x;
+            let byte_idx = pixel_x as usize / 4;
+            let shift = 6 - (pixel_x as usize % 4) * 2;
+            let val = (line[byte_idx] >> shift) & 0x03;
+
+            // Palette: 00=black, 01=red, 10=white, 11=transparent.
+            let color = match val {
+                0b00 => crate::BLACK,
+                0b01 => crate::RED,
+                0b10 => crate::WHITE,
+                _ => continue,
+            };
+            pixels.push(Pixel(Point::new(screen_x, screen_y), color));
+        }
+    }
+
+    let _ = display.draw_iter(pixels);
 }

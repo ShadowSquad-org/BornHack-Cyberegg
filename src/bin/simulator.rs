@@ -53,15 +53,42 @@ fn key_to_button(k: Keycode) -> Option<ButtonId> {
 }
 
 fn main() -> Result<(), core::convert::Infallible> {
+    use std::time::{Duration, Instant};
+
     let mut display: SimulatorDisplay<Rgb888> = SimulatorDisplay::new(Size::new(152, 152));
     let mut window = Window::new("BornPets simulator", &OutputSettings::default());
 
     let health_str = "sim";
     let bat_prc: u8 = 85;
 
+    // ~5 fps redraw cadence — fast enough for visible sprite animation
+    // (firmware advances frames roughly every 1.5 s) but slow enough to
+    // keep CPU use trivial.  The wall-clock used by `now_tick` ticks
+    // independently of the redraw rate, so stat decay and hatching
+    // progress at firmware speed regardless of this number.
+    let frame_period = Duration::from_millis(200);
+    let mut next_frame = Instant::now() + frame_period;
     let mut need_redraw = true;
 
     'running: loop {
+        let now = Instant::now();
+        if now >= next_frame {
+            next_frame = now + frame_period;
+
+            // Run one game cycle so engine timers (stat decay, action
+            // cooldowns, hatching countdown, leaving timer) progress.
+            // On hardware this is invoked from the embassy display loop
+            // and from a few in-renderer call sites; here we drive it
+            // ourselves at the sim frame rate.
+            #[cfg(feature = "game")]
+            let _ = hello_graphics::game::lifecycle::cycle();
+
+            // Always redraw at frame rate so any time-driven animation
+            // (sprite frame cycle, watch face minute roll, hatching
+            // countdown text) stays current.
+            need_redraw = true;
+        }
+
         if need_redraw {
             display.clear(Rgb888::new(255, 255, 255)).unwrap();
             draw_graphics(&mut TriColorDisplay(&mut display), health_str, &bat_prc).unwrap();
@@ -85,6 +112,9 @@ fn main() -> Result<(), core::convert::Infallible> {
                 _ => {}
             }
         }
+
+        // Yield CPU briefly so we don't busy-spin between events.
+        std::thread::sleep(Duration::from_millis(16));
     }
 
     Ok(())
