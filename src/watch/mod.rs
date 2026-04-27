@@ -23,6 +23,7 @@
 
 mod alarm;
 mod clock;
+mod ics;
 
 // ── Public re-exports — keep external paths stable ──────────────────────────
 //

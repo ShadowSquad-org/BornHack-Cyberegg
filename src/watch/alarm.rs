@@ -240,12 +240,15 @@ pub fn alarm_days_n(slot: usize) -> u8 {
 pub fn alarm_melody_n(slot: usize) -> u8 {
     ALARM_MELODY[s(slot)].load(Ordering::Relaxed)
 }
+#[allow(dead_code)] // only used by the trigger / future ICS importer
 pub fn alarm_year_n(slot: usize) -> u16 {
     ALARM_YEAR[s(slot)].load(Ordering::Relaxed)
 }
+#[allow(dead_code)]
 pub fn alarm_month_n(slot: usize) -> u8 {
     ALARM_MONTH[s(slot)].load(Ordering::Relaxed)
 }
+#[allow(dead_code)]
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
@@ -257,6 +260,7 @@ pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
 
 /// Returns `true` if `slot` is a one-shot calendar alarm (year != 0) bound to
 /// a specific date, rather than a recurring weekly alarm.
+#[allow(dead_code)] // only used by check_and_fire_alarm under embassy-base
 pub fn alarm_is_one_shot_n(slot: usize) -> bool {
     alarm_year_n(slot) != 0
 }
@@ -482,8 +486,10 @@ static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
 
 /// Walks all `N_ALARMS` slots; for each enabled slot, fires the buzzer if
 /// the local time matches and either:
-///  * the slot is a one-shot calendar alarm (`year != 0`) whose date is today, or
-///  * the slot is a recurring weekly alarm (`year == 0`) whose day mask covers today.
+///  * the slot is a one-shot calendar alarm (`year != 0`) whose date is today,
+///    or
+///  * the slot is a recurring weekly alarm (`year == 0`) whose day mask covers
+///    today.
 ///
 /// One-shot slots auto-disable after firing so they don't ring again on the
 /// next reboot if the badge is rebooted while still on the same calendar day.
