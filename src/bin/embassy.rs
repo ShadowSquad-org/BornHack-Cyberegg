@@ -121,6 +121,10 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "watch")]
     {
         bornhack_aegg::watch::load_settings_from_kv().await;
+        // If `ALARMS.ICS` is present on the FAT12 partition, populate slots
+        // 1..N_ALARMS with one-shot calendar alarms.  Runs *after* the kv
+        // load so the user's primary alarm (slot 0) isn't overwritten.
+        bornhack_aegg::watch::import_alarms_from_fat12().await;
         spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
         spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
     }

@@ -99,6 +99,51 @@ pub async fn settings_persister_task() {
     }
 }
 
+/// At boot: if a file named `ALARMS.ICS` exists on the FAT12 partition,
+/// parse its `VEVENT` blocks and populate alarm slots 1..N_ALARMS with
+/// one-shot date alarms.  Slot 0 is reserved for the user's manual alarm
+/// and is left untouched.
+///
+/// Drop the file on the badge by mounting its USB mass-storage partition
+/// (hold Execute on plug-in if you need DFU first) and copying any
+/// iCalendar export — the schedule from <https://bornhack.dk/.../program/ics/>
+/// works directly.  Times are taken at face value as local time; if your
+/// ICS is in UTC you'll be off by `TIMEZONE_OFFSET` hours.
+///
+/// Re-runs on every boot, overwriting whatever was in slots 1..N_ALARMS.
+/// The default melody (`ALARM` beep-beep) is applied; the trigger
+/// auto-disables each one-shot slot after firing, so old events stop
+/// alarming themselves at midnight.
+#[cfg(feature = "embassy-base")]
+pub async fn import_alarms_from_fat12() {
+    use crate::fw::fat12;
+
+    let Some(name) = fat12::to_8_3("ALARMS.ICS") else {
+        return;
+    };
+    let Ok(file) = fat12::find_file(&name).await else {
+        return; // not present — nothing to do
+    };
+
+    let mut buf = [0u8; 4096];
+    let n = match fat12::read_file(&file, 0, &mut buf).await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+
+    let mut slot = 1usize; // slot 0 stays reserved for the manual alarm
+    for event in ics::Parser::new(&buf[..n]) {
+        if slot >= alarm::N_ALARMS {
+            break;
+        }
+        alarm::set_alarm_time_n(slot, event.hour, event.minute);
+        alarm::set_alarm_date_n(slot, event.year, event.month, event.day);
+        alarm::set_alarm_enabled_n(slot, true);
+        slot += 1;
+    }
+    defmt::info!("imported {} alarm(s) from ALARMS.ICS", slot - 1);
+}
+
 // ── Top-level draw ──────────────────────────────────────────────────────────
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
