@@ -450,7 +450,6 @@ fn generate() {
             _ => EAST,
         };
 
-        let cell_idx = row * W + col;
         // Check this cell is not already an exit.
         let packed = ((row as u32) << 8) | col as u32;
         let already = EXITS.iter().any(|s| s.load(Ordering::Relaxed) == packed);
