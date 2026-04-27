@@ -93,6 +93,12 @@ static WON: AtomicBool = AtomicBool::new(false);
 /// Number of steps taken.
 static STEPS: AtomicU32 = AtomicU32::new(0);
 
+/// How far through the cheat sequence the player has typed (0 = not started).
+static CHEAT_POS: AtomicU8 = AtomicU8::new(0);
+
+/// Whether the cheat has been activated (full maze revealed).
+static REVEALED: AtomicBool = AtomicBool::new(false);
+
 // Walls: CELLS cells × 4 bits each. We store the open-wall nibble for each
 // cell as a u8 in a [AtomicU8; CELLS].  The array is 324 bytes — well within
 // the ~250 KB RAM budget of the nRF52840.
@@ -144,43 +150,60 @@ pub fn close() {
 
 // ── Movement ──────────────────────────────────────────────────────────────────
 
-pub fn move_up() {
-    if WON.load(Ordering::Relaxed) {
-        close();
-        return;
+// ── Cheat code ───────────────────────────────────────────────────────────────
+//
+// Sequence: Up Up Down Execute Left Left Right
+// Encoded as: 0=Up, 1=Down, 2=Left, 3=Right, 4=Execute
+
+const CHEAT_SEQ: [u8; 7] = [0, 0, 1, 4, 2, 2, 3];
+
+/// Feed the next button code into the cheat detector.
+/// If the full sequence is completed, reveals the whole maze.
+fn check_cheat(code: u8) {
+    let pos = CHEAT_POS.load(Ordering::Relaxed) as usize;
+    if CHEAT_SEQ[pos] == code {
+        let next = pos + 1;
+        if next == CHEAT_SEQ.len() {
+            // Sequence complete — reveal everything.
+            REVEALED.store(true, Ordering::Relaxed);
+            CHEAT_POS.store(0, Ordering::Relaxed);
+        } else {
+            CHEAT_POS.store(next as u8, Ordering::Relaxed);
+        }
+    } else {
+        // Wrong button — reset, but check if this button starts the sequence.
+        CHEAT_POS.store(if CHEAT_SEQ[0] == code { 1 } else { 0 }, Ordering::Relaxed);
     }
+}
+
+pub fn move_up() {
+    if WON.load(Ordering::Relaxed) { close(); return; }
+    check_cheat(0);
     try_move_dir(0); // North
 }
 
 pub fn move_down() {
-    if WON.load(Ordering::Relaxed) {
-        close();
-        return;
-    }
+    if WON.load(Ordering::Relaxed) { close(); return; }
+    check_cheat(1);
     try_move_dir(2); // South
 }
 
 pub fn move_left() {
-    if WON.load(Ordering::Relaxed) {
-        close();
-        return;
-    }
+    if WON.load(Ordering::Relaxed) { close(); return; }
+    check_cheat(2);
     try_move_dir(3); // West
 }
 
 pub fn move_right() {
-    if WON.load(Ordering::Relaxed) {
-        close();
-        return;
-    }
+    if WON.load(Ordering::Relaxed) { close(); return; }
+    check_cheat(3);
     try_move_dir(1); // East
 }
 
 /// Fire / Execute on the win screen also closes.
 pub fn activate() {
-    if WON.load(Ordering::Relaxed) {
-        close();
-    }
+    if WON.load(Ordering::Relaxed) { close(); return; }
+    check_cheat(4);
 }
 
 // ── Movement helpers ──────────────────────────────────────────────────────────
@@ -350,6 +373,8 @@ fn generate() {
     clear_walls();
     gen_clear();
     clear_visited();
+    CHEAT_POS.store(0, Ordering::Relaxed);
+    REVEALED.store(false, Ordering::Relaxed);
 
     // Pick a random start cell for DFS.
     let start_row = (rng_next() as usize) % H;
@@ -524,6 +549,15 @@ where
     let packed = PLAYER.load(Ordering::Relaxed);
     let player_row = (packed >> 8) as usize;
     let player_col = (packed & 0xFF) as usize;
+
+    // If the cheat is active, mark every cell as visited before drawing.
+    if REVEALED.load(Ordering::Relaxed) {
+        for r in 0..H {
+            for c in 0..W {
+                mark_visited(r, c);
+            }
+        }
+    }
 
     // Draw each cell.
     for row in 0..H {
