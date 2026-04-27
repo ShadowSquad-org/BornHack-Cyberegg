@@ -86,6 +86,13 @@ pub enum MenuItemKind {
         inc: fn(),
         dec: fn(),
     },
+    /// Read-only display row with a dynamically-formatted label.  Fire is a
+    /// no-op; navigation skips no rows around it.  Used for live data the
+    /// user can only observe — e.g. imported calendar-event alarm slots.
+    /// `MenuItem::label` is ignored for this variant.
+    Info {
+        format: fn(&mut heapless::String<24>),
+    },
     /// Destructive action that first shows a full-screen "Are you sure?"
     /// confirmation dialog. `prompt` is the action name shown in the dialog;
     /// `action` runs only if the user presses Fire/Execute to confirm.
@@ -276,6 +283,9 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
+            // Info rows are read-only — Fire is a no-op, like a separator
+            // but with text.
+            MenuItemKind::Info { .. } => {}
             MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. } => {
                 self.stepper_active = true;
             }
@@ -1146,6 +1156,120 @@ static ALARM_ITEMS: [MenuItem; 6] = [
     },
 ];
 
+// ── Events submenu (imported one-shot alarms in slots 1..N_ALARMS) ──────────
+
+/// Format one slot's read-only label into the menu buffer.
+///   * disabled         → `1: empty`
+///   * recurring (slot 0 only here, but kept for completeness) → `1: 14:30 daily`
+///   * one-shot         → `1: 14:30 08-16`
+#[cfg(feature = "watch")]
+fn fmt_alarm_slot_n(buf: &mut heapless::String<24>, slot: usize) {
+    use core::fmt::Write;
+    if !crate::watch::alarm_enabled_n(slot) {
+        let _ = write!(buf, "{}: empty", slot);
+        return;
+    }
+    let h = crate::watch::alarm_hour_n(slot);
+    let m = crate::watch::alarm_minute_n(slot);
+    if crate::watch::alarm_is_one_shot_n(slot) {
+        let _ = write!(
+            buf,
+            "{}: {:02}:{:02} {:02}-{:02}",
+            slot,
+            h,
+            m,
+            crate::watch::alarm_month_n(slot),
+            crate::watch::alarm_day_n(slot),
+        );
+    } else {
+        let _ = write!(buf, "{}: {:02}:{:02} daily", slot, h, m);
+    }
+}
+
+#[cfg(feature = "watch")]
+mod alarm_slot_formatters {
+    use super::fmt_alarm_slot_n;
+    pub fn fmt_1(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 1)
+    }
+    pub fn fmt_2(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 2)
+    }
+    pub fn fmt_3(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 3)
+    }
+    pub fn fmt_4(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 4)
+    }
+    pub fn fmt_5(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 5)
+    }
+    pub fn fmt_6(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 6)
+    }
+    pub fn fmt_7(b: &mut heapless::String<24>) {
+        fmt_alarm_slot_n(b, 7)
+    }
+}
+
+#[cfg(feature = "watch")]
+static EVENTS_ITEMS: [MenuItem; 10] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_1,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_2,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_3,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_4,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_5,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_6,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Info {
+            format: alarm_slot_formatters::fmt_7,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::Separator,
+    },
+    MenuItem {
+        label: || "Clear all",
+        kind: MenuItemKind::Action(crate::watch::clear_imported_alarms),
+    },
+];
+
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
@@ -1323,7 +1447,7 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
 ];
 
 #[cfg(feature = "watch")]
-const SETTINGS_ITEMS_LEN: usize = 9;
+const SETTINGS_ITEMS_LEN: usize = 10;
 #[cfg(not(feature = "watch"))]
 const SETTINGS_ITEMS_LEN: usize = 8;
 
@@ -1356,6 +1480,11 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "Alarm",
         kind: MenuItemKind::Submenu(&ALARM_ITEMS),
+    },
+    #[cfg(feature = "watch")]
+    MenuItem {
+        label: || "Events",
+        kind: MenuItemKind::Submenu(&EVENTS_ITEMS),
     },
     MenuItem {
         label: || "",
@@ -1763,12 +1892,15 @@ where
                             let _ = label.push_str("< ");
                         }
                     }
-                    // ValueStepper writes its own value via `format`; every other
-                    // kind uses the static `MenuItem::label` callback.
-                    if let MenuItemKind::ValueStepper { format, .. } = item.kind {
-                        format(&mut label);
-                    } else {
-                        let _ = label.push_str((item.label)());
+                    // ValueStepper / Info write their own value via `format`;
+                    // every other kind uses the static `MenuItem::label`
+                    // callback.
+                    match item.kind {
+                        MenuItemKind::ValueStepper { format, .. }
+                        | MenuItemKind::Info { format } => format(&mut label),
+                        _ => {
+                            let _ = label.push_str((item.label)());
+                        }
                     }
                     if matches!(item.kind, MenuItemKind::Submenu(_)) {
                         let _ = label.push_str(" >");

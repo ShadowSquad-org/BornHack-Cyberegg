@@ -31,9 +31,11 @@ mod ics;
 // them by their unqualified names.  The submodules are kept private so the
 // only entry points are the ones below.
 pub use alarm::{
-    alarm_day_enabled, alarm_days_label, alarm_dec_hour, alarm_dec_melody, alarm_dec_minute,
-    alarm_enabled_label, alarm_hour, alarm_inc_hour, alarm_inc_melody, alarm_inc_minute,
-    alarm_minute, alarm_toggle_day, alarm_toggle_enabled, alarm_tone_label,
+    N_ALARMS, alarm_day_enabled, alarm_day_n, alarm_days_label, alarm_dec_hour, alarm_dec_melody,
+    alarm_dec_minute, alarm_enabled_label, alarm_enabled_n, alarm_hour, alarm_hour_n,
+    alarm_inc_hour, alarm_inc_melody, alarm_inc_minute, alarm_is_one_shot_n, alarm_minute,
+    alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled, alarm_tone_label,
+    alarm_year_n, clear_imported_alarms,
 };
 #[cfg(feature = "embassy-base")]
 pub use alarm::{alarm_ring_timeout_task, check_and_fire_alarm, dismiss_alarm_if_ringing};

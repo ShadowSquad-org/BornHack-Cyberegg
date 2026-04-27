@@ -301,6 +301,21 @@ pub fn set_alarm_melody_n(slot: usize, melody: u8) {
     super::signal_settings_dirty();
 }
 
+/// Clear all imported alarms — disable + zero-date slots 1..N_ALARMS.  Slot 0
+/// (the user's manual alarm) is left alone.  Used by the Events menu to
+/// undo an `ALARMS.ICS` import without rebooting; the next boot would
+/// overwrite slots 1..7 again from the file anyway, so this is mostly for
+/// "I changed my mind, take them off the watch face *now*" flows.
+pub fn clear_imported_alarms() {
+    for slot in 1..N_ALARMS {
+        ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
+        ALARM_YEAR[slot].store(0, Ordering::Relaxed);
+        ALARM_MONTH[slot].store(0, Ordering::Relaxed);
+        ALARM_DAY[slot].store(0, Ordering::Relaxed);
+    }
+    super::signal_settings_dirty();
+}
+
 // ── Slot-0 (primary) accessors — backward-compatible thin wrappers ──────────
 
 pub fn alarm_hour() -> u8 {
