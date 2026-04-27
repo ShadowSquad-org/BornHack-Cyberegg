@@ -19,11 +19,14 @@ steps:
       # gcc-arm-none-eabi: arm-none-eabi-* utilities (for size reporting).
       # libclang-dev: nrf-mpsl-sys / nrf-sdc-sys use bindgen, which links libclang.
       - apt-get install -y libsdl2-dev gcc-arm-none-eabi libclang-dev
-      - rustup component add rustfmt
+      # `.rustfmt.toml` opts into nightly-only features (imports_granularity,
+      # group_imports, wrap_comments, …), so the fmt check needs the nightly
+      # toolchain.  The build steps still use stable.
+      - rustup toolchain install nightly --profile minimal --component rustfmt
       - rustup target add thumbv7em-none-eabihf
       # Format check on the main package only — vendored crates under
       # vendor/* are third-party copies we don't own.
-      - cargo fmt -p hello-graphics --check
+      - cargo +nightly fmt -p hello-graphics --check
       # Build the host simulator (SDL2-driven) and the nRF52840 firmware
       # in the same `embassy` configuration the egg actually flashes.
       - cargo build --bin simulator --features simulator
