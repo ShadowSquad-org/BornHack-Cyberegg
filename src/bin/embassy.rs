@@ -263,6 +263,15 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
 
+    // Boot-time full blank: clear both planes to white and push with the
+    // tri-color waveform so red ink particles get cycled too.  Wipes any
+    // residual ghosting from the previous power-on session before the
+    // first fast-LUT refresh paints over it.
+    let _ = display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc().await;
+    let _ = display.deep_sleep().await;
+
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
     // already running when the contact store needs to blink the green LED
     // during a legacy-format wipe.
@@ -387,10 +396,24 @@ async fn display_loop(
             health_err!(epd, "Failed to draw graphics");
         }
 
+        // Mini-games set `FULL_REFRESH_PENDING` on close so the next
+        // refresh clears any residual ghosting from their many fast
+        // updates.  We use `update_tc` for that path because plain
+        // `update_bw` only cycles the B/W waveform — any red pixels
+        // left in the panel (e.g. minigame cursor before it was
+        // changed to dithered B/W) would otherwise stick around.
+        // Consume the flag with `swap` so the upgrade applies once.
+        let do_full = hello_graphics::FULL_REFRESH_PENDING
+            .swap(false, core::sync::atomic::Ordering::Relaxed);
+
         let sprite_advance = match select(
             async {
                 let _ = display.reset().await;
-                let _ = display.update_bw(UpdateMode::Mode1).await;
+                if do_full {
+                    let _ = display.update_tc().await;
+                } else {
+                    let _ = display.update_bw(UpdateMode::Mode1).await;
+                }
                 let _ = display.deep_sleep().await;
             },
             wait_display_event(button_rcvr, active_screen),
