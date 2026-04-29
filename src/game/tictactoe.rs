@@ -113,7 +113,7 @@ pub fn place() -> bool {
         // Award inspiration on win or draw.
         let r = RESULT.load(Ordering::Relaxed);
         if r == 1 || r == 3 {
-            super::lifecycle::award_inspiration();
+            super::lifecycle::award_inspiration(super::engine::MiniGame::TicTacToe);
             super::show_toast(super::Toast::Inspired);
         }
         close();
@@ -307,14 +307,11 @@ where
         let x = BOARD_X + col * CELL;
         let y = BOARD_Y + row * CELL;
 
-        // Cursor highlight (red border).
+        // Cursor highlight: dithered B/W ring tracing the same 3 px
+        // box the red stroke previously drew.  Pure B&W so it survives
+        // the fast LUT refresh.
         if i == cursor && result == 0 {
-            Rectangle::new(
-                Point::new(x + 2, y + 2),
-                Size::new((CELL - 4) as u32, (CELL - 4) as u32),
-            )
-            .into_styled(PrimitiveStyle::with_stroke(crate::RED, 3))
-            .draw(display)?;
+            draw_cursor_ring(display, x + 2, y + 2, CELL - 4)?;
         }
 
         match board[i] {
@@ -341,12 +338,12 @@ where
     Ok(())
 }
 
-/// Draw an X mark (two diagonal lines, red).
+/// Draw an X mark (two diagonal black lines).
 fn draw_x<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let style = PrimitiveStyle::with_stroke(crate::RED, 3);
+    let style = PrimitiveStyle::with_stroke(BLACK, 3);
     Line::new(Point::new(x, y), Point::new(x + size, y + size))
         .into_styled(style)
         .draw(display)?;
@@ -356,7 +353,7 @@ where
     Ok(())
 }
 
-/// Draw an O mark (rectangle outline, black).
+/// Draw an O mark (black rectangle outline).
 fn draw_o<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -365,4 +362,27 @@ where
         .into_styled(PrimitiveStyle::with_stroke(BLACK, 3))
         .draw(display)?;
     Ok(())
+}
+
+/// Dithered (50 % checkerboard) B/W ring around a cell — same 3 px
+/// border thickness as the previous red stroke, but pure black/white
+/// so the fast LUT refresh keeps it visible during play.
+fn draw_cursor_ring<D>(display: &mut D, x: i32, y: i32, size: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    const THICK: i32 = 3;
+    let pixels = (0..size).flat_map(move |dy| {
+        (0..size).filter_map(move |dx| {
+            let on_border = dx < THICK || dy < THICK || dx >= size - THICK || dy >= size - THICK;
+            if !on_border {
+                return None;
+            }
+            let px = x + dx;
+            let py = y + dy;
+            let color = if (px + py) & 1 == 0 { BLACK } else { WHITE };
+            Some(Pixel(Point::new(px, py), color))
+        })
+    });
+    display.draw_iter(pixels)
 }

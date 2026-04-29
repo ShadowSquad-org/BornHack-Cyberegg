@@ -89,6 +89,19 @@ use embassy_sync::signal::Signal;
 #[cfg(feature = "simulator")]
 pub use tricolor::{BLACK, RED, TriColor, WHITE};
 
+/// Player-menu song indices into [`crate::fw::buzzer::MELODIES`].
+/// Defined here, not in `fw::buzzer`, so the `game::modal` music menu
+/// can reference them on simulator builds (which don't link
+/// `fw::buzzer`) without re-declaring the values.  `fw::buzzer` keeps
+/// its `MELODIES` array in this order; reorder one and reorder the
+/// other.
+pub const SONG_STARTUP_INDEX: u8 = 0;
+pub const SONG_RICKROLL_INDEX: u8 = 1;
+pub const SONG_IMPERIAL_MARCH_INDEX: u8 = 2;
+pub const SONG_SANDSTORM_INDEX: u8 = 3;
+pub const SONG_PINK_PANTHER_INDEX: u8 = 4;
+pub const SONG_TROLOLO_INDEX: u8 = 5;
+
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
@@ -553,9 +566,8 @@ where
 /// - Body: 20w × 12h, 2px border
 /// - Fill: proportional to `pct`, fills right-to-left (full = all black)
 /// - Below 5%: rendered in red
-/// - Charging: a lightning bolt drawn in the centre of the body in
-///   inverted pixels (white over the black fill, black over the
-///   empty white interior)
+/// - Charging: a lightning bolt drawn in the centre of the body in inverted
+///   pixels (white over the black fill, black over the empty white interior)
 pub fn draw_battery_icon<D>(display: &mut D, x: i32, y: i32, pct: u8) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,

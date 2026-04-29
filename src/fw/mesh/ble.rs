@@ -36,12 +36,11 @@ impl CryptoRng for TrngSeed {}
 use embassy_executor::Spawner;
 use embassy_nrf::mode::Blocking;
 use embassy_nrf::{Peri, bind_interrupts, peripherals, rng};
-use meshcore;
-use meshcore_companion as companion;
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, SoftdeviceController};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
+use {meshcore, meshcore_companion as companion};
 
 use super::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
 use super::{channels, contacts, msg_queue, settings};

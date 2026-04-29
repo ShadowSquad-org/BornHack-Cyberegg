@@ -1,10 +1,8 @@
 use defmt::{todo, *};
-use defmt_rtt as _;
-use embassy_nrf as _;
 use embassy_nrf::nfct::{Config as NfcConfig, NfcId, NfcT};
 use embassy_nrf::peripherals::NFCT;
 use embassy_nrf::{Peri, bind_interrupts, nfct};
-use panic_probe as _;
+use {defmt_rtt as _, embassy_nrf as _, panic_probe as _};
 
 use super::iso14443::iso14443_3;
 use super::iso14443::iso14443_4::{Card, IsoDep};

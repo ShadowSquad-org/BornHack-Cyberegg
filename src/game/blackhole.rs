@@ -20,8 +20,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use crate::ui;
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor, WHITE, ui};
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -67,7 +66,8 @@ static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 /// Difficulty-picker selection (0 = Easy, 1 = Hard).
 static MENU_POS: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Public API
+// ────────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
@@ -96,7 +96,8 @@ pub fn close() {
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
-// ── Index helpers ─────────────────────────────────────────────────────────────
+// ── Index helpers
+// ─────────────────────────────────────────────────────────────
 
 const ROW_START: [u8; ROWS as usize + 1] = [0, 1, 3, 6, 10, 15, 21];
 
@@ -124,7 +125,8 @@ fn cell_centre(idx: u8) -> Point {
     Point::new(x, y)
 }
 
-// ── Cursor navigation ─────────────────────────────────────────────────────────
+// ── Cursor navigation
+// ─────────────────────────────────────────────────────────
 
 pub fn cursor_left() {
     if MENU_OPEN.load(Ordering::Relaxed) {
@@ -187,7 +189,8 @@ pub fn cursor_down() {
     CURSOR.store(idx_of(r + 1, c), Ordering::Relaxed);
 }
 
-// ── Activate (Fire) ───────────────────────────────────────────────────────────
+// ── Activate (Fire)
+// ───────────────────────────────────────────────────────────
 
 pub fn activate() {
     // Difficulty picker open: confirm selection and start the game.
@@ -201,7 +204,7 @@ pub fn activate() {
     if result != 0 {
         // Game over: any Fire closes.  Award inspiration on win or tie.
         if result == 1 || result == 3 {
-            super::lifecycle::award_inspiration();
+            super::lifecycle::award_inspiration(super::engine::MiniGame::BlackHole);
             super::show_toast(super::Toast::Inspired);
         }
         close();
@@ -277,7 +280,8 @@ fn read_board() -> [u8; CELLS] {
     b
 }
 
-// ── Adjacency ─────────────────────────────────────────────────────────────────
+// ── Adjacency
+// ─────────────────────────────────────────────────────────────────
 
 /// Fill `out` with neighbour indices of `idx` and return the count.
 fn neighbours(idx: u8, out: &mut [u8; 6]) -> usize {
@@ -419,11 +423,7 @@ fn ai_play(m: u8) {
         // Normalise so candidates aren't biased by the count of
         // remaining empty cells (it's the same for all candidates this
         // turn, but stay defensive).
-        let norm = if weight > 0 {
-            score * 1000 / weight
-        } else {
-            0
-        };
+        let norm = if weight > 0 { score * 1000 / weight } else { 0 };
 
         // Connectivity + territory bonuses only apply on Hard.  Easy
         // mode uses the positional score only — beatable with
@@ -478,7 +478,8 @@ fn ai_play(m: u8) {
     BOARD[pick].store(PLAYER_B_BIT | n, Ordering::Relaxed);
 }
 
-// ── Drawing ───────────────────────────────────────────────────────────────────
+// ── Drawing
+// ───────────────────────────────────────────────────────────────────
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -559,13 +560,8 @@ where
             let _ = core::fmt::Write::write_fmt(&mut s, format_args!("Place {}", n));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
-            Text::with_text_style(
-                "You = white",
-                Point::new(76, 138),
-                footer_font,
-                centred_top,
-            )
-            .draw(display)?;
+            Text::with_text_style("You = white", Point::new(76, 138), footer_font, centred_top)
+                .draw(display)?;
         }
         1 => {
             let mut s: heapless::String<24> = heapless::String::new();
@@ -593,13 +589,8 @@ where
             let _ = core::fmt::Write::write_fmt(&mut s, format_args!("Tie {} - {}", sa, sb));
             Text::with_text_style(s.as_str(), Point::new(76, 124), footer_font, centred_top)
                 .draw(display)?;
-            Text::with_text_style(
-                "+inspired",
-                Point::new(76, 138),
-                footer_font,
-                centred_top,
-            )
-            .draw(display)?;
+            Text::with_text_style("+inspired", Point::new(76, 138), footer_font, centred_top)
+                .draw(display)?;
         }
     }
 
@@ -624,12 +615,7 @@ where
     const BORDER: u32 = 2;
     const ITEM_H: i32 = 18;
 
-    ui::draw_popover_frame(
-        display,
-        Point::new(MARGIN, 36),
-        Size::new(W, H),
-        BORDER,
-    )?;
+    ui::draw_popover_frame(display, Point::new(MARGIN, 36), Size::new(W, H), BORDER)?;
     let inner_x = MARGIN + BORDER as i32;
     let inner_y = 36 + BORDER as i32;
     let inner_w = W - BORDER * 2;
@@ -647,9 +633,12 @@ where
         let row_top = list_y + i as i32 * ITEM_H;
         let row_mid = row_top + ITEM_H / 2;
         if i == pos {
-            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
-                .into_styled(PrimitiveStyle::with_fill(BLACK))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(inner_x, row_top),
+                Size::new(inner_w, ITEM_H as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
             Text::with_text_style(
                 label,
                 Point::new(inner_x + 6, row_mid),
@@ -701,12 +690,7 @@ where
 /// variant in `mono_font::ascii`).  Draws the digit twice, second pass
 /// shifted 1 px right, so vertical strokes thicken — easier to read on
 /// a low-contrast EPD.
-fn draw_bold_number<D>(
-    display: &mut D,
-    s: &str,
-    p: Point,
-    color: TriColor,
-) -> Result<(), D::Error>
+fn draw_bold_number<D>(display: &mut D, s: &str, p: Point, color: TriColor) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {

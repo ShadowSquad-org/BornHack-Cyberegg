@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::HfclkSource;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
@@ -31,10 +30,10 @@ use hello_graphics::{
     BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
     draw_graphics, health_err, unix_now, with_health,
 };
-use panic_probe as _;
 use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
 use static_cell::StaticCell;
+use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // Main
@@ -385,8 +384,17 @@ async fn display_loop(
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
 
         // ── Game cycle: update engine, render animation ────────────────
+        // Reset the sprite-frame counter on animation change *before*
+        // the render so the new anim shows frame 0 immediately rather
+        // than waiting for the next sprite-tick fire.
         #[cfg(feature = "game")]
         if active_screen == hello_graphics::SCREEN_GAME {
+            let anim = hello_graphics::game::lifecycle::display_anim();
+            let id = hello_graphics::game::engine::anim_files::anim_id_for(anim);
+            if id != last_anim_id {
+                last_anim_id = id;
+                sprite_frame = 0;
+            }
             hello_graphics::game::render(display, sprite_frame).await;
         }
 
@@ -409,8 +417,8 @@ async fn display_loop(
         // left in the panel (e.g. minigame cursor before it was
         // changed to dithered B/W) would otherwise stick around.
         // Consume the flag with `swap` so the upgrade applies once.
-        let do_full = hello_graphics::FULL_REFRESH_PENDING
-            .swap(false, core::sync::atomic::Ordering::Relaxed);
+        let do_full =
+            hello_graphics::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
 
         let sprite_advance = match select(
             async {
@@ -436,18 +444,14 @@ async fn display_loop(
         led::set_led(&led::LED_RED, led::LedState::BlinkOnce);
 
         // Advance animation frame only when the sprite timer fired.
+        // Anim-change detection lives just before `render()` above so
+        // the reset is visible on the same frame as the change.
         #[cfg(feature = "game")]
         if sprite_advance {
             let anim = hello_graphics::game::lifecycle::display_anim();
             let kind = hello_graphics::game::lifecycle::pet_kind();
             let count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
-            // Reset to frame 0 whenever the animation changes so each
-            // new anim starts at its first frame.
-            let id = hello_graphics::game::engine::anim_files::anim_id_for(anim);
-            if id != last_anim_id {
-                last_anim_id = id;
-                sprite_frame = 0;
-            } else if count > 0 {
+            if count > 0 {
                 let next = sprite_frame + 1;
                 // During hatching, clamp to the last frame instead of wrapping.
                 let is_hatching = matches!(

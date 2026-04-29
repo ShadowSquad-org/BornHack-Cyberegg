@@ -293,7 +293,11 @@ where
         } else {
             (Row::Bottom, slot - 2)
         };
-        let cy = if matches!(row_kind, Row::Top) { TOP_CY } else { BOT_CY };
+        let cy = if matches!(row_kind, Row::Top) {
+            TOP_CY
+        } else {
+            BOT_CY
+        };
         let cx = ICON_CX[col as usize];
         let selected = nav.row == row_kind && nav.col == col;
         let name = engine::anim_files::menu_icon_filename(slot, selected);

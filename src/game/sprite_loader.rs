@@ -101,6 +101,7 @@ pub async fn init() {
                     continue;
                 }
                 total = total.saturating_add(1);
+                defmt::info!("sprite: catalogued {=[u8]:a}", &name[..]);
                 let Some(pp) = parse_hex_pair(name[0], name[1]) else {
                     continue;
                 };

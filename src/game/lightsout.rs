@@ -48,7 +48,8 @@ static SOLVED: AtomicBool = AtomicBool::new(false);
 /// `open()` start, but acts as an assert if `toggle()` is ever broken).
 static UNSOLVABLE: AtomicBool = AtomicBool::new(false);
 
-// ── Solvability test (Jaap Scherphuis 5×5 quiet-pattern parity) ───────────────
+// ── Solvability test (Jaap Scherphuis 5×5 quiet-pattern parity)
+// ───────────────
 //
 // 5×5 Lights Out's null-space has dimension 2.  Two row-major bitmasks
 // pick the cells whose XOR-parity must be even for the board to be
@@ -141,7 +142,7 @@ pub fn cursor_right() {
 pub fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
         // Puzzle already solved — Fire closes and awards reward.
-        super::lifecycle::award_inspiration();
+        super::lifecycle::award_inspiration(super::engine::MiniGame::LightsOut);
         super::show_toast(super::Toast::Inspired);
         close();
         return;
@@ -265,10 +266,8 @@ where
             let outer_h = CELL - 2;
             let pixels = (0..outer_h).flat_map(move |dy| {
                 (0..outer_w).filter_map(move |dx| {
-                    let on_border = dx < THICK
-                        || dy < THICK
-                        || dx >= outer_w - THICK
-                        || dy >= outer_h - THICK;
+                    let on_border =
+                        dx < THICK || dy < THICK || dx >= outer_w - THICK || dy >= outer_h - THICK;
                     if !on_border {
                         return None;
                     }
@@ -295,8 +294,13 @@ where
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Solved in {} moves!", moves));
         Text::with_text_style(buf.as_str(), Point::new(76, 134), font, centered).draw(display)?;
     } else if unsolvable {
-        Text::with_text_style("Unsolvable — Fire to exit", Point::new(76, 134), font, centered)
-            .draw(display)?;
+        Text::with_text_style(
+            "Unsolvable — Fire to exit",
+            Point::new(76, 134),
+            font,
+            centered,
+        )
+        .draw(display)?;
     } else {
         let mut buf: heapless::String<24> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Moves: {}", moves));

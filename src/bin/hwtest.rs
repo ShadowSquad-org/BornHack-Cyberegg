@@ -42,7 +42,6 @@
 #![no_std]
 #![no_main]
 
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::pwm::{DutyCycle, SimplePwm};
@@ -51,7 +50,7 @@ use embassy_nrf::saadc::{self, ChannelConfig, Saadc};
 use embassy_nrf::spim::{self, Frequency, Spim};
 use embassy_nrf::{bind_interrupts, peripherals};
 use embassy_time::Timer;
-use panic_probe as _;
+use {defmt_rtt as _, panic_probe as _};
 
 // Board pin map — inlined (not using the main lib, which is gated on
 // `embassy-base` / `simulator`). Keep in sync with `src/fw/board.rs`.

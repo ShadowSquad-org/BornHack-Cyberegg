@@ -462,11 +462,12 @@ pub fn wake_from_hibernation() -> bool {
     with_state(|s| s.wake_from_hibernation())
 }
 
-/// Award inspiration for winning a mini-game.
-pub fn award_inspiration() {
+/// Award inspiration for winning a mini-game.  Starts only the
+/// matching game's cooldown so other games stay playable.
+pub fn award_inspiration(game: super::engine::MiniGame) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
-        s.award_inspiration();
+        s.award_inspiration(game);
     }
 }
 
