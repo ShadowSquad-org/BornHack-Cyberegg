@@ -151,6 +151,9 @@ pub fn open() {
     WON.store(false, Ordering::Relaxed);
     STEPS.store(0, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
+    // Burn off ghosting from whatever was on screen before, so the
+    // dense maze walls render cleanly on the first frame.
+    crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
 /// Close the maze (and award inspiration if the player won).
@@ -160,6 +163,10 @@ pub fn close() {
         super::show_toast(super::Toast::Inspired);
     }
     ACTIVE.store(false, Ordering::Relaxed);
+    // Maze draws with red ink; the next display refresh must use the
+    // tri-colour update so the red layer is cleared, otherwise red
+    // pixels would ghost into the game screen we're returning to.
+    crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
 // ── Movement ──────────────────────────────────────────────────────────────────
@@ -200,9 +207,14 @@ fn advance_seq(pos_atomic: &AtomicU8, seq: &[u8], code: u8) -> bool {
 
 /// Feed the next button code into both cheat detectors.
 fn check_cheat(code: u8) {
-    // Sequence A: Reveal full maze.
+    // Sequence A: Reveal full maze.  Mark every cell as visited
+    // *once* on the transition rather than re-marking 324 cells on
+    // every draw frame as long as the cheat is active.
     if advance_seq(&CHEAT_POS, &CHEAT_SEQ_REVEAL, code) {
         REVEALED.store(true, Ordering::Relaxed);
+        for v in &VISITED {
+            v.store(u32::MAX, Ordering::Relaxed);
+        }
     }
 
     // Sequence B: Generate a brand-new random maze immediately.
@@ -396,25 +408,16 @@ impl Stack {
 
 // ── Maze generation ───────────────────────────────────────────────────────────
 
-/// Visited scratch buffer for DFS — independent of the player visited state.
-/// 324 bits = 11 u32s.
-static GEN_VISITED: [AtomicU32; PACK_LEN] = {
-    const INIT: AtomicU32 = AtomicU32::new(0);
-    [INIT; PACK_LEN]
-};
+/// Bitmap visited helpers — operate on a stack-local `[u32; PACK_LEN]`
+/// buffer passed in by the caller.  Generation and the BFS exit
+/// validator each instantiate their own; nothing is held across calls.
 
-fn gen_mark(i: usize) {
-    GEN_VISITED[i / 32].fetch_or(1 << (i % 32), Ordering::Relaxed);
+fn gen_mark(buf: &mut [u32; PACK_LEN], i: usize) {
+    buf[i / 32] |= 1 << (i % 32);
 }
 
-fn gen_is_visited(i: usize) -> bool {
-    GEN_VISITED[i / 32].load(Ordering::Relaxed) & (1 << (i % 32)) != 0
-}
-
-fn gen_clear() {
-    for v in &GEN_VISITED {
-        v.store(0, Ordering::Relaxed);
-    }
+fn gen_is_visited(buf: &[u32; PACK_LEN], i: usize) -> bool {
+    buf[i / 32] & (1 << (i % 32)) != 0
 }
 
 /// Generate a new perfect maze using iterative Recursive Backtracker DFS.
@@ -611,13 +614,14 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
         exit_cells[..already_placed].iter().any(|&e| e == p)
     };
 
-    // BFS from candidate, treating existing exit cells as walls (blocked).
-    gen_clear(); // reuse GEN_VISITED as the BFS visited set
+    // BFS from candidate, treating existing exit cells as walls.
+    // Local visited-set; freshly zeroed by the array literal.
+    let mut visited = [0u32; PACK_LEN];
 
     let start = (cand_row * W + cand_col) as u16;
     let mut q = Queue::new();
     q.push(start);
-    gen_mark(start as usize);
+    gen_mark(&mut visited, start as usize);
 
     while let Some(idx) = q.pop() {
         let r = idx as usize / W;
@@ -634,11 +638,11 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
 
         for (dir_bit, nr, nc) in neighbours {
             if nr >= H || nc >= W { continue; }
-            if walls & dir_bit == 0 { continue; }           // wall blocks
-            if gen_is_visited(nr * W + nc) { continue; }    // already seen
-            if is_existing_exit(nr, nc) { continue; }       // treat as wall
+            if walls & dir_bit == 0 { continue; }                  // wall blocks
+            if gen_is_visited(&visited, nr * W + nc) { continue; } // already seen
+            if is_existing_exit(nr, nc) { continue; }              // treat as wall
 
-            gen_mark(nr * W + nc);
+            gen_mark(&mut visited, nr * W + nc);
             q.push((nr * W + nc) as u16);
         }
     }
@@ -661,9 +665,9 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
         .iter()
         .any(|&(dir_bit, nr, nc)| {
             nr < H && nc < W
-                && exit_walls & dir_bit != 0          // passage exists
-                && gen_is_visited(nr * W + nc)        // neighbour was reached
-                && !is_existing_exit(nr, nc)          // neighbour isn't another exit
+                && exit_walls & dir_bit != 0                // passage exists
+                && gen_is_visited(&visited, nr * W + nc)    // neighbour was reached
+                && !is_existing_exit(nr, nc)                // neighbour isn't another exit
         });
 
         if !reachable {
@@ -678,9 +682,8 @@ fn generate() {
     // Seed the PRNG.
     RNG.store(rng_seed(), Ordering::Relaxed);
 
-    // Clear all walls and generation visited flags.
+    // Clear all walls and player visited flags.
     clear_walls();
-    gen_clear();
     clear_visited();
     CHEAT_POS.store(0, Ordering::Relaxed);
     REGEN_POS.store(0, Ordering::Relaxed);
@@ -691,13 +694,15 @@ fn generate() {
     let start_col = (rng_next() as usize) % W;
     let start_idx = (start_row * W + start_col) as u16;
 
-    // Iterative DFS with a local stack (allocated on the call stack, not heap).
+    // DFS scratch buffer + iterative stack — both stack-allocated.
+    let mut gen_visited = [0u32; PACK_LEN];
     let mut stack = Stack::new();
     stack.push(start_idx);
-    gen_mark(start_idx as usize);
+    gen_mark(&mut gen_visited, start_idx as usize);
 
     while !stack.is_empty() {
-        let idx = *stack.buf.get(stack.top.saturating_sub(1)).unwrap_or(&0) as usize;
+        // Safe to index directly: `is_empty` above guarantees top > 0.
+        let idx = stack.buf[stack.top - 1] as usize;
         let row = idx / W;
         let col = idx % W;
 
@@ -706,19 +711,19 @@ fn generate() {
         let mut n_count = 0usize;
 
         // North
-        if row > 0 && !gen_is_visited((row - 1) * W + col) {
+        if row > 0 && !gen_is_visited(&gen_visited, (row - 1) * W + col) {
             neighbours[n_count] = 0; n_count += 1;
         }
         // East
-        if col + 1 < W && !gen_is_visited(row * W + col + 1) {
+        if col + 1 < W && !gen_is_visited(&gen_visited, row * W + col + 1) {
             neighbours[n_count] = 1; n_count += 1;
         }
         // South
-        if row + 1 < H && !gen_is_visited((row + 1) * W + col) {
+        if row + 1 < H && !gen_is_visited(&gen_visited, (row + 1) * W + col) {
             neighbours[n_count] = 2; n_count += 1;
         }
         // West
-        if col > 0 && !gen_is_visited(row * W + col - 1) {
+        if col > 0 && !gen_is_visited(&gen_visited, row * W + col - 1) {
             neighbours[n_count] = 3; n_count += 1;
         }
 
@@ -743,7 +748,7 @@ fn generate() {
         open_wall(nrow, ncol, rev);
 
         let nidx = (nrow * W + ncol) as u16;
-        gen_mark(nidx as usize);
+        gen_mark(&mut gen_visited, nidx as usize);
         stack.push(nidx);
     }
 
@@ -871,15 +876,12 @@ where
     let player_row = (packed >> 8) as usize;
     let player_col = (packed & 0xFF) as usize;
 
-    // If the cheat is active, mark every cell as visited before drawing.
-    if REVEALED.load(Ordering::Relaxed) {
-        for r in 0..H {
-            for c in 0..W {
-                mark_visited(r, c);
-            }
-        }
-    }
+    // Hoisted: every wall uses the same style, no need to rebuild it
+    // 1300+ times per frame.
+    let wall_style = PrimitiveStyle::with_fill(BLACK);
 
+    // (REVEALED cheat fills VISITED once at trigger time — see
+    // `check_cheat` — so no per-frame mark loop needed here.)
     // Draw each cell.
     for row in 0..H {
         for col in 0..W {
@@ -891,7 +893,7 @@ where
             if !visited {
                 // Unvisited: draw solid black (fog of war).
                 Rectangle::new(Point::new(px, py), Size::new(CELL as u32, CELL as u32))
-                    .into_styled(PrimitiveStyle::with_fill(BLACK))
+                    .into_styled(wall_style)
                     .draw(display)?;
                 continue;
             }
@@ -899,11 +901,7 @@ where
             // Visited cell: draw floor (white) with walls.
             // Floor is already white from the background clear.
 
-
-            // Draw walls as black edges only where a wall is CLOSED.
             let walls = WALLS[row * W + col].load(Ordering::Relaxed);
-
-            let wall_style = PrimitiveStyle::with_fill(BLACK);
 
             // North wall (top edge of cell).
             if walls & NORTH == 0 {
