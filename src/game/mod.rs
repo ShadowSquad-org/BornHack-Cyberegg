@@ -29,6 +29,7 @@ pub mod stat_bar;
 pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
+pub mod maze;
 // ── Action feedback toast ────────────────────────────────────────────────────
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
@@ -180,6 +181,9 @@ where
     // ── Full-screen takeover screens ───────────────────────────────────
     if pet_select::is_active() {
         return pet_select::draw(display);
+    }
+    if maze::is_active() {
+        return maze::draw(display);
     }
     if tictactoe::is_active() {
         return tictactoe::draw(display);

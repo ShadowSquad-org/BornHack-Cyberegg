@@ -73,6 +73,18 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return matches!(btn, ButtonId::Up | ButtonId::Down | ButtonId::Cancel);
     }
 
+    if super::maze::is_active() {
+        match btn {
+            ButtonId::Cancel  => super::maze::close(),
+            ButtonId::Up      => super::maze::move_up(),
+            ButtonId::Down    => super::maze::move_down(),
+            ButtonId::Left    => super::maze::move_left(),
+            ButtonId::Right   => super::maze::move_right(),
+            ButtonId::Fire | ButtonId::Execute => super::maze::activate(),
+        }
+        return true;
+    }
+
     // ── Lights Out mini-game ──────────────────────────────────────────
     if super::lightsout::is_active() {
         match btn {
