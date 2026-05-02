@@ -157,7 +157,7 @@ where
     let bat = clock::battery_pct();
     let title = match alarm::current_mode() {
         alarm::WatchMode::AlarmEdit => "Edit Alarm",
-        alarm::WatchMode::Normal => "Watch",
+        alarm::WatchMode::Normal => "Clock",
     };
     draw_frame(display, Some((title, &bat)), None)?;
 

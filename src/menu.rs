@@ -1779,7 +1779,7 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
 
 #[cfg(feature = "watch")]
 static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Watch",
+    label: || "Clock",
     kind: MenuItemKind::Action(|| {}),
 }];
 
