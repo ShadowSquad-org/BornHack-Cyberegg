@@ -18,6 +18,8 @@ pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+#[cfg(feature = "signed-channel")]
+pub mod signed_channel;
 pub mod text_entry;
 pub mod ui;
 #[cfg(feature = "watch")]
@@ -225,6 +227,13 @@ pub static PM_UNREAD: AtomicBool = AtomicBool::new(false);
 /// cleared).
 #[cfg(feature = "embassy-base")]
 pub static BLE_PAIRING_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired when something off-screen needs the display to redraw — e.g.
+/// `game::show_toast` posting a station bonus from the NFC task.
+/// The display loop wakes on this and the active screen renderer
+/// picks up the new state.
+#[cfg(feature = "embassy-base")]
+pub static TOAST_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired every minute by `minute_tick_task` so the display redraws the clock.
 #[cfg(feature = "embassy-base")]

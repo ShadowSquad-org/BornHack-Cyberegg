@@ -2,10 +2,13 @@ use defmt::{todo, *};
 use embassy_nrf::nfct::{Config as NfcConfig, NfcId, NfcT};
 use embassy_nrf::peripherals::NFCT;
 use embassy_nrf::{Peri, bind_interrupts, nfct};
+use heapless::Vec as HVec;
 use {defmt_rtt as _, embassy_nrf as _, panic_probe as _};
 
 use super::iso14443::iso14443_3;
 use super::iso14443::iso14443_4::{Card, IsoDep};
+#[cfg(feature = "signed-channel")]
+use crate::signed_channel::{AUTHORIZED_PUBLIC_KEY, Csprng, Session, SignedError};
 use crate::update_health;
 
 bind_interrupts!(struct Irqs {
@@ -79,11 +82,26 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
     init_ndef_url(&mut ndef_buf);
 
     let mut selected = Selected::Cc;
+    #[cfg(feature = "signed-channel")]
+    let mut session = match Session::new(AUTHORIZED_PUBLIC_KEY) {
+        Ok(s) => s,
+        Err(_) => defmt::panic!(
+            "AUTHORIZED_PUBLIC_KEY in signed_channel.rs is not a valid Ed25519 point"
+        ),
+    };
+    #[cfg(feature = "signed-channel")]
+    info!("signed channel: challenge-response mode");
 
     loop {
         info!("activating");
         nfc.activate().await;
         info!("activated!");
+
+        // Each ISO-DEP session starts with no armed challenge — any
+        // leftover from a previous tap is invalidated here so it can't
+        // span sessions.
+        #[cfg(feature = "signed-channel")]
+        session.clear();
 
         let mut nfc = IsoDep::new(iso14443_3::Logger(&mut nfc));
 
@@ -105,69 +123,19 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
 
             info!("apdu: {:?}", apdu);
 
-            // Compute the response into a small scratch slot so the
-            // borrow checker doesn't have to reason about overlapping
-            // borrows of `buf` and `apdu.data`.
-            let mut ok = [0x90, 0x00];
-            let resp: &[u8] = match (apdu.cla, apdu.ins, apdu.p1, apdu.p2) {
-                (0, 0xa4, 4, 0) => {
-                    info!("select app");
-                    &ok
+            let mut resp_vec: HVec<u8, 256> = HVec::new();
+            #[cfg(feature = "signed-channel")]
+            {
+                match (apdu.cla, apdu.ins) {
+                    (0x80, 0x01) => handle_signed(&mut session, apdu.data, &mut resp_vec),
+                    (0x80, 0x02) => handle_get_challenge(&mut session, &mut resp_vec),
+                    _ => dispatch_plain(&apdu, cc, &mut ndef_buf, &mut selected, &mut resp_vec),
                 }
-                (0, 0xa4, 0, 12) => {
-                    info!("select df");
-                    match apdu.data {
-                        [0xe1, 0x03] => {
-                            selected = Selected::Cc;
-                            &ok
-                        }
-                        [0xe1, 0x04] => {
-                            selected = Selected::Ndef;
-                            &ok
-                        }
-                        _ => todo!(), // return NOT FOUND
-                    }
-                }
-                (0, 0xb0, p1, p2) => {
-                    info!("read");
-                    let offs = u16::from_be_bytes([p1 & 0x7f, p2]) as usize;
-                    let len = if apdu.le == 0 {
-                        usize::MAX
-                    } else {
-                        apdu.le as usize
-                    };
-                    let file: &[u8] = match selected {
-                        Selected::Cc => cc,
-                        Selected::Ndef => &ndef_buf[..],
-                    };
-                    let n = len.min(file.len() - offs);
-                    buf[..n].copy_from_slice(&file[offs..][..n]);
-                    buf[n..][..2].copy_from_slice(&[0x90, 0x00]);
-                    &buf[..n + 2]
-                }
-                (0, 0xd6, p1, p2) => {
-                    // UPDATE BINARY — phone is writing into the
-                    // currently-selected file.  We only honour writes
-                    // to the NDEF file; CC writes are silently
-                    // accepted but discarded.
-                    info!("update binary");
-                    let offs = u16::from_be_bytes([p1, p2]) as usize;
-                    if let Selected::Ndef = selected {
-                        let end = offs + apdu.data.len();
-                        if end <= ndef_buf.len() {
-                            ndef_buf[offs..end].copy_from_slice(apdu.data);
-                            try_apply_station(&mut ndef_buf);
-                        }
-                    }
-                    &ok
-                }
-                _ => {
-                    info!("Got unknown command!");
-                    ok = [0xFF, 0xFF];
-                    &ok
-                }
-            };
+            }
+            #[cfg(not(feature = "signed-channel"))]
+            dispatch_plain(&apdu, cc, &mut ndef_buf, &mut selected, &mut resp_vec);
 
+            let resp: &[u8] = &resp_vec;
             info!("iso-dep tx {:02x}", resp);
 
             match nfc.transmit(resp).await {
@@ -180,6 +148,146 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
                     break;
                 }
             }
+        }
+    }
+}
+
+/// Plaintext APDU dispatcher.  Pulled out of the rx loop so the
+/// encrypted path (CLA 0x80 / INS 0x01) can dispatch the inner
+/// sub-APDU through the same logic.  Behaviour matches the original
+/// inline matcher.
+fn dispatch_plain(
+    apdu: &Apdu<'_>,
+    cc: &[u8],
+    ndef_buf: &mut [u8; NDEF_BUF_LEN],
+    selected: &mut Selected,
+    out: &mut HVec<u8, 256>,
+) {
+    out.clear();
+    let ok: &[u8] = &[0x90, 0x00];
+    match (apdu.cla, apdu.ins, apdu.p1, apdu.p2) {
+        (0, 0xa4, 4, 0) => {
+            info!("select app");
+            let _ = out.extend_from_slice(ok);
+        }
+        (0, 0xa4, 0, 12) => {
+            info!("select df");
+            match apdu.data {
+                [0xe1, 0x03] => {
+                    *selected = Selected::Cc;
+                    let _ = out.extend_from_slice(ok);
+                }
+                [0xe1, 0x04] => {
+                    *selected = Selected::Ndef;
+                    let _ = out.extend_from_slice(ok);
+                }
+                _ => todo!(),
+            }
+        }
+        (0, 0xb0, p1, p2) => {
+            info!("read");
+            let offs = u16::from_be_bytes([p1 & 0x7f, p2]) as usize;
+            let len = if apdu.le == 0 {
+                usize::MAX
+            } else {
+                apdu.le as usize
+            };
+            let file: &[u8] = match *selected {
+                Selected::Cc => cc,
+                Selected::Ndef => &ndef_buf[..],
+            };
+            let n = len.min(file.len() - offs).min(out.capacity() - 2);
+            let _ = out.extend_from_slice(&file[offs..][..n]);
+            let _ = out.extend_from_slice(ok);
+        }
+        (0, 0xd6, p1, p2) => {
+            info!("update binary");
+            let offs = u16::from_be_bytes([p1, p2]) as usize;
+            if let Selected::Ndef = *selected {
+                let end = offs + apdu.data.len();
+                if end <= ndef_buf.len() {
+                    ndef_buf[offs..end].copy_from_slice(apdu.data);
+                    try_apply_station(ndef_buf);
+                }
+            }
+            let _ = out.extend_from_slice(ok);
+        }
+        _ => {
+            info!("Got unknown command!");
+            let _ = out.extend_from_slice(&[0xFF, 0xFF]);
+        }
+    }
+}
+
+/// GET CHALLENGE: draw a fresh 16-byte challenge from the CSPRNG, arm
+/// the Session with it, and return it to the reader.  Each call
+/// supersedes any previous unconsumed challenge.
+#[cfg(feature = "signed-channel")]
+fn handle_get_challenge(session: &mut Session, out: &mut HVec<u8, 256>) {
+    out.clear();
+    let challenge = Csprng::next_challenge();
+    session.arm(challenge);
+    info!("signed: GET CHALLENGE → {:02x}", challenge);
+    let _ = out.extend_from_slice(&challenge);
+    let _ = out.extend_from_slice(&[0x90, 0x00]);
+}
+
+/// Signed APDU path.  Verifies the Ed25519 signature against the
+/// currently armed challenge, then dispatches the inner plaintext
+/// as a station command.  The Session consumes the challenge on
+/// entry, so any subsequent SIGNED CMD without a fresh GET CHALLENGE
+/// returns 6A 88 (referenced data not found).
+#[cfg(feature = "signed-channel")]
+fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
+    out.clear();
+
+    let plaintext = match session.verify_in_place(body) {
+        Ok(p) => p,
+        Err(SignedError::MalformedFrame) => {
+            error!("signed: malformed frame, body len={=usize}", body.len());
+            let _ = out.extend_from_slice(&[0x67, 0x00]);
+            return;
+        }
+        Err(SignedError::BadSignature) => {
+            error!("signed: bad signature");
+            let _ = out.extend_from_slice(&[0x69, 0x82]);
+            return;
+        }
+        Err(SignedError::NoChallenge) => {
+            error!("signed: no challenge armed — issue GET CHALLENGE first");
+            let _ = out.extend_from_slice(&[0x6A, 0x88]);
+            return;
+        }
+        Err(SignedError::InvalidPublicKey) => {
+            // Cannot happen at runtime — checked at boot.
+            let _ = out.extend_from_slice(&[0x69, 0x82]);
+            return;
+        }
+    };
+
+    info!(
+        "signed: verify ok, plaintext len={=usize}",
+        plaintext.len()
+    );
+    match crate::game::station::apply(plaintext) {
+        Some(toast) => {
+            // Pull the user back to the game screen so the bonus toast
+            // is actually visible — they may have been on Watch /
+            // Channels / etc. when they tapped.  `show_toast` itself
+            // wakes the display loop via TOAST_SIGNAL.
+            crate::DISPLAY_STATE.lock(|cell| {
+                cell.borrow_mut().set_active_screen(crate::SCREEN_GAME);
+            });
+            crate::game::show_toast(toast);
+            let _ = out.extend_from_slice(&[0x90, 0x00]);
+        }
+        None => {
+            let can_use = crate::game::lifecycle::can_use_station();
+            info!(
+                "signed: station command rejected (can_use_station={=bool}), plaintext={:02x}",
+                can_use, plaintext
+            );
+            let _ = out.extend_from_slice(&[0x6A, 0x82]);
         }
     }
 }

@@ -104,6 +104,13 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
+    // ── Signed-channel CSPRNG seed ───────────────────────────────────────
+    // Draw 32 bytes from the on-chip TRNG via direct register access
+    // before BLE init takes ownership of `p.RNG`.  After this point the
+    // signed-channel CSPRNG produces fresh challenges without needing
+    // the hardware peripheral again.
+    hello_graphics::signed_channel::Csprng::seed_from_hardware();
+
     // ── KV store ─────────────────────────────────────────────────────────
     // Persistent key-value store used by the game (save/load), sponsor
     // slideshow flag, and the mesh stack.  Must be initialised before any
@@ -537,12 +544,27 @@ async fn wait_display_event(
         #[cfg(not(feature = "game"))]
         let sprite_tick = core::future::pending::<()>();
 
+        // Compose button + TOAST_SIGNAL into a single wakeup so the
+        // outer select shape stays unchanged.  Both result in a
+        // non-sprite (`return false`) wake-up.
+        let button_or_toast = async {
+            use embassy_futures::select::Either;
+            match select(
+                button_rcvr.changed(),
+                hello_graphics::TOAST_SIGNAL.wait(),
+            )
+            .await
+            {
+                Either::First(_) | Either::Second(_) => {}
+            }
+        };
+
         #[cfg(feature = "mesh")]
         {
             use embassy_futures::select::{Either4, select4};
             match select(
                 select3(
-                    button_rcvr.changed(),
+                    button_or_toast,
                     BLE_PAIRING_SIGNAL.wait(),
                     MINUTE_TICK.wait(),
                 ),
@@ -573,11 +595,7 @@ async fn wait_display_event(
 
         #[cfg(not(feature = "mesh"))]
         match select(
-            select3(
-                button_rcvr.changed(),
-                BLE_PAIRING_SIGNAL.wait(),
-                MINUTE_TICK.wait(),
-            ),
+            select3(button_or_toast, BLE_PAIRING_SIGNAL.wait(), MINUTE_TICK.wait()),
             sprite_tick,
         )
         .await

@@ -112,8 +112,24 @@ pub mod iso14443_4 {
                 assert!(n != 0);
                 match temp[0] {
                     0x02 | 0x03 => {
+                        // ISO-DEP I-block.  block_num bit toggles per
+                        // accepted block; if the incoming bit matches
+                        // our current `block_num` it is a retransmit
+                        // of the last block (phone didn't see our
+                        // reply) — resend the cached response without
+                        // advancing state.
+                        let incoming = temp[0] & 0x01;
+                        if incoming == self.block_num {
+                            info!("Got I-block retransmit, re-sending last response.");
+                            let resp: &[u8] = &self.resp[..self.resp_len];
+                            self.nfc.transmit(resp).await.map_err(Error::Lower)?;
+                            continue;
+                        }
+                        if incoming != (self.block_num ^ 0x01) {
+                            info!("Got I-block with unexpected block_num {:02x}", temp[0]);
+                            return Err(Error::Protocol);
+                        }
                         self.block_num ^= 0x01;
-                        assert!(temp[0] == 0x02 | self.block_num);
                         buf[..n - 1].copy_from_slice(&temp[1..n]);
                         return Ok(n - 1);
                     }
