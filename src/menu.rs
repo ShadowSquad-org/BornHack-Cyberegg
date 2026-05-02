@@ -94,6 +94,27 @@ pub enum MenuItemKind {
     Info {
         format: fn(&mut heapless::String<24>),
     },
+    /// Like `Info`, but the formatter receives a `u8` slot index — lets one
+    /// shared formatter render many similar rows (e.g. all 31 imported
+    /// alarm slots) without per-slot boilerplate.  Optional per-row
+    /// visibility: when `visible(slot)` returns false, the row is auto-
+    /// skipped during nav and rendered as blank — handy for sparse lists
+    /// where most slots are empty most of the time.  `MenuItem::label` is
+    /// ignored for this variant.
+    SlotInfo {
+        format: fn(&mut heapless::String<24>, u8),
+        visible: fn(u8) -> bool,
+        slot: u8,
+    },
+    /// Like `Action`, but with a runtime `enabled()` predicate.  When
+    /// disabled, the row stays selectable but renders in red (our
+    /// "greyed-out" on a tri-color panel) and Fire is a no-op — so the
+    /// user can see the feature exists, see why it's not currently
+    /// usable, and get something visible if they press it anyway.
+    ConditionalAction {
+        action: fn(),
+        enabled: fn() -> bool,
+    },
     /// Destructive action that first shows a full-screen "Are you sure?"
     /// confirmation dialog. `prompt` is the action name shown in the dialog;
     /// `action` runs only if the user presses Fire/Execute to confirm.
@@ -113,6 +134,17 @@ pub enum MenuItemKind {
 pub struct MenuItem {
     pub label: fn() -> &'static str,
     pub kind: MenuItemKind,
+}
+
+/// Whether the cursor should skip past `kind` during Up/Down nav.
+/// Separators are always skipped; `SlotInfo` rows are skipped when their
+/// `visible` predicate currently returns false.
+fn nav_skip(kind: &MenuItemKind) -> bool {
+    match kind {
+        MenuItemKind::Separator => true,
+        MenuItemKind::SlotInfo { visible, slot, .. } => !visible(*slot),
+        _ => false,
+    }
 }
 
 // ── Per-screen navigation state
@@ -226,10 +258,10 @@ impl ScreenState {
             return;
         }
         let mut prev = pos - 1;
-        while prev > 0 && matches!(items[prev].kind, MenuItemKind::Separator) {
+        while prev > 0 && nav_skip(&items[prev].kind) {
             prev -= 1;
         }
-        if !matches!(items[prev].kind, MenuItemKind::Separator) {
+        if !nav_skip(&items[prev].kind) {
             *self.current_pos_mut() = prev as u8;
         }
     }
@@ -247,7 +279,7 @@ impl ScreenState {
         let len = items.len();
         let pos = self.current_pos();
         let mut next = pos + 1;
-        while next < len && matches!(items[next].kind, MenuItemKind::Separator) {
+        while next < len && nav_skip(&items[next].kind) {
             next += 1;
         }
         if next < len {
@@ -273,6 +305,13 @@ impl ScreenState {
         }
         match self.current_item().kind {
             MenuItemKind::Action(f) => f(),
+            MenuItemKind::ConditionalAction { action, enabled } => {
+                if enabled() {
+                    action();
+                }
+                // Disabled: silently no-op.  The visual cue (red text)
+                // is the user's signal that the feature isn't ready.
+            }
             MenuItemKind::Submenu(items) => {
                 self.sub_items = Some(items);
                 self.sub_pos = 0;
@@ -284,9 +323,9 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
-            // Info rows are read-only — Fire is a no-op, like a separator
-            // but with text.
-            MenuItemKind::Info { .. } => {}
+            // Info / SlotInfo rows are read-only — Fire is a no-op, like a
+            // separator but with text.
+            MenuItemKind::Info { .. } | MenuItemKind::SlotInfo { .. } => {}
             MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. } => {
                 self.stepper_active = true;
             }
@@ -1212,117 +1251,230 @@ static ALARM_ITEMS: [MenuItem; 6] = [
 
 // ── Events submenu (imported one-shot alarms in slots 1..N_ALARMS) ──────────
 
-/// Format one slot's read-only label into the menu buffer.
-///   * disabled         → `1: empty`
-///   * recurring (slot 0 only here, but kept for completeness) → `1: 14:30 daily`
+/// Format slot `slot`'s read-only label into the menu buffer.
+///   * disabled         → `1: empty`     (rendered only via legacy callers; the
+///     SlotInfo renderer hides empties via `slot_alarm_visible`.)
+///   * recurring        → `1: 14:30 daily`
 ///   * one-shot         → `1: 14:30 08-16`
 #[cfg(feature = "watch")]
-fn fmt_alarm_slot_n(buf: &mut heapless::String<24>, slot: usize) {
+fn fmt_alarm_slot(buf: &mut heapless::String<24>, slot: u8) {
     use core::fmt::Write;
-    if !crate::watch::alarm_enabled_n(slot) {
+    let s = slot as usize;
+    if !crate::watch::alarm_enabled_n(s) {
         let _ = write!(buf, "{}: empty", slot);
         return;
     }
-    let h = crate::watch::alarm_hour_n(slot);
-    let m = crate::watch::alarm_minute_n(slot);
-    if crate::watch::alarm_is_one_shot_n(slot) {
+    let h = crate::watch::alarm_hour_n(s);
+    let m = crate::watch::alarm_minute_n(s);
+    if crate::watch::alarm_is_one_shot_n(s) {
         let _ = write!(
             buf,
             "{}: {:02}:{:02} {:02}-{:02}",
             slot,
             h,
             m,
-            crate::watch::alarm_month_n(slot),
-            crate::watch::alarm_day_n(slot),
+            crate::watch::alarm_month_n(s),
+            crate::watch::alarm_day_n(s),
         );
     } else {
         let _ = write!(buf, "{}: {:02}:{:02} daily", slot, h, m);
     }
 }
 
+/// Visibility predicate: only show enabled slots so the menu doesn't
+/// scroll past 31 empties when only a couple of events are loaded.
 #[cfg(feature = "watch")]
-mod alarm_slot_formatters {
-    use super::fmt_alarm_slot_n;
-    pub fn fmt_1(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 1)
+fn slot_alarm_visible(slot: u8) -> bool {
+    crate::watch::alarm_enabled_n(slot as usize)
+}
+
+/// Buffer holding the title between the text-entry stage and the
+/// date-picker stage of the "Add named..." flow.  Both `on_complete`
+/// callbacks are bare `fn` pointers, so we shuttle the in-flight
+/// title through this static rather than capturing in a closure.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+static PENDING_EVENT_TITLE: embassy_sync::blocking_mutex::Mutex<
+    embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+    core::cell::RefCell<heapless::String<31>>,
+> = embassy_sync::blocking_mutex::Mutex::new(core::cell::RefCell::new(heapless::String::new()));
+
+/// Action: opens text-entry for an event title; on submit, chains into
+/// the date/time picker pre-filled with today + 1 hour (or a Bornhack
+/// fallback if the clock isn't synced); on the picker's submit, finds
+/// the first empty event slot, populates it, and toasts the result.
+///
+/// Two-stage so the user can pick *both* the title and the firing
+/// date/time without leaving the menu — equivalent to dropping a single
+/// `VEVENT` into `ALARMS.ICS` but on-device.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+fn action_add_named_event() {
+    fn on_title_submitted(text: &[u8]) {
+        // Stash the entered title for the picker's later callback to read.
+        // Empty input falls back to "Event" so the row in Settings → Events
+        // doesn't render as blank.
+        let title_bytes: &[u8] = if text.is_empty() { b"Event" } else { text };
+        PENDING_EVENT_TITLE.lock(|cell| {
+            let mut s = cell.borrow_mut();
+            s.clear();
+            for &b in title_bytes {
+                if (0x20..=0x7e).contains(&b) && s.push(b as char).is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Pre-fill the picker with "now + 1 hour" so the most common case
+        // (a reminder later today) is one Fire away.  Falls back to
+        // 2026-07-15 12:00 (Bornhack opening day) when the wall clock
+        // hasn't been synced yet — the user can adjust from there.
+        let (year, month, day, hour, minute) = match crate::watch::wall_clock_ymdhm() {
+            Some(now) => {
+                let total_min = now.3 as u32 * 60 + now.4 as u32 + 60;
+                let day_off = (total_min / (24 * 60)) as i64;
+                let h = ((total_min % (24 * 60)) / 60) as u8;
+                let m = ((total_min % (24 * 60)) % 60) as u8;
+                if day_off == 0 {
+                    (now.0, now.1, now.2, h, m)
+                } else {
+                    match fasttime::Date::from_ymd(now.0 as i32, now.1, now.2)
+                        .ok()
+                        .and_then(|d| d.add_days(day_off).ok())
+                    {
+                        Some(d) => (d.year as u16, d.month, d.day, h, m),
+                        None => (now.0, now.1, now.2, h, m),
+                    }
+                }
+            }
+            None => (2026, 7, 15, 12, 0),
+        };
+
+        crate::date_picker::begin(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            on_datetime_picked,
+            "New event",
+        );
     }
-    pub fn fmt_2(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 2)
+
+    fn on_datetime_picked(year: u16, month: u8, day: u8, hour: u8, minute: u8) {
+        let title: heapless::String<31> = PENDING_EVENT_TITLE.lock(|cell| cell.borrow().clone());
+        let title_bytes = title.as_bytes();
+
+        let Some(slot) = crate::watch::first_empty_event_slot() else {
+            crate::toast::show("No empty event slots");
+            return;
+        };
+        crate::watch::populate_event_n(slot, year, month, day, hour, minute, title_bytes);
+
+        let mut msg: heapless::String<{ crate::toast::TOAST_LEN }> = heapless::String::new();
+        let _ = core::fmt::write(
+            &mut msg,
+            format_args!(
+                "Added '{}' {:02}-{:02} {:02}:{:02}",
+                title.as_str(),
+                month,
+                day,
+                hour,
+                minute
+            ),
+        );
+        crate::toast::show(&msg);
     }
-    pub fn fmt_3(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 3)
-    }
-    pub fn fmt_4(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 4)
-    }
-    pub fn fmt_5(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 5)
-    }
-    pub fn fmt_6(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 6)
-    }
-    pub fn fmt_7(b: &mut heapless::String<24>) {
-        fmt_alarm_slot_n(b, 7)
+
+    crate::text_entry::begin(b"", 31, on_title_submitted, "Event title");
+}
+
+/// Action: drop a "Quick test" event 5 minutes from now in the first
+/// empty slot.  Useful for verifying the alarm path without USB.  Same
+/// toast feedback as the named flow.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+fn action_add_quick_test() {
+    match crate::watch::add_quick_event(5, b"Quick test") {
+        Some((h, m)) => {
+            let mut msg: heapless::String<{ crate::toast::TOAST_LEN }> = heapless::String::new();
+            let _ = core::fmt::write(&mut msg, format_args!("Quick test at {:02}:{:02}", h, m));
+            crate::toast::show(&msg);
+        }
+        None => crate::toast::show("No empty event slots"),
     }
 }
 
+/// Predicate: true when the wall clock has been synced (via the
+/// MeshCore companion `SET_DEVICE_TIME` 0x06 command).  Both add
+/// actions silently no-op without it, so we use this to grey them out
+/// in the menu rather than letting the user wonder why nothing happens.
+/// In the simulator the wall clock is always available (driven by the
+/// host's `SystemTime::now`), so the predicate is just `true`.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+fn clock_is_synced() -> bool {
+    crate::unix_now().is_some()
+}
+#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+fn clock_is_synced() -> bool {
+    true
+}
+
+// Stubs for non-embassy builds (simulator) so EVENTS_ITEMS still
+// compiles.  Quick-add depends on the wall clock, which isn't wired
+// the same way in the simulator, so these are no-ops there.
+#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+fn action_add_named_event() {}
+#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+fn action_add_quick_test() {}
+
+/// Expand a literal list of slot indices into menu rows wrapped by
+/// Back / add actions / slot rows / Clear all.  Avoids 31× hand-written
+/// `MenuItem` blocks; one shared formatter + visibility predicate
+/// handles them all via `MenuItemKind::SlotInfo`.
 #[cfg(feature = "watch")]
-static EVENTS_ITEMS: [MenuItem; 10] = [
-    MenuItem {
-        label: || "< Back",
-        kind: MenuItemKind::Back,
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_1,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_2,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_3,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_4,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_5,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_6,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Info {
-            format: alarm_slot_formatters::fmt_7,
-        },
-    },
-    MenuItem {
-        label: || "",
-        kind: MenuItemKind::Separator,
-    },
-    MenuItem {
-        label: || "Clear all",
-        kind: MenuItemKind::Action(crate::watch::clear_imported_alarms),
-    },
-];
+macro_rules! events_items {
+    ($($n:literal),* $(,)?) => {
+        [
+            MenuItem { label: || "< Back", kind: MenuItemKind::Back },
+            // "Add named..." pops the date/time picker after the title,
+            // so it works regardless of clock sync (picker has a Bornhack
+            // fallback default for the un-synced case).
+            MenuItem {
+                label: || "Add named...",
+                kind: MenuItemKind::Action(action_add_named_event),
+            },
+            // "Quick test" is relative to *now*, so it requires a synced
+            // clock — greyed out (red) until the MeshCore companion has
+            // sent SET_DEVICE_TIME.
+            MenuItem {
+                label: || "Quick test +5min",
+                kind: MenuItemKind::ConditionalAction {
+                    action: action_add_quick_test,
+                    enabled: clock_is_synced,
+                },
+            },
+            MenuItem { label: || "", kind: MenuItemKind::Separator },
+            $(MenuItem {
+                label: || "",
+                kind: MenuItemKind::SlotInfo {
+                    format: fmt_alarm_slot,
+                    visible: slot_alarm_visible,
+                    slot: $n,
+                },
+            },)*
+            MenuItem { label: || "", kind: MenuItemKind::Separator },
+            MenuItem {
+                label: || "Clear all",
+                kind: MenuItemKind::Action(crate::watch::clear_imported_alarms),
+            },
+        ]
+    };
+}
+
+// 1 (Back) + 2 (Add actions) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) = 37.
+#[cfg(feature = "watch")]
+static EVENTS_ITEMS: [MenuItem; 37] = events_items!(
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 28, 29, 30, 31,
+);
 
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
@@ -1945,7 +2097,30 @@ where
 
         if item_idx >= 0 {
             if let Some(item) = items.get(item_idx as usize) {
-                let fg = if is_center { WHITE } else { BLACK };
+                // Disabled ConditionalAction: render in red so the user
+                // sees the row exists but knows it isn't currently usable.
+                // Centre row stays inverted (red on black) but still reads
+                // as "less attention" than the white-on-black active items.
+                let disabled = matches!(
+                    item.kind,
+                    MenuItemKind::ConditionalAction { enabled, .. } if !enabled()
+                );
+                let fg = if disabled {
+                    RED
+                } else if is_center {
+                    WHITE
+                } else {
+                    BLACK
+                };
+                // Hidden SlotInfo: render nothing — the row stays blank
+                // (the center row keeps its black highlight, but that's
+                // an edge case nav can't normally land on).
+                if matches!(
+                    item.kind,
+                    MenuItemKind::SlotInfo { visible, slot, .. } if !visible(slot)
+                ) {
+                    continue;
+                }
                 if matches!(item.kind, MenuItemKind::Separator) {
                     // Draw a thin horizontal rule across the row
                     Rectangle::new(Point::new(MENU_X + 8, text_y), Size::new(MENU_W - 16, 1))
@@ -1970,6 +2145,7 @@ where
                     match item.kind {
                         MenuItemKind::ValueStepper { format, .. }
                         | MenuItemKind::Info { format } => format(&mut label),
+                        MenuItemKind::SlotInfo { format, slot, .. } => format(&mut label, slot),
                         _ => {
                             let _ = label.push_str((item.label)());
                         }
