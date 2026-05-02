@@ -18,6 +18,8 @@ pub mod fw;
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+#[cfg(feature = "signed-channel")]
+pub mod signed_channel;
 pub mod text_entry;
 pub mod ui;
 #[cfg(feature = "watch")]

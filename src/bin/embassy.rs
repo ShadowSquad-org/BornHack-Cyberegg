@@ -104,6 +104,13 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
+    // ── Signed-channel CSPRNG seed ───────────────────────────────────────
+    // Draw 32 bytes from the on-chip TRNG via direct register access
+    // before BLE init takes ownership of `p.RNG`.  After this point the
+    // signed-channel CSPRNG produces fresh challenges without needing
+    // the hardware peripheral again.
+    hello_graphics::signed_channel::Csprng::seed_from_hardware();
+
     // ── KV store ─────────────────────────────────────────────────────────
     // Persistent key-value store used by the game (save/load), sponsor
     // slideshow flag, and the mesh stack.  Must be initialised before any

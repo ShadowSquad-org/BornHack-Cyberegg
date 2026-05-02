@@ -31,9 +31,8 @@ use super::lifecycle::{self, with_state};
 const COOLDOWN_TICKS: u32 = 30;
 
 /// Last-applied tick per effect.  Sentinel `u32::MAX` means "never
-/// applied this boot" — the wrapping subtraction in `try_consume`
-/// then yields a huge gap so the first tap always succeeds, even at
-/// `now_tick == 0`.
+/// applied this boot" — `try_consume` checks for it explicitly and
+/// skips the cooldown gate, so the first tap always succeeds.
 static LAST_FOOD: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_DRUGS: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_INSPIRE: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -45,12 +44,14 @@ static LAST_REST: AtomicU32 = AtomicU32::new(u32::MAX);
 fn try_consume(slot: &AtomicU32) -> Result<(), u16> {
     let now = lifecycle::now_tick();
     let last = slot.load(Ordering::Relaxed);
-    let elapsed = now.wrapping_sub(last);
-    if elapsed < COOLDOWN_TICKS {
-        let remaining_ticks = COOLDOWN_TICKS - elapsed;
-        // 1 tick = 10 seconds; cap at u16::MAX defensively even
-        // though our 5-min cooldown only ever produces ≤ 300.
-        return Err((remaining_ticks * 10).min(u16::MAX as u32) as u16);
+    if last != u32::MAX {
+        let elapsed = now.wrapping_sub(last);
+        if elapsed < COOLDOWN_TICKS {
+            let remaining_ticks = COOLDOWN_TICKS - elapsed;
+            // 1 tick = 10 seconds; cap at u16::MAX defensively even
+            // though our 5-min cooldown only ever produces ≤ 300.
+            return Err((remaining_ticks * 10).min(u16::MAX as u32) as u16);
+        }
     }
     slot.store(now, Ordering::Relaxed);
     Ok(())
