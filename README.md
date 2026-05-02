@@ -13,7 +13,7 @@ Embassy-based async firmware for the BornHack CyberÆgg badge (nRF52840).
 
 ## Architecture
 
-The firmware runs three concurrent Embassy tasks:
+The firmware runs several concurrent Embassy tasks:
 
 - **BLE task** — GATT peripheral exposing Nordic UART Service (NUS). Speaks the MeshCore companion protocol; handles all commands from the companion app and pushes async notifications.
 - **MeshCore task** — drives the SX1262 in continuous RX. Receives/transmits MeshCore packets (adverts, private messages, channel messages, trace-path, login). Forwards received packets to the BLE task via channels.
@@ -171,16 +171,15 @@ The watch screen has a built-in once-per-day alarm. When armed, the header shows
 
 There are two ways to set it:
 
-1. **On the watch screen** — press Fire/Execute to enter edit mode. The header changes to `Edit Alarm`, the digits show the alarm time (not the wall clock), and an `[ On ]` / `[ Off ]` indicator appears below. A thick black bar marks the active field.
+1. **On the watch screen** — press Fire/Execute to enter edit mode. The header changes to `Edit Alarm`, the digits show the alarm time (not the wall clock), and a `[ On ]` / `[ Off ]` indicator + tone label appear below. A thick black bar marks the active field. The edit screen has two layers — row-nav (default) and field-active (after Fire on a steppable field):
 
-   | Button         | In alarm-edit mode                                  |
-   | -------------- | --------------------------------------------------- |
-   | Left / Right   | Cycle field: Hour → Minute → Enabled → Hour …      |
-   | Up / Down      | Increment / decrement the active field              |
-   | Fire / Execute | Exit edit mode                                      |
-   | Cancel         | Exit edit mode                                      |
+   | Button         | Row-nav (default)                                                          | Field active (after Fire)                  |
+   | -------------- | -------------------------------------------------------------------------- | ------------------------------------------ |
+   | Up / Down      | Move field cursor: Hour → Minute → Days → Tone → Enabled                   | Increment / decrement the active value     |
+   | Fire / Execute | Drill into the selected field (or just toggle the `Enabled` field inline) | Exit field editing, back to row-nav        |
+   | Cancel         | Exit edit mode entirely (changes are live, no save needed)                 | Exit field editing, back to row-nav        |
 
-2. **From Settings** — Main → Settings → Alarm. The submenu has Hour and Minute steppers, a Days submenu, and an Enabled toggle. The Days submenu lets you toggle individual weekdays; the parent label summarises the mask as `Daily`, `Weekdays`, `Weekends`, `Custom`, or `None`.
+2. **From Settings** — Main → Settings → Alarm. The submenu has Hour and Minute steppers, a Days submenu, a Tone stepper, and an Enabled toggle. The Days submenu lets you toggle individual weekdays; the parent label summarises the mask as `Daily`, `Weekdays`, `Weekends`, `Custom`, or `None`. The Tone stepper cycles through a curated subset of `MELODIES` (Beep, Imp. March, Rickroll, Pink Pant., Sandstorm, Startup, Trololo).
 
 When the wall clock matches the armed time on a selected day, the buzzer plays a short "beep beep" pattern and repeats up to 4 times every 8 s. **Pressing any button anywhere in the menu silences the buzzer** (and consumes that button — a second press is needed to actually navigate). After 5 s an un-dismissed alarm auto-clears so it stops eating button presses.
 
