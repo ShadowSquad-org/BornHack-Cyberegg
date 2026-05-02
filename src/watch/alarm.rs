@@ -337,6 +337,72 @@ pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
     }
 }
 
+/// Find the lowest empty event slot index (>= 1) suitable for a new
+/// event.  Returns None if all event slots (1..N_ALARMS) are populated.
+pub fn first_empty_event_slot() -> Option<usize> {
+    (1..N_ALARMS).find(|&slot| !alarm_enabled_n(slot))
+}
+
+/// Populate slot `slot` with the given date/time and ASCII summary, then
+/// enable it.  Non-printable bytes in `summary` are dropped to match the
+/// FAT12 import path's filter.
+pub fn populate_event_n(
+    slot: usize,
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    summary: &[u8],
+) {
+    set_alarm_date_n(slot, year, month, day);
+    set_alarm_time_n(slot, hour, minute);
+    let mut buf = [0u8; SUMMARY_LEN];
+    let mut i = 0usize;
+    for &b in summary {
+        if i >= SUMMARY_LEN {
+            break;
+        }
+        if (0x20..=0x7e).contains(&b) {
+            buf[i] = b;
+            i += 1;
+        }
+    }
+    set_alarm_summary_n(slot, &buf);
+    set_alarm_enabled_n(slot, true);
+}
+
+/// Add an event scheduled `minutes_ahead` minutes from the current wall
+/// clock, with the given summary.  Picks the first empty event slot.
+/// Returns `Some((hour, minute))` of the firing time on success, or
+/// `None` if the wall clock isn't synced or all event slots are full —
+/// callers use the returned time to show a confirmation banner so the
+/// user can see the action took effect.
+#[cfg(feature = "embassy-base")]
+pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
+    let c = clock::wall_clock()?;
+    let slot = first_empty_event_slot()?;
+
+    // Roll over hour/day boundaries via plain integer math, then ask
+    // fasttime to handle the calendar arithmetic if we crossed midnight.
+    let total_mins = c.hour as u32 * 60 + c.minute as u32 + minutes_ahead as u32;
+    let day_offset = (total_mins / (24 * 60)) as i64;
+    let mins_in_day = total_mins % (24 * 60);
+    let target_hour = (mins_in_day / 60) as u8;
+    let target_min = (mins_in_day % 60) as u8;
+
+    let (year, month, day) = if day_offset == 0 {
+        (c.year, c.month, c.day)
+    } else {
+        let d = fasttime::Date::from_ymd(c.year as i32, c.month, c.day).ok()?;
+        let d2 = d.add_days(day_offset).ok()?;
+        (d2.year as u16, d2.month, d2.day)
+    };
+
+    populate_event_n(slot, year, month, day, target_hour, target_min, summary);
+    Some((target_hour, target_min))
+}
+
 /// Clear all imported alarms — disable + zero-date slots 1..N_ALARMS.  Slot 0
 /// (the user's manual alarm) is left alone.  Used by the Events menu to
 /// undo an `ALARMS.ICS` import without rebooting; the next boot would
@@ -574,7 +640,15 @@ pub fn check_and_fire_alarm() {
         if c.hour == alarm_hour_n(slot) && c.minute == alarm_minute_n(slot) {
             ALARM_RINGING.store(true, Ordering::Relaxed);
             ALARM_RING_SIGNAL.signal(());
-            crate::fw::buzzer::play(alarm_melody_n(slot) as usize);
+            // One-shot (imported calendar) slots have no per-event tone
+            // UI — they inherit slot 0's melody so the user's chosen
+            // Settings → Alarm → Tone applies to every alarm consistently.
+            let melody = if alarm_is_one_shot_n(slot) {
+                alarm_melody_n(0)
+            } else {
+                alarm_melody_n(slot)
+            };
+            crate::fw::buzzer::play(melody as usize);
             // One-shot alarms auto-disable after firing.
             if alarm_is_one_shot_n(slot) {
                 ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
