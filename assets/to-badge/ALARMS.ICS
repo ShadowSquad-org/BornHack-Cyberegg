@@ -1,0 +1,16 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//cyber-aegg//Bornhack 2026//EN
+BEGIN:VEVENT
+UID:bornhack-2026-opening@cyber-aegg
+SUMMARY:Bornhack Opening
+DTSTART;TZID=Europe/Copenhagen:20260715T210000
+DTEND;TZID=Europe/Copenhagen:20260715T220000
+END:VEVENT
+BEGIN:VEVENT
+UID:bornhack-2026-closing@cyber-aegg
+SUMMARY:Bornhack Closing
+DTSTART;TZID=Europe/Copenhagen:20260722T160000
+DTEND;TZID=Europe/Copenhagen:20260722T170000
+END:VEVENT
+END:VCALENDAR
