@@ -6,8 +6,8 @@ use eg::pixelcolor::Rgb888;
 use eg::prelude::*;
 use embedded_graphics_simulator::sdl2::Keycode;
 use embedded_graphics_simulator::{OutputSettings, SimulatorDisplay, SimulatorEvent, Window};
-use hello_graphics::menu::ButtonId;
-use hello_graphics::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
+use bornhack_aegg::menu::ButtonId;
+use bornhack_aegg::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
 
 /// Adapter that translates TriColor draw calls to an Rgb888 SimulatorDisplay.
 struct TriColorDisplay<'a>(&'a mut SimulatorDisplay<Rgb888>);
@@ -86,7 +86,7 @@ fn main() -> Result<(), core::convert::Infallible> {
             // and from a few in-renderer call sites; here we drive it
             // ourselves at the sim frame rate.
             #[cfg(feature = "game")]
-            let _ = hello_graphics::game::lifecycle::cycle();
+            let _ = bornhack_aegg::game::lifecycle::cycle();
 
             // Always redraw at frame rate so any time-driven animation
             // (sprite frame cycle, watch face minute roll, hatching
@@ -126,9 +126,9 @@ fn main() -> Result<(), core::convert::Infallible> {
 fn handle_button(btn: ButtonId) {
     #[cfg(feature = "game")]
     {
-        let on_game = hello_graphics::with_display_state!(|s| s.active_screen())
-            == hello_graphics::SCREEN_GAME;
-        if on_game && hello_graphics::game::input::dispatch(btn) {
+        let on_game = bornhack_aegg::with_display_state!(|s| s.active_screen())
+            == bornhack_aegg::SCREEN_GAME;
+        if on_game && bornhack_aegg::game::input::dispatch(btn) {
             return;
         }
     }

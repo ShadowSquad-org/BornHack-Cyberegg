@@ -325,8 +325,8 @@ Install the following:
 ### Clone
 
 ```bash
-git clone --recursive <your-repo-url>
-cd cyberegg/embedded_graphics/hello-graphics
+git clone --recursive https://codeberg.org/Ranzbak/bornhack-firmware-2026.git
+cd bornhack-firmware-2026
 ```
 
 ## Build
@@ -491,11 +491,11 @@ To regenerate all PCX files into `assets/to-badge/`:
 ```bash
 cd ../asset-gen
 cargo run -- export \
-    ../hello-graphics/assets/bornpets-sponsors.json5 \
-    ../hello-graphics/assets/bornpets-sponsors-cat.json5 \
-    ../hello-graphics/assets/sponsors.json5 \
-    ../hello-graphics/assets/bornpets-menu-icons.json5 \
-    --output-dir ../hello-graphics/assets/to-badge \
+    ../bornhack-firmware-2026/assets/bornpets-sponsors.json5 \
+    ../bornhack-firmware-2026/assets/bornpets-sponsors-cat.json5 \
+    ../bornhack-firmware-2026/assets/sponsors.json5 \
+    ../bornhack-firmware-2026/assets/bornpets-menu-icons.json5 \
+    --output-dir ../bornhack-firmware-2026/assets/to-badge \
     --format pcx
 ```
 
