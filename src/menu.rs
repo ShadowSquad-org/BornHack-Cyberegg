@@ -440,6 +440,46 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
+        // Toast banner: any button press dismisses it and is consumed —
+        // so the user doesn't accidentally fire the menu item the toast
+        // is sitting on top of.
+        if crate::toast::is_active() {
+            crate::toast::dismiss();
+            return;
+        }
+
+        // Date picker intercepts all input when active (same idiom as
+        // text_entry below).
+        if crate::date_picker::is_active() {
+            let done = {
+                #[cfg(feature = "embassy-base")]
+                {
+                    crate::date_picker::DATE_PICKER.lock(|cell| {
+                        let mut borrow = cell.borrow_mut();
+                        if let Some(ref mut picker) = *borrow {
+                            picker.dispatch(btn)
+                        } else {
+                            false
+                        }
+                    })
+                }
+                #[cfg(feature = "simulator")]
+                {
+                    let guard = crate::date_picker::DATE_PICKER.lock().unwrap();
+                    let mut borrow = guard.borrow_mut();
+                    if let Some(ref mut picker) = *borrow {
+                        picker.dispatch(btn)
+                    } else {
+                        false
+                    }
+                }
+            };
+            if done {
+                crate::date_picker::dismiss();
+            }
+            return;
+        }
+
         // Text entry intercepts all input when active.
         if crate::text_entry::is_active() {
             let done = {
