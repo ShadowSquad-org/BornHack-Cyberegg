@@ -37,6 +37,7 @@ use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
+use super::ics::SUMMARY_LEN;
 use crate::menu::ButtonId;
 use crate::{BLACK, RED, TriColor, WHITE};
 
@@ -205,6 +206,13 @@ static ALARM_MELODY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(8) }; N_ALARM
 static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
 static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+/// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
+/// per-byte atomics to match the rest of the alarm state — no
+/// synchronisation primitive needed and the byte-by-byte loads are
+/// negligible compared to a screen redraw.  Empty for slot 0 (the
+/// manual alarm has no title) and overwritten at boot from `ALARMS.ICS`.
+static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
+    [const { [const { AtomicU8::new(0) }; SUMMARY_LEN] }; N_ALARMS];
 
 /// Curated alarm-tone choices: (menu label, melody index).
 /// Order is the cycle order in the Settings → Alarm → Tone stepper.
@@ -256,6 +264,22 @@ pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
 
+/// Returns the slot's SUMMARY as a heapless string.  Empty if no
+/// summary was set (e.g. slot 0, or pre-import).
+#[allow(dead_code)]
+pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
+    let i = s(slot);
+    let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
+    for byte_atomic in ALARM_SUMMARY[i].iter() {
+        let b = byte_atomic.load(Ordering::Relaxed);
+        if b == 0 {
+            break;
+        }
+        let _ = out.push(b as char);
+    }
+    out
+}
+
 /// `day` is 0 = Mon .. 6 = Sun.
 pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
     day < 7 && (alarm_days_n(slot) >> day) & 1 != 0
@@ -304,6 +328,15 @@ pub fn set_alarm_melody_n(slot: usize, melody: u8) {
     super::signal_settings_dirty();
 }
 
+/// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
+#[allow(dead_code)]
+pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
+    let i = s(slot);
+    for (j, b) in src.iter().enumerate() {
+        ALARM_SUMMARY[i][j].store(*b, Ordering::Relaxed);
+    }
+}
+
 /// Clear all imported alarms — disable + zero-date slots 1..N_ALARMS.  Slot 0
 /// (the user's manual alarm) is left alone.  Used by the Events menu to
 /// undo an `ALARMS.ICS` import without rebooting; the next boot would
@@ -315,6 +348,9 @@ pub fn clear_imported_alarms() {
         ALARM_YEAR[slot].store(0, Ordering::Relaxed);
         ALARM_MONTH[slot].store(0, Ordering::Relaxed);
         ALARM_DAY[slot].store(0, Ordering::Relaxed);
+        for byte_atomic in ALARM_SUMMARY[slot].iter() {
+            byte_atomic.store(0, Ordering::Relaxed);
+        }
     }
     super::signal_settings_dirty();
 }

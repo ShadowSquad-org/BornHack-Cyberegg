@@ -141,6 +141,7 @@ pub async fn import_alarms_from_fat12() {
         }
         alarm::set_alarm_time_n(slot, event.hour, event.minute);
         alarm::set_alarm_date_n(slot, event.year, event.month, event.day);
+        alarm::set_alarm_summary_n(slot, &event.summary);
         alarm::set_alarm_enabled_n(slot, true);
         slot += 1;
     }
