@@ -65,6 +65,23 @@ Once connected, the MeshCore app gives full control of the LoRa mesh side of the
 
 The badge appears in the app as a standard MeshCore node. All mesh activity (received messages, adverts, ACKs) is pushed to the app as BLE notifications without polling.
 
+## NFC station commands
+
+The badge emulates an ISO 14443-A Type 4 tag and accepts authenticated
+"station" commands (feed, heal, inspire, sleep) over NFC. Authentication
+uses Ed25519 signatures with a challenge-response handshake — the badge
+holds only the public verifying key, while the matching private key
+lives in the reader app.
+
+The reference reader is the [BadgeCtl Android app](../../android_nfc/BadgeCtl).
+
+For the full protocol spec, wire format, status words, and a step-by-step
+guide for implementing your own reader (Kotlin / Python / Rust examples),
+see **[NFC_README.md](NFC_README.md)**.
+
+The NFC tag also serves a plaintext NDEF URL (`https://badge.team`) for
+unauthenticated phone-side tag readers.
+
 ## MeshCore Companion Protocol
 
 The firmware implements the [MeshCore companion protocol](https://docs.meshcore.io/companion_protocol/) over BLE NUS.
