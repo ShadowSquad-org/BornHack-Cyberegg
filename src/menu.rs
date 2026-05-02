@@ -503,21 +503,17 @@ impl<const M: usize> DisplayState<M> {
             return;
         }
 
-        // Calendar screen consumes all arrow keys for cursor movement on the
-        // month grid, plus Fire/Execute to drill into a day's events.  We map
-        // Cancel to `screen_left()` here so the user has an explicit exit —
-        // the grid leaves no other button free to fall through for screen-nav.
-        // (In day-detail mode the calendar's own dispatcher consumes Cancel
-        // to return to the grid; this branch is unreachable there.)
+        // Calendar screen starts in a passive mode — arrows and Cancel fall
+        // through here so screen-nav works.  Fire/Execute is the trigger
+        // that flips it into Active mode, where the calendar's own
+        // dispatcher takes over the arrow keys for cursor movement and
+        // Cancel returns to passive.  See `crate::watch::calendar` for the
+        // full mode table.
         #[cfg(feature = "watch")]
-        if self.active_screen == crate::SCREEN_CALENDAR {
-            if crate::watch::calendar::dispatch(btn) {
-                return;
-            }
-            if matches!(btn, ButtonId::Cancel) {
-                self.screen_left();
-                return;
-            }
+        if self.active_screen == crate::SCREEN_CALENDAR
+            && crate::watch::calendar::dispatch(btn)
+        {
+            return;
         }
 
         let screen = &self.screens[self.active_screen as usize];

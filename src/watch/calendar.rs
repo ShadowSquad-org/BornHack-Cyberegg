@@ -4,32 +4,30 @@
 //! state that fires the buzzer, so any event you load via `ALARMS.ICS`
 //! automatically shows up here.
 //!
-//! Two visual modes:
+//! Three modes — same shape as the Watch face's "consume arrows only
+//! when needed" pattern, so the user can scroll past Calendar with
+//! Left/Right without it grabbing the input:
 //!
-//!   * **Grid** (default): a 6-week, 7-column grid of the cursor's month.
-//!     Out-of-month cells are blank.  Today's cell gets a red fill with
-//!     the day number in white.  Days with one or more events get a
-//!     small red dot above the day number.  The cursor cell gets a 1 px
-//!     black border (drawn around the red fill if today is also the
-//!     cursor).  The bottom strip previews the cursor day's first event
-//!     plus a `+N more` line when applicable.
+//!   * **Passive** (default on entry): the grid is rendered but the
+//!     cursor border is hidden.  Up/Down/Left/Right/Cancel fall through
+//!     to the menu layer so screen-nav works.  Fire/Execute is the only
+//!     consumed button — it transitions into Active.
+//!
+//!   * **Active**: cursor border becomes visible.  Up/Down/Left/Right
+//!     move the cursor one cell (crossing month boundaries via
+//!     fasttime arithmetic).  Fire/Execute drills into Day-detail.
+//!     Cancel returns to Passive.
 //!
 //!   * **Day detail**: full-screen list of every event on the cursor
-//!     day, scrollable.  Reuses the same alarm-slot state.
+//!     day, scrollable, reusing the same alarm-slot state.  Cancel
+//!     returns to Active.
 //!
-//! Buttons in **grid mode**:
-//!   * Up / Down / Left / Right — move cursor one cell (crosses month
-//!     boundaries automatically via fasttime arithmetic)
-//!   * Fire / Execute            — enter day-detail mode
-//!   * Cancel                    — falls through (lets the menu layer
-//!                                  navigate to the next/previous
-//!                                  screen)
-//!
-//! Buttons in **day-detail mode**:
-//!   * Up / Down                 — scroll
-//!   * Cancel                    — back to grid mode (consumed)
-//!   * Left / Right / Fire / Execute — consumed, no-op (avoids
-//!                                       accidental screen-nav)
+//! Today's cell gets a red fill with the day number in white.  Days
+//! with one or more events get a small red dot above the day number.
+//! The cursor cell (in Active) gets a 1 px black border drawn around
+//! everything else.  The bottom strip previews the cursor day's first
+//! event in Passive *and* Active so you see today's plan at a glance
+//! the moment you land on the screen.
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_7X13_BOLD};
@@ -48,10 +46,11 @@ use crate::{BLACK, RED, TriColor, WHITE, draw_frame};
 
 // ── State ───────────────────────────────────────────────────────────────────
 
-const MODE_GRID: u8 = 0;
-const MODE_DAY_DETAIL: u8 = 1;
+const MODE_PASSIVE: u8 = 0;
+const MODE_ACTIVE: u8 = 1;
+const MODE_DAY_DETAIL: u8 = 2;
 
-static MODE: AtomicU8 = AtomicU8::new(MODE_GRID);
+static MODE: AtomicU8 = AtomicU8::new(MODE_PASSIVE);
 
 /// Cursor (selected) date.  `(0, 0, 0)` is the sentinel meaning
 /// "uninitialised — pick a sensible default on the next draw".
@@ -194,13 +193,25 @@ fn set_cursor(ymd: (u16, u8, u8)) {
 pub fn dispatch(btn: ButtonId) -> bool {
     match MODE.load(Ordering::Relaxed) {
         MODE_DAY_DETAIL => dispatch_day_detail(btn),
-        _ => dispatch_grid(btn),
+        MODE_ACTIVE => dispatch_active(btn),
+        _ => dispatch_passive(btn),
     }
 }
 
-fn dispatch_grid(btn: ButtonId) -> bool {
-    // We can't easily collect events here without re-doing the alarm walk;
-    // skip event-aware logic in the dispatcher and just do date arithmetic.
+/// Passive: the only button we consume is Fire/Execute (transitions to
+/// Active).  Everything else falls through so the menu can do
+/// screen-nav, dismiss alarms, etc. — the same shape as the Watch face.
+fn dispatch_passive(btn: ButtonId) -> bool {
+    match btn {
+        ButtonId::Fire | ButtonId::Execute => {
+            MODE.store(MODE_ACTIVE, Ordering::Relaxed);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn dispatch_active(btn: ButtonId) -> bool {
     let cur = (
         CURSOR_YEAR.load(Ordering::Relaxed),
         CURSOR_MONTH.load(Ordering::Relaxed),
@@ -223,7 +234,10 @@ fn dispatch_grid(btn: ButtonId) -> bool {
             MODE.store(MODE_DAY_DETAIL, Ordering::Relaxed);
             return true;
         }
-        ButtonId::Cancel => return false, // fall through to screen-nav
+        ButtonId::Cancel => {
+            MODE.store(MODE_PASSIVE, Ordering::Relaxed);
+            return true;
+        }
     };
     set_cursor(next);
     true
@@ -234,7 +248,7 @@ fn dispatch_day_detail(btn: ButtonId) -> bool {
     match btn {
         ButtonId::Up => DETAIL_SCROLL.store(cur.saturating_sub(1), Ordering::Relaxed),
         ButtonId::Down => DETAIL_SCROLL.store(cur.saturating_add(1), Ordering::Relaxed),
-        ButtonId::Cancel => MODE.store(MODE_GRID, Ordering::Relaxed),
+        ButtonId::Cancel => MODE.store(MODE_ACTIVE, Ordering::Relaxed),
         // Swallow other buttons so they don't accidentally screen-nav.
         ButtonId::Left | ButtonId::Right | ButtonId::Fire | ButtonId::Execute => {}
     }
@@ -273,11 +287,12 @@ where
 
     match MODE.load(Ordering::Relaxed) {
         MODE_DAY_DETAIL => draw_day_detail(display, events),
-        _ => draw_grid(display, events),
+        MODE_ACTIVE => draw_grid(display, events, true),
+        _ => draw_grid(display, events, false),
     }
 }
 
-fn draw_grid<D>(display: &mut D, events: &[EventRow]) -> Result<(), D::Error>
+fn draw_grid<D>(display: &mut D, events: &[EventRow], active: bool) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
@@ -364,12 +379,11 @@ where
                 }
             }
 
-            // Cursor border — drawn last so it sits on top of everything.
-            // We draw it for in-month cells only; if the cursor would be
-            // off-month we'd never get here because the cursor itself is
-            // always one of the in-month cells (set_cursor is fed only
-            // from add_days starting from a real date).
-            if is_cursor && in_month {
+            // Cursor border — drawn last so it sits on top of everything,
+            // and only in Active mode (Passive hides it so the user knows
+            // arrows will fall through to screen-nav).  In-month cells only;
+            // the cursor itself is always one of the in-month cells.
+            if active && is_cursor && in_month {
                 Rectangle::new(
                     Point::new(cell_x, cell_y),
                     Size::new(COL_W as u32, ROW_H as u32),
