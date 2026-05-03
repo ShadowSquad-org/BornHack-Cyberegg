@@ -179,8 +179,12 @@ pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: off.
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(false);
 
-/// UTC offset in whole hours (-12..=+14). Default: 0 (UTC).
-pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(0);
+/// UTC offset in whole hours (-12..=+14).  Default: +2 (Europe/Copenhagen
+/// summer time / CEST) — matches Bornhack's typical July/August venue.
+/// User can override via Settings → Timezone; the kv-stored value loads
+/// at boot and shadows this default, so changing this only affects fresh
+/// badges that have never had a timezone set.
+pub static TIMEZONE_OFFSET: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(2);
 
 /// Fired when `TIMEZONE_OFFSET` changes so the BLE task can persist it.
 #[cfg(feature = "embassy-base")]

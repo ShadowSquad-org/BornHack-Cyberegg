@@ -403,12 +403,16 @@ pub async fn set_autoadd_config(config: u8, max_hops: u8) -> Result<(), kv::KvEr
 // Timezone offset  (menu stepper, persisted locally)
 // ---------------------------------------------------------------------------
 
-/// Read the persisted UTC hour offset (-12..=+14).  Returns 0 if not stored.
+/// Read the persisted UTC hour offset (-12..=+14).  Returns +2 (CEST,
+/// Europe/Copenhagen summer) when no value has been stored yet — most
+/// badges ship into a Bornhack-style summer venue, so this saves the
+/// user from immediately having to flip Settings → Timezone before the
+/// clock face shows the right time.
 pub async fn get_timezone() -> i8 {
     let mut b = [0u8; 1];
     match ns().get("tz", &mut b).await {
         Ok(1) => b[0] as i8,
-        _ => 0,
+        _ => 2,
     }
 }
 
