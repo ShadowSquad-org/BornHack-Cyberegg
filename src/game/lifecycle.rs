@@ -362,7 +362,7 @@ fn check_severity_transition(state: &GameState) {
     if now == Severity::Gone as u8 && prev != Severity::Gone as u8 {
         if !muted {
             #[cfg(feature = "embassy-base")]
-            crate::fw::buzzer::play(crate::fw::buzzer::FUNNY_ENDING_INDEX);
+            crate::fw::buzzer::play(crate::FUNNY_ENDING_INDEX);
         }
         return;
     }
@@ -374,7 +374,7 @@ fn check_severity_transition(state: &GameState) {
     let upward = now > prev && now <= Severity::Leaving as u8;
     if upward && !muted {
         #[cfg(feature = "embassy-base")]
-        crate::fw::buzzer::play(crate::fw::buzzer::PET_WARN_INDEX);
+        crate::fw::buzzer::play(crate::PET_WARN_INDEX);
     }
 }
 
