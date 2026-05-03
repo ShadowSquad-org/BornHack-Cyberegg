@@ -18,7 +18,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::nav::Row;
@@ -456,10 +456,34 @@ where
 
     let stats = super::lifecycle::cycle();
 
-    for (i, item) in items.iter().enumerate() {
-        let row_top = list_y + i as i32 * ITEM_H;
+    // ── Scroll window ─────────────────────────────────────────────────
+    // When the items list is taller than the visible area, reserve a
+    // strip above and below for up/down arrow indicators and slide a
+    // window over `items` so the selected `pos` is always visible.
+    // Stateless: scroll position is derived from `pos` each frame.
+    const ARROW_H: i32 = 10;
+    let visible_no_arrows = ((list_bottom - list_y) / ITEM_H).max(1) as usize;
+    let needs_scroll = items.len() > visible_no_arrows;
+    let arrow_pad = if needs_scroll { ARROW_H } else { 0 };
+    let inner_top = list_y + arrow_pad;
+    let inner_bottom = list_bottom - arrow_pad;
+    let visible_rows = ((inner_bottom - inner_top) / ITEM_H).max(1) as usize;
+    let max_top = items.len().saturating_sub(visible_rows);
+    // Center the selected row in the window when possible; clamp at
+    // the start and end of the items list.
+    let scroll_top = pos.saturating_sub(visible_rows / 2).min(max_top);
+
+    for (vis_i, item) in items
+        .iter()
+        .enumerate()
+        .skip(scroll_top)
+        .take(visible_rows)
+        .map(|(i, it)| (i - scroll_top, it))
+    {
+        let i = scroll_top + vis_i;
+        let row_top = inner_top + vis_i as i32 * ITEM_H;
         let row_mid = row_top + ITEM_H / 2;
-        if row_top + ITEM_H > list_bottom {
+        if row_top + ITEM_H > inner_bottom {
             break;
         }
 
@@ -541,6 +565,40 @@ where
                     Size::new(inner_w, ITEM_H as u32),
                 ),
             )?;
+        }
+    }
+
+    // ── Scroll arrows ─────────────────────────────────────────────────
+    // Drawn after the rows so they overlay correctly.  Each is a
+    // filled triangle horizontally centred in `inner_w`, occupying
+    // most of the `ARROW_H`-tall padding strip with a 1 px gap on
+    // both sides for breathing room.
+    if needs_scroll {
+        let cx = inner_x + inner_w as i32 / 2;
+        let half_w: i32 = 7;
+        if scroll_top > 0 {
+            // Up arrow: apex at top, base at bottom.
+            let top_y = list_y + 1;
+            let bot_y = list_y + ARROW_H - 2;
+            Triangle::new(
+                Point::new(cx, top_y),
+                Point::new(cx - half_w, bot_y),
+                Point::new(cx + half_w, bot_y),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
+        }
+        if scroll_top + visible_rows < items.len() {
+            // Down arrow: base at top, apex at bottom.
+            let top_y = list_bottom - ARROW_H + 2;
+            let bot_y = list_bottom - 1;
+            Triangle::new(
+                Point::new(cx - half_w, top_y),
+                Point::new(cx + half_w, top_y),
+                Point::new(cx, bot_y),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
         }
     }
 
