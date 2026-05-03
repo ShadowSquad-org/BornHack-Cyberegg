@@ -429,8 +429,17 @@ async fn display_loop(
         // left in the panel (e.g. minigame cursor before it was
         // changed to dithered B/W) would otherwise stick around.
         // Consume the flag with `swap` so the upgrade applies once.
-        let do_full =
-            bornhack_aegg::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
+        //
+        // We also force a full tri-color refresh whenever the BLE
+        // pairing PIN dialog is up.  Without it the PIN box renders
+        // cleanly on the B/W plane but RED pixels from the underlying
+        // screen (e.g. Calendar's today-fill or event dots) bleed
+        // through, which makes the PIN unreadable on the Calendar
+        // screen specifically.  The pairing window is short, so the
+        // slower refresh per cycle is fine.
+        let do_full = bornhack_aegg::FULL_REFRESH_PENDING
+            .swap(false, core::sync::atomic::Ordering::Relaxed)
+            || bornhack_aegg::BLE_PASSKEY.load(core::sync::atomic::Ordering::Relaxed) != u32::MAX;
 
         let sprite_advance = match select(
             async {
