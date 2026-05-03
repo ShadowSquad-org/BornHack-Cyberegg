@@ -206,6 +206,16 @@ static ALARM_MELODY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(8) }; N_ALARM
 static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
 static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+/// Event end time (hour, minute) per slot.  Used by the Calendar
+/// day-view to render events as duration blocks.  When `DTEND` is
+/// missing in the source ICS the importer mirrors the start time
+/// (zero-duration event → renders as a thin marker).  Multi-day
+/// events are clamped to 23:59 of the start day at import time so
+/// the day-view doesn't have to handle midnight crossings.  These
+/// fields are not consulted by `check_and_fire_alarm`; the alarm
+/// fires at the start time only.
+static ALARM_END_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
 /// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
 /// per-byte atomics to match the rest of the alarm state — no
 /// synchronisation primitive needed and the byte-by-byte loads are
@@ -263,6 +273,14 @@ pub fn alarm_month_n(slot: usize) -> u8 {
 pub fn alarm_day_n(slot: usize) -> u8 {
     ALARM_DAY[s(slot)].load(Ordering::Relaxed)
 }
+#[allow(dead_code)]
+pub fn alarm_end_hour_n(slot: usize) -> u8 {
+    ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)]
+pub fn alarm_end_minute_n(slot: usize) -> u8 {
+    ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
+}
 
 /// Returns the slot's SUMMARY as a heapless string.  Empty if no
 /// summary was set (e.g. slot 0, or pre-import).
@@ -314,6 +332,17 @@ pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
     ALARM_HOUR[i].store(hour.min(23), Ordering::Relaxed);
     ALARM_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
     super::signal_settings_dirty();
+}
+
+/// Set the slot's event end time.  Used by the ICS importer to record
+/// the `DTEND` of each event so the day-view can render duration
+/// blocks.  Defaults to the start time when `DTEND` is missing or
+/// degenerate (zero-duration event renders as a thin marker).
+#[allow(dead_code)]
+pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
+    let i = s(slot);
+    ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
+    ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
@@ -397,6 +426,8 @@ pub fn clear_imported_alarms() {
         ALARM_YEAR[slot].store(0, Ordering::Relaxed);
         ALARM_MONTH[slot].store(0, Ordering::Relaxed);
         ALARM_DAY[slot].store(0, Ordering::Relaxed);
+        ALARM_END_HOUR[slot].store(0, Ordering::Relaxed);
+        ALARM_END_MINUTE[slot].store(0, Ordering::Relaxed);
         for byte_atomic in ALARM_SUMMARY[slot].iter() {
             byte_atomic.store(0, Ordering::Relaxed);
         }
