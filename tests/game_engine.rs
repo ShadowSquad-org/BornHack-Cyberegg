@@ -1,8 +1,8 @@
 //! Game engine tests — validates progression, action effects, and lifetime
 //! ranges against player policies matching the Python simulation.
 
-use hello_graphics::game::engine::thresholds::*;
-use hello_graphics::game::engine::{GameState, Phase};
+use bornhack_aegg::game::engine::thresholds::*;
+use bornhack_aegg::game::engine::{GameState, Phase};
 
 // ---------------------------------------------------------------------------
 // Player policies

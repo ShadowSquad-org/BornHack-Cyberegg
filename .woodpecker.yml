@@ -26,7 +26,7 @@ steps:
       - rustup target add thumbv7em-none-eabihf
       # Format check on the main package only — vendored crates under
       # vendor/* are third-party copies we don't own.
-      - cargo +nightly fmt -p hello-graphics --check
+      - cargo +nightly fmt -p bornhack-aegg --check
       # Build the host simulator (SDL2-driven) and the nRF52840 firmware
       # in the same `embassy` configuration the egg actually flashes.
       - cargo build --bin simulator --features simulator

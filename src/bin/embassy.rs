@@ -8,25 +8,25 @@ use embassy_nrf::pac::wdt::vals::{Halt as WdtHalt, Sleep as WdtSleep};
 use embassy_nrf::pwm::SimplePwm;
 use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
 use embassy_time::Timer;
-use hello_graphics::fw::battery::{self, battery_task, init as init_battery};
-use hello_graphics::fw::button::{BTN_WATCH, run_buttons};
-use hello_graphics::fw::buzzer::{Buzzer, buzzer_task};
-use hello_graphics::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd};
+use bornhack_aegg::fw::battery::{self, battery_task, init as init_battery};
+use bornhack_aegg::fw::button::{BTN_WATCH, run_buttons};
+use bornhack_aegg::fw::buzzer::{Buzzer, buzzer_task};
+use bornhack_aegg::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd};
 #[cfg(feature = "mesh")]
-use hello_graphics::fw::mesh::{
+use bornhack_aegg::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
     bonds::bond_task,
     contacts::ContactStore,
     meshcore::run_meshcore_listener,
     persister, settings,
 };
-use hello_graphics::fw::nfct::run_nfct;
-use hello_graphics::fw::{device_id, kv, led};
+use bornhack_aegg::fw::nfct::run_nfct;
+use bornhack_aegg::fw::{device_id, kv, led};
 #[cfg(feature = "mesh")]
-use hello_graphics::{
+use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
-use hello_graphics::{
+use bornhack_aegg::{
     BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
     draw_graphics, health_err, unix_now, with_health,
 };
@@ -62,7 +62,7 @@ async fn main(spawner: Spawner) {
     let _ps_sync = Output::new(board!(p, ps_sync), Level::Low, OutputDrive::Standard);
 
     // ── External flash (shared between KV store and USB mass storage) ────
-    match hello_graphics::fw::flash::init(
+    match bornhack_aegg::fw::flash::init(
         p.QSPI,
         board!(p, flash_sck),
         board!(p, flash_csn),
@@ -83,7 +83,7 @@ async fn main(spawner: Spawner) {
     }
 
     // ── FAT12 partition — auto-format if blank ─────────────────────────
-    if let Err(e) = hello_graphics::fw::fat12::format_if_needed().await {
+    if let Err(e) = bornhack_aegg::fw::fat12::format_if_needed().await {
         defmt::warn!("FAT12 format check failed: {:?}", e);
     }
 
@@ -109,7 +109,7 @@ async fn main(spawner: Spawner) {
     // before BLE init takes ownership of `p.RNG`.  After this point the
     // signed-channel CSPRNG produces fresh challenges without needing
     // the hardware peripheral again.
-    hello_graphics::signed_channel::Csprng::seed_from_hardware();
+    bornhack_aegg::signed_channel::Csprng::seed_from_hardware();
 
     // ── KV store ─────────────────────────────────────────────────────────
     // Persistent key-value store used by the game (save/load), sponsor
@@ -120,9 +120,9 @@ async fn main(spawner: Spawner) {
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
-        hello_graphics::watch::load_settings_from_kv().await;
-        spawner.must_spawn(hello_graphics::watch::settings_persister_task());
-        spawner.must_spawn(hello_graphics::watch::alarm_ring_timeout_task());
+        bornhack_aegg::watch::load_settings_from_kv().await;
+        spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
+        spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
     }
 
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
@@ -141,11 +141,11 @@ async fn main(spawner: Spawner) {
         // quick reboot the display could draw a frame using the static
         // default (TIMEZONE_OFFSET = 0 → UTC) before the BLE task had a
         // chance to load the persisted offset.
-        hello_graphics::TIMEZONE_OFFSET.store(
+        bornhack_aegg::TIMEZONE_OFFSET.store(
             settings::get_timezone().await,
             core::sync::atomic::Ordering::Relaxed,
         );
-        hello_graphics::BOOSTED_RX_GAIN.store(
+        bornhack_aegg::BOOSTED_RX_GAIN.store(
             settings::get_boost_rx().await,
             core::sync::atomic::Ordering::Relaxed,
         );
@@ -156,52 +156,52 @@ async fn main(spawner: Spawner) {
         // command; that change persists.
         {
             let scope = settings::get_flood_scope_or_init_default().await;
-            hello_graphics::fw::mesh::FLOOD_SCOPE_KEY.lock(|c| c.set(scope));
+            bornhack_aegg::fw::mesh::FLOOD_SCOPE_KEY.lock(|c| c.set(scope));
         }
 
         {
             let rp = settings::get_radio_params_or_default().await;
             use core::sync::atomic::Ordering::Relaxed;
-            hello_graphics::LORA_FREQ_HZ.store(rp.freq_hz, Relaxed);
-            hello_graphics::LORA_BW_HZ.store(rp.bw_hz, Relaxed);
-            hello_graphics::LORA_SF.store(rp.sf, Relaxed);
-            hello_graphics::LORA_CR.store(rp.cr, Relaxed);
-            hello_graphics::LORA_TX_POWER.store(rp.tx_power, Relaxed);
-            hello_graphics::LORA_CLIENT_REPEAT.store(rp.client_repeat, Relaxed);
+            bornhack_aegg::LORA_FREQ_HZ.store(rp.freq_hz, Relaxed);
+            bornhack_aegg::LORA_BW_HZ.store(rp.bw_hz, Relaxed);
+            bornhack_aegg::LORA_SF.store(rp.sf, Relaxed);
+            bornhack_aegg::LORA_CR.store(rp.cr, Relaxed);
+            bornhack_aegg::LORA_TX_POWER.store(rp.tx_power, Relaxed);
+            bornhack_aegg::LORA_CLIENT_REPEAT.store(rp.client_repeat, Relaxed);
         }
         {
             use core::sync::atomic::Ordering::Relaxed;
             if let Some(op) = settings::get_other_params().await {
-                hello_graphics::ADVERT_LOC_POLICY.store(op.advert_loc_policy != 0, Relaxed);
+                bornhack_aegg::ADVERT_LOC_POLICY.store(op.advert_loc_policy != 0, Relaxed);
                 // Clamp persisted value into the menu-exposed range (1 or 2).
                 let ma = if op.multi_acks == 0 {
                     1
                 } else {
                     op.multi_acks.min(2)
                 };
-                hello_graphics::MULTI_ACKS.store(ma, Relaxed);
+                bornhack_aegg::MULTI_ACKS.store(ma, Relaxed);
                 // Derived master-telemetry flag — "on" iff any mode is non-zero.
                 let share = op.telemetry_mode_base != 0
                     || op.telemetry_mode_loc != 0
                     || op.telemetry_mode_env != 0;
-                hello_graphics::TELEMETRY_SHARE.store(share, Relaxed);
+                bornhack_aegg::TELEMETRY_SHARE.store(share, Relaxed);
             }
-            hello_graphics::fw::mesh::PATH_HASH_MODE
+            bornhack_aegg::fw::mesh::PATH_HASH_MODE
                 .store(settings::get_path_hash_mode().await.min(2), Relaxed);
 
             let adv = settings::get_advert_config_or_default().await;
-            hello_graphics::ADVERT_ENABLED.store(adv.enabled, Relaxed);
-            hello_graphics::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
+            bornhack_aegg::ADVERT_ENABLED.store(adv.enabled, Relaxed);
+            bornhack_aegg::ADVERT_INTERVAL_HOURS.store(adv.interval_hours, Relaxed);
 
-            hello_graphics::IGNORE_BLINK.store(settings::get_ignore_blink().await, Relaxed);
-            hello_graphics::LORA_DISABLED.store(!settings::get_lora_enabled().await, Relaxed);
-            hello_graphics::BLE_DISABLED.store(!settings::get_ble_enabled().await, Relaxed);
+            bornhack_aegg::IGNORE_BLINK.store(settings::get_ignore_blink().await, Relaxed);
+            bornhack_aegg::LORA_DISABLED.store(!settings::get_lora_enabled().await, Relaxed);
+            bornhack_aegg::BLE_DISABLED.store(!settings::get_ble_enabled().await, Relaxed);
         }
 
         let identity = settings::load_or_create_identity().await;
-        let ble_prng_seed = hello_graphics::fw::mesh::device_identity::trng_seed();
+        let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
 
-        static SDC_MEM: StaticCell<nrf_sdc::Mem<{ hello_graphics::fw::mesh::ble::SDC_MEM_SIZE }>> =
+        static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
             StaticCell::new();
         let sdc = init_ble(
             &spawner,
@@ -239,12 +239,12 @@ async fn main(spawner: Spawner) {
     // ── Game engine + sprite loader ─────────────────────────────────────
     #[cfg(feature = "game")]
     {
-        hello_graphics::game::lifecycle::init().await;
-        hello_graphics::game::sprite_loader::init().await;
+        bornhack_aegg::game::lifecycle::init().await;
+        bornhack_aegg::game::sprite_loader::init().await;
     }
 
     // ── Temperature ──────────────────────────────────────────────────────
-    let temp_celsius = hello_graphics::fw::temperature::read_and_cache().await;
+    let temp_celsius = bornhack_aegg::fw::temperature::read_and_cache().await;
     defmt::info!("Die temperature: {} °C", temp_celsius);
 
     // ── EPD display ──────────────────────────────────────────────────────
@@ -325,12 +325,12 @@ async fn main(spawner: Spawner) {
     // waiting for the main display loop to come up.  VBUS detection is
     // automatic — the USB PHY powers up when a cable is connected.
     #[cfg(feature = "usb-storage")]
-    spawner.must_spawn(hello_graphics::fw::usb_storage::usb_storage_task(p.USBD));
+    spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
 
     // ── First-boot sponsor slideshow ────────────────────────────────────
-    if !hello_graphics::fw::sponsors::already_shown().await {
+    if !bornhack_aegg::fw::sponsors::already_shown().await {
         defmt::info!("Running first-boot sponsor slideshow");
-        hello_graphics::fw::sponsors::run(&mut display, &mut button_rcvr).await;
+        bornhack_aegg::fw::sponsors::run(&mut display, &mut button_rcvr).await;
     }
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
@@ -385,7 +385,7 @@ async fn display_loop(
 
     loop {
         // Process any pending sponsor flag clear request from the menu.
-        hello_graphics::fw::sponsors::process_clear_request().await;
+        bornhack_aegg::fw::sponsors::process_clear_request().await;
 
         let _ = display.clear(Color::White);
         let active_screen = DISPLAY_STATE.lock(|f| f.borrow().active_screen());
@@ -395,19 +395,19 @@ async fn display_loop(
         // the render so the new anim shows frame 0 immediately rather
         // than waiting for the next sprite-tick fire.
         #[cfg(feature = "game")]
-        if active_screen == hello_graphics::SCREEN_GAME {
-            let anim = hello_graphics::game::lifecycle::display_anim();
-            let id = hello_graphics::game::engine::anim_files::anim_id_for(anim);
+        if active_screen == bornhack_aegg::SCREEN_GAME {
+            let anim = bornhack_aegg::game::lifecycle::display_anim();
+            let id = bornhack_aegg::game::engine::anim_files::anim_id_for(anim);
             if id != last_anim_id {
                 last_anim_id = id;
                 sprite_frame = 0;
             }
-            hello_graphics::game::render(display, sprite_frame).await;
+            bornhack_aegg::game::render(display, sprite_frame).await;
         }
 
         #[cfg(feature = "mesh")]
         if active_screen == SCREEN_PM {
-            hello_graphics::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
+            bornhack_aegg::PM_UNREAD.store(false, core::sync::atomic::Ordering::Relaxed);
             led::set_led(&led::LED_BLUE, led::LedState::Off);
         }
 
@@ -425,7 +425,7 @@ async fn display_loop(
         // changed to dithered B/W) would otherwise stick around.
         // Consume the flag with `swap` so the upgrade applies once.
         let do_full =
-            hello_graphics::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
+            bornhack_aegg::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
 
         let sprite_advance = match select(
             async {
@@ -455,15 +455,15 @@ async fn display_loop(
         // the reset is visible on the same frame as the change.
         #[cfg(feature = "game")]
         if sprite_advance {
-            let anim = hello_graphics::game::lifecycle::display_anim();
-            let kind = hello_graphics::game::lifecycle::pet_kind();
-            let count = hello_graphics::game::engine::anim_files::frame_count(kind, anim);
+            let anim = bornhack_aegg::game::lifecycle::display_anim();
+            let kind = bornhack_aegg::game::lifecycle::pet_kind();
+            let count = bornhack_aegg::game::engine::anim_files::frame_count(kind, anim);
             if count > 0 {
                 let next = sprite_frame + 1;
                 // During hatching, clamp to the last frame instead of wrapping.
                 let is_hatching = matches!(
                     anim,
-                    hello_graphics::game::engine::DisplayAnim::Hatching { .. }
+                    bornhack_aegg::game::engine::DisplayAnim::Hatching { .. }
                 );
                 sprite_frame = if is_hatching {
                     next.min(count - 1)
@@ -493,9 +493,9 @@ async fn wait_display_event(
     use embassy_futures::select::{Either, Either3, select, select3};
 
     #[cfg(feature = "game")]
-    let sprite_active = active_screen == hello_graphics::SCREEN_GAME
-        && (hello_graphics::game::sprite_loader::frame_count() > 0
-            || hello_graphics::game::lifecycle::is_started());
+    let sprite_active = active_screen == bornhack_aegg::SCREEN_GAME
+        && (bornhack_aegg::game::sprite_loader::frame_count() > 0
+            || bornhack_aegg::game::lifecycle::is_started());
 
     loop {
         #[cfg(feature = "game")]
@@ -505,29 +505,29 @@ async fn wait_display_event(
                 // Timed animations (hatching, actions) spread frames evenly
                 // over their duration so every frame is shown.
                 // Idle/warning/etc: 10 seconds per frame.
-                let anim = hello_graphics::game::lifecycle::display_anim();
-                let kind = hello_graphics::game::lifecycle::pet_kind();
+                let anim = bornhack_aegg::game::lifecycle::display_anim();
+                let kind = bornhack_aegg::game::lifecycle::pet_kind();
                 let frame_count =
-                    hello_graphics::game::engine::anim_files::frame_count(kind, anim) as u64;
+                    bornhack_aegg::game::engine::anim_files::frame_count(kind, anim) as u64;
                 if frame_count <= 1 {
                     // Single frame — no animation to advance; sleep until
                     // the game state changes (next wake tick).
-                    let wake = hello_graphics::game::lifecycle::next_wake_tick();
-                    let now = hello_graphics::game::lifecycle::now_tick();
+                    let wake = bornhack_aegg::game::lifecycle::next_wake_tick();
+                    let now = bornhack_aegg::game::lifecycle::now_tick();
                     let wait_ticks = wake.saturating_sub(now).max(1) as u64;
                     Timer::after_secs(wait_ticks * 10).await;
                 } else {
                     let interval_secs = match anim {
-                        hello_graphics::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
+                        bornhack_aegg::game::engine::DisplayAnim::Hatching { ticks_remaining } => {
                             let total_secs = ticks_remaining as u64 * 10;
                             total_secs / frame_count
                         }
-                        hello_graphics::game::engine::DisplayAnim::Feeding
-                        | hello_graphics::game::engine::DisplayAnim::Healing
-                        | hello_graphics::game::engine::DisplayAnim::Relaxing
-                        | hello_graphics::game::engine::DisplayAnim::Playing => {
+                        bornhack_aegg::game::engine::DisplayAnim::Feeding
+                        | bornhack_aegg::game::engine::DisplayAnim::Healing
+                        | bornhack_aegg::game::engine::DisplayAnim::Relaxing
+                        | bornhack_aegg::game::engine::DisplayAnim::Playing => {
                             // Spread frames over the remaining action time.
-                            let stats = hello_graphics::game::lifecycle::cycle();
+                            let stats = bornhack_aegg::game::lifecycle::cycle();
                             let remaining_ticks =
                                 stats.map_or(0, |s| s.action_ticks_remaining as u64);
                             let total_secs = remaining_ticks * 10;
@@ -551,7 +551,7 @@ async fn wait_display_event(
             use embassy_futures::select::Either;
             match select(
                 button_rcvr.changed(),
-                hello_graphics::TOAST_SIGNAL.wait(),
+                bornhack_aegg::TOAST_SIGNAL.wait(),
             )
             .await
             {
@@ -631,32 +631,32 @@ async fn advert_ticker_task() {
     Timer::after(embassy_time::Duration::from_secs(30)).await;
 
     loop {
-        if !hello_graphics::ADVERT_ENABLED.load(Relaxed) {
-            hello_graphics::ADVERT_CHANGED_SIGNAL.wait().await;
-            hello_graphics::ADVERT_CHANGED_SIGNAL.reset();
+        if !bornhack_aegg::ADVERT_ENABLED.load(Relaxed) {
+            bornhack_aegg::ADVERT_CHANGED_SIGNAL.wait().await;
+            bornhack_aegg::ADVERT_CHANGED_SIGNAL.reset();
             continue;
         }
 
         // Send an advert now, then sleep until the next tick (or wake early
         // if the menu changes the schedule).
-        let _ = hello_graphics::fw::mesh::tx_send(hello_graphics::fw::mesh::TxRequest::Advert(
-            hello_graphics::fw::mesh::meshcore::AdvertMode::Flood,
+        let _ = bornhack_aegg::fw::mesh::tx_send(bornhack_aegg::fw::mesh::TxRequest::Advert(
+            bornhack_aegg::fw::mesh::meshcore::AdvertMode::Flood,
         ));
 
-        let hours = hello_graphics::ADVERT_INTERVAL_HOURS
+        let hours = bornhack_aegg::ADVERT_INTERVAL_HOURS
             .load(Relaxed)
             .clamp(2, 96) as u64;
         let sleep = embassy_time::Duration::from_secs(hours * 3600);
 
         match select(
             Timer::after(sleep),
-            hello_graphics::ADVERT_CHANGED_SIGNAL.wait(),
+            bornhack_aegg::ADVERT_CHANGED_SIGNAL.wait(),
         )
         .await
         {
             Either::First(_) => {}
             Either::Second(_) => {
-                hello_graphics::ADVERT_CHANGED_SIGNAL.reset();
+                bornhack_aegg::ADVERT_CHANGED_SIGNAL.reset();
             }
         }
     }
@@ -669,7 +669,7 @@ async fn minute_tick_task() {
         Timer::after(embassy_time::Duration::from_secs(secs)).await;
         MINUTE_TICK.signal(());
         #[cfg(feature = "watch")]
-        hello_graphics::watch::check_and_fire_alarm();
+        bornhack_aegg::watch::check_and_fire_alarm();
     }
 }
 

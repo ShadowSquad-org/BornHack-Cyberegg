@@ -4,7 +4,7 @@
 //! Usage: `cargo run --bin simulate_game --features simulator`
 //! Or:    `make simulate-game`
 
-use hello_graphics::game::engine::{GameState, PetKind, Phase};
+use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
 
 // ---------------------------------------------------------------------------
 // Player policies

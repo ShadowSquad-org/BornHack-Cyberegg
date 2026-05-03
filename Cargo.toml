@@ -1,6 +1,6 @@
 [package]
-name = "hello-graphics"
-version = "0.1.0"
+name = "bornhack-aegg"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
