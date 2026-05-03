@@ -1,29 +1,40 @@
-//! Minimal iCalendar (RFC 5545) parser — just enough to extract
-//! `(year, month, day, hour, minute, summary)` tuples from a flat
-//! `BEGIN:VEVENT` / `END:VEVENT` block stream.
+//! Minimal iCalendar (RFC 5545) parser — extracts `DTSTART`, `DTEND` and
+//! `SUMMARY` from `BEGIN:VEVENT` / `END:VEVENT` blocks.
 //!
 //! What we actually need from an ICS file:
-//!   * `DTSTART` — the event start, in any of: `DTSTART:YYYYMMDDTHHMMSS`
-//!     (floating local time) `DTSTART:YYYYMMDDTHHMMSSZ`       (UTC)
-//!     `DTSTART;TZID=Europe/Copenhagen:YYYYMMDDTHHMMSS` We treat all of these
-//!     as *local* time at parse time; the caller is expected to feed us a file
-//!     already in the badge's local timezone, or accept that UTC times will be
-//!     off by `TIMEZONE_OFFSET` hours.
-//!   * `SUMMARY` — the event title.  We keep up to the first 31 ASCII bytes for
-//!     an eventual on-device label; non-ASCII bytes are dropped.
+//!   * `DTSTART` — the event start, in any of:
+//!       `DTSTART:YYYYMMDDTHHMMSS`             (floating local time)
+//!       `DTSTART:YYYYMMDDTHHMMSSZ`            (UTC)
+//!       `DTSTART;TZID=Europe/Copenhagen:YYYYMMDDTHHMMSS`
+//!   * `DTEND` — same shapes, optional.  When absent the event has zero
+//!     duration (renders as a thin marker on the day-view).
+//!   * `SUMMARY` — the event title.  We keep up to the first 31 ASCII
+//!     bytes for the on-device label; non-ASCII bytes are dropped.
+//!
+//! Timezone handling is split across the parser and its caller:
+//!   * The parser detects the trailing `Z` and reports `is_utc` per
+//!     timestamp.  All time values are returned verbatim (no offset
+//!     applied).
+//!   * The caller (`watch::import_alarms_from_fat12`) applies
+//!     `crate::TIMEZONE_OFFSET` to UTC timestamps before storing them in
+//!     alarm slots.  TZID parameters are stripped at parse time and the
+//!     accompanying value is treated as floating local — we don't ship
+//!     a tzdata table.
 //!
 //! Out of scope: line folding (continuation lines starting with a space),
 //! VALUE= overrides, RRULE recurrence, escape-sequence decoding (`\,`,
-//! `\;`, `\n`, `\\`), nested VTIMEZONE blocks.  Bornhack ICS dumps don't
-//! fold lines and don't put `\,` inside summaries we care about; if we
-//! ever need richer parsing, swap this for a real crate.
+//! `\;`, `\n`, `\\`), nested VTIMEZONE blocks, all-day DATE values
+//! (we require T-prefixed times).  Bornhack ICS dumps don't fold lines
+//! around the SUMMARY/DTSTART/DTEND we care about; if we ever need
+//! richer parsing, swap this for a real crate.
 
 #![cfg_attr(not(test), allow(dead_code))]
 
 /// Maximum bytes kept from an event SUMMARY for the on-device label.
 pub const SUMMARY_LEN: usize = 31;
 
-/// One parsed `VEVENT`.
+/// One parsed `VEVENT`.  When `DTEND` is missing in the source, the end
+/// fields equal the start fields (zero-duration event).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Event {
     pub year: u16,
@@ -31,6 +42,17 @@ pub struct Event {
     pub day: u8,
     pub hour: u8,
     pub minute: u8,
+    /// True when the source `DTSTART` carried a trailing `Z` (UTC).
+    pub start_is_utc: bool,
+    pub end_year: u16,
+    pub end_month: u8,
+    pub end_day: u8,
+    pub end_hour: u8,
+    pub end_minute: u8,
+    /// True when the source `DTEND` carried a trailing `Z` (UTC).  Only
+    /// meaningful when `DTEND` was present; if it wasn't, this mirrors
+    /// `start_is_utc`.
+    pub end_is_utc: bool,
     /// First [`SUMMARY_LEN`] ASCII bytes of the SUMMARY, NUL-padded.
     pub summary: [u8; SUMMARY_LEN],
 }
@@ -81,6 +103,9 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Internal: a parsed timestamp, including whether it was UTC-flagged.
+type ParsedDateTime = (u16, u8, u8, u8, u8, bool);
+
 impl Iterator for Parser<'_> {
     type Item = Event;
 
@@ -94,8 +119,9 @@ impl Iterator for Parser<'_> {
                 }
             }
 
-            // Collect DTSTART and SUMMARY until END:VEVENT.
-            let mut dtstart: Option<(u16, u8, u8, u8, u8)> = None;
+            // Collect DTSTART, DTEND and SUMMARY until END:VEVENT.
+            let mut dtstart: Option<ParsedDateTime> = None;
+            let mut dtend: Option<ParsedDateTime> = None;
             let mut summary = [0u8; SUMMARY_LEN];
             loop {
                 let Some(line) = self.next_line() else {
@@ -105,19 +131,33 @@ impl Iterator for Parser<'_> {
                     break;
                 }
                 if let Some(value) = match_property(line, b"DTSTART") {
-                    dtstart = parse_dtstart(value);
+                    dtstart = parse_datetime(value);
+                } else if let Some(value) = match_property(line, b"DTEND") {
+                    dtend = parse_datetime(value);
                 } else if let Some(value) = match_property(line, b"SUMMARY") {
                     copy_ascii(&mut summary, value);
                 }
             }
 
-            if let Some((y, mo, d, h, mi)) = dtstart {
+            if let Some((y, mo, d, h, mi, utc)) = dtstart {
+                // Default end = start (zero-duration event when DTEND is
+                // missing).  Same UTC flag so the caller's timezone
+                // conversion is consistent across both timestamps.
+                let (ey, emo, ed, eh, emi, eutc) =
+                    dtend.unwrap_or((y, mo, d, h, mi, utc));
                 return Some(Event {
                     year: y,
                     month: mo,
                     day: d,
                     hour: h,
                     minute: mi,
+                    start_is_utc: utc,
+                    end_year: ey,
+                    end_month: emo,
+                    end_day: ed,
+                    end_hour: eh,
+                    end_minute: emi,
+                    end_is_utc: eutc,
                     summary,
                 });
             }
@@ -146,8 +186,8 @@ fn match_property<'a>(line: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
 }
 
 /// Parse `YYYYMMDDTHHMMSS` (with an optional trailing `Z`) into
-/// `(year, month, day, hour, minute)`.  Seconds are discarded.
-fn parse_dtstart(value: &[u8]) -> Option<(u16, u8, u8, u8, u8)> {
+/// `(year, month, day, hour, minute, is_utc)`.  Seconds are discarded.
+fn parse_datetime(value: &[u8]) -> Option<ParsedDateTime> {
     // Need at least YYYYMMDDTHHMM = 13 bytes.
     if value.len() < 13 {
         return None;
@@ -163,7 +203,10 @@ fn parse_dtstart(value: &[u8]) -> Option<(u16, u8, u8, u8, u8)> {
     if month == 0 || month > 12 || day == 0 || day > 31 || hour > 23 || minute > 59 {
         return None;
     }
-    Some((year, month, day, hour, minute))
+    // `Z` may follow the seconds — accept either trailing position
+    // (right after HHMM if seconds were stripped, or right after SS).
+    let is_utc = matches!(value.last(), Some(&b'Z'));
+    Some((year, month, day, hour, minute, is_utc))
 }
 
 fn digits(bytes: &[u8]) -> Option<u32> {
@@ -215,6 +258,7 @@ END:VEVENT\r
 BEGIN:VEVENT\r
 SUMMARY:UTC event\r
 DTSTART:20250819T120000Z\r
+DTEND:20250819T130000Z\r
 END:VEVENT\r
 END:VCALENDAR\r
 ";
@@ -224,20 +268,34 @@ END:VCALENDAR\r
         let events: std::vec::Vec<_> = Parser::new(SAMPLE).collect();
         assert_eq!(events.len(), 3);
 
+        // Event 0: floating local time, has DTEND.
         assert_eq!(events[0].year, 2025);
         assert_eq!(events[0].month, 8);
         assert_eq!(events[0].day, 11);
         assert_eq!(events[0].hour, 14);
         assert_eq!(events[0].minute, 0);
+        assert!(!events[0].start_is_utc);
+        assert_eq!(events[0].end_hour, 15);
+        assert_eq!(events[0].end_minute, 0);
+        assert!(!events[0].end_is_utc);
         assert_eq!(events[0].summary_str(), "Opening Ceremony");
 
+        // Event 1: TZID=local, no DTEND → end mirrors start.
         assert_eq!(events[1].year, 2025);
         assert_eq!(events[1].month, 8);
         assert_eq!(events[1].day, 16);
         assert_eq!(events[1].hour, 14);
         assert_eq!(events[1].minute, 30);
+        assert_eq!(events[1].end_hour, 14);
+        assert_eq!(events[1].end_minute, 30);
+        assert!(!events[1].start_is_utc);
         assert_eq!(events[1].summary_str(), "Talk about Rust");
 
+        // Event 2: UTC, has DTEND.
+        assert!(events[2].start_is_utc);
+        assert!(events[2].end_is_utc);
+        assert_eq!(events[2].hour, 12);
+        assert_eq!(events[2].end_hour, 13);
         assert_eq!(events[2].summary_str(), "UTC event");
     }
 
@@ -265,5 +323,15 @@ END:VEVENT\n";
         let ev = Parser::new(bytes).next().unwrap();
         // The non-ASCII `é` (0xc3 0xa9 in UTF-8) is dropped.
         assert_eq!(ev.summary_str(), "Caf Talk");
+    }
+
+    #[test]
+    fn missing_dtend_mirrors_start() {
+        let bytes: &[u8] = b"BEGIN:VEVENT\nSUMMARY:Point\nDTSTART:20250101T120000\nEND:VEVENT\n";
+        let ev = Parser::new(bytes).next().unwrap();
+        assert_eq!(ev.hour, 12);
+        assert_eq!(ev.end_hour, 12);
+        assert_eq!(ev.minute, 0);
+        assert_eq!(ev.end_minute, 0);
     }
 }
