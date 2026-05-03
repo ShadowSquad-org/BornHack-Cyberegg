@@ -84,12 +84,12 @@ impl ModalKind {
             Self::Heal => &[Item::GiveMedicine, Item::Cancel],
             Self::Play => &[
                 Item::PlayNow,
+                Item::PlayMusic,
                 Item::TicTacToe,
                 Item::LightsOut,
                 Item::BlackHole,
                 Item::Nim,
                 Item::Maze,
-                Item::PlayMusic,
                 Item::Cancel,
             ],
             Self::Music => &[
