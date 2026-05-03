@@ -167,7 +167,7 @@ The current face survives reboots — it's persisted to the `"watch"` kv namespa
 
 #### Alarm
 
-The watch screen has a built-in once-per-day alarm. When armed, the header shows `ALM HH:MM` (white-on-black) so the time is visible even on a fast B&W refresh.
+The watch screen has a built-in once-per-day alarm. When any alarm slot is armed, the Clock face header shows a small red bell — and if a future-firing alarm is scheduled for later today, the next firing time appears as `HH:MM` (black) next to the bell.
 
 There are two ways to set it:
 
@@ -184,6 +184,24 @@ There are two ways to set it:
 When the wall clock matches the armed time on a selected day, the buzzer plays a short "beep beep" pattern and repeats up to 4 times every 8 s. **Pressing any button anywhere in the menu silences the buzzer** (and consumes that button — a second press is needed to actually navigate). After 5 s an un-dismissed alarm auto-clears so it stops eating button presses.
 
 All alarm state — hour, minute, day mask, and enabled flag — is persisted to flash and survives reboots.
+
+#### Calendar events
+
+Beyond the single recurring alarm in slot 0, the watch carries up to **31 one-shot calendar event slots** (slots 1..31 of `N_ALARMS = 32`). Each event has a date (year/month/day), a time, an enabled flag, a 31-byte ASCII summary, and shares slot 0's currently-selected ringtone when it fires.
+
+**Calendar screen.** Reachable from the icon grid right after Clock. Three modes:
+
+- **Passive** (default on entry): month grid with today highlighted in red, days-with-events get a small red dot, no cursor visible. All buttons fall through so you can scroll past Calendar with Left/Right just like any other screen. Fire/Execute enters Active.
+- **Active**: cursor border becomes visible. Up/Down/Left/Right move the cursor a cell (crosses month boundaries automatically). Fire/Execute drills into Day-detail. Cancel returns to Passive.
+- **Day-detail**: full-screen list of every event on the cursor day, scrollable. Cancel returns to Active.
+
+**Clock-face indicator.** Whenever any alarm slot is enabled, a small red bell appears in the Clock face's header. If a future-firing event is scheduled for later today, its `HH:MM` is drawn in black next to the bell.
+
+**Populate event slots by dropping `ALARMS.ICS` onto the FAT12 partition.** At boot the firmware reads the file, parses each `BEGIN:VEVENT` block (extracting `DTSTART`, `DTEND` and `SUMMARY`), and populates slots 1..N. Slot 0 (the manual recurring alarm) is left untouched. The Bornhack programme export from <https://bornhack.dk/.../program/ics/> works directly — the parser handles `TZID=…:` parameters and CRLF line endings. Import limits: a 4 KiB read buffer (≈15–25 events depending on `SUMMARY` length) and the 31-slot cap, whichever hits first. Re-runs only at boot — edits while running don't take effect until next reboot. An example file (Bornhack 2026 opening + closing) ships at [`assets/to-badge/ALARMS.ICS`](assets/to-badge/ALARMS.ICS).
+
+Imported events live in RAM only — they're not persisted to flash, so a reboot re-imports from the FAT12 partition. Settings → Events lists every populated slot read-only (`<n>: HH:MM MM-DD`) plus two actions: **Quick test +5min** (drops a `Quick test` event 5 minutes from now in the first empty slot — handy for verifying the alarm path without USB; silently no-ops if the wall clock isn't synced or all slots are taken) and a destructive **Clear all** that disables and zeros slots 1..31 immediately. Empty slots are auto-hidden — you only scroll past the events that actually exist.
+
+When the wall clock matches an event's date+time, the buzzer plays the user's currently-selected ringtone (the same Settings → Alarm → Tone choice that recurring slot 0 uses), and the slot auto-disables to prevent re-firing.
 
 ### Channel browser
 

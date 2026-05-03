@@ -22,13 +22,14 @@ pub enum ScreenId {
     Channel = 3,
     Advert = 4,
     Watch = 5,
+    Calendar = 6,
 }
 
 impl ScreenId {
     pub const fn index(self) -> u8 {
         self as u8
     }
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 // ── Button identifiers ──────────────────────────────────────────────────────
@@ -86,6 +87,25 @@ pub enum MenuItemKind {
         inc: fn(),
         dec: fn(),
     },
+    /// Read-only display row with a dynamically-formatted label.  Fire is a
+    /// no-op; navigation skips no rows around it.  Used for live data the
+    /// user can only observe — e.g. imported calendar-event alarm slots.
+    /// `MenuItem::label` is ignored for this variant.
+    Info {
+        format: fn(&mut heapless::String<24>),
+    },
+    /// Like `Info`, but the formatter receives a `u8` slot index — lets one
+    /// shared formatter render many similar rows (e.g. all 31 imported
+    /// alarm slots) without per-slot boilerplate.  Optional per-row
+    /// visibility: when `visible(slot)` returns false, the row is auto-
+    /// skipped during nav and rendered as blank — handy for sparse lists
+    /// where most slots are empty most of the time.  `MenuItem::label` is
+    /// ignored for this variant.
+    SlotInfo {
+        format: fn(&mut heapless::String<24>, u8),
+        visible: fn(u8) -> bool,
+        slot: u8,
+    },
     /// Destructive action that first shows a full-screen "Are you sure?"
     /// confirmation dialog. `prompt` is the action name shown in the dialog;
     /// `action` runs only if the user presses Fire/Execute to confirm.
@@ -105,6 +125,17 @@ pub enum MenuItemKind {
 pub struct MenuItem {
     pub label: fn() -> &'static str,
     pub kind: MenuItemKind,
+}
+
+/// Whether the cursor should skip past `kind` during Up/Down nav.
+/// Separators are always skipped; `SlotInfo` rows are skipped when their
+/// `visible` predicate currently returns false.
+fn nav_skip(kind: &MenuItemKind) -> bool {
+    match kind {
+        MenuItemKind::Separator => true,
+        MenuItemKind::SlotInfo { visible, slot, .. } => !visible(*slot),
+        _ => false,
+    }
 }
 
 // ── Per-screen navigation state
@@ -218,10 +249,10 @@ impl ScreenState {
             return;
         }
         let mut prev = pos - 1;
-        while prev > 0 && matches!(items[prev].kind, MenuItemKind::Separator) {
+        while prev > 0 && nav_skip(&items[prev].kind) {
             prev -= 1;
         }
-        if !matches!(items[prev].kind, MenuItemKind::Separator) {
+        if !nav_skip(&items[prev].kind) {
             *self.current_pos_mut() = prev as u8;
         }
     }
@@ -239,7 +270,7 @@ impl ScreenState {
         let len = items.len();
         let pos = self.current_pos();
         let mut next = pos + 1;
-        while next < len && matches!(items[next].kind, MenuItemKind::Separator) {
+        while next < len && nav_skip(&items[next].kind) {
             next += 1;
         }
         if next < len {
@@ -276,6 +307,9 @@ impl ScreenState {
                 self.sub_items = None;
             }
             MenuItemKind::Separator => {}
+            // Info / SlotInfo rows are read-only — Fire is a no-op, like a
+            // separator but with text.
+            MenuItemKind::Info { .. } | MenuItemKind::SlotInfo { .. } => {}
             MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. } => {
                 self.stepper_active = true;
             }
@@ -489,6 +523,19 @@ impl<const M: usize> DisplayState<M> {
         // Other buttons (Left/Right for screen nav, Cancel, etc.) fall through.
         #[cfg(feature = "watch")]
         if self.active_screen == crate::SCREEN_WATCH && crate::watch::dispatch(btn) {
+            return;
+        }
+
+        // Calendar screen starts in a passive mode — arrows and Cancel fall
+        // through here so screen-nav works.  Fire/Execute is the trigger
+        // that flips it into Active mode, where the calendar's own
+        // dispatcher takes over the arrow keys for cursor movement and
+        // Cancel returns to passive.  See `crate::watch::calendar` for the
+        // full mode table.
+        #[cfg(feature = "watch")]
+        if self.active_screen == crate::SCREEN_CALENDAR
+            && crate::watch::calendar::dispatch(btn)
+        {
             return;
         }
 
@@ -1146,6 +1193,101 @@ static ALARM_ITEMS: [MenuItem; 6] = [
     },
 ];
 
+// ── Events submenu (imported one-shot alarms in slots 1..N_ALARMS) ──────────
+
+/// Format slot `slot`'s read-only label into the menu buffer.
+///   * disabled         → `1: empty`     (rendered only via legacy callers; the
+///     SlotInfo renderer hides empties via `slot_alarm_visible`.)
+///   * recurring        → `1: 14:30 daily`
+///   * one-shot         → `1: 14:30 08-16`
+#[cfg(feature = "watch")]
+fn fmt_alarm_slot(buf: &mut heapless::String<24>, slot: u8) {
+    use core::fmt::Write;
+    let s = slot as usize;
+    if !crate::watch::alarm_enabled_n(s) {
+        let _ = write!(buf, "{}: empty", slot);
+        return;
+    }
+    let h = crate::watch::alarm_hour_n(s);
+    let m = crate::watch::alarm_minute_n(s);
+    if crate::watch::alarm_is_one_shot_n(s) {
+        let _ = write!(
+            buf,
+            "{}: {:02}:{:02} {:02}-{:02}",
+            slot,
+            h,
+            m,
+            crate::watch::alarm_month_n(s),
+            crate::watch::alarm_day_n(s),
+        );
+    } else {
+        let _ = write!(buf, "{}: {:02}:{:02} daily", slot, h, m);
+    }
+}
+
+/// Visibility predicate: only show enabled slots so the menu doesn't
+/// scroll past 31 empties when only a couple of events are loaded.
+#[cfg(feature = "watch")]
+fn slot_alarm_visible(slot: u8) -> bool {
+    crate::watch::alarm_enabled_n(slot as usize)
+}
+
+/// Action: drop a "Quick test" event 5 minutes from now in the first
+/// empty slot.  Useful for verifying the alarm path without USB.
+/// Silently no-ops if the wall clock isn't synced or all slots are
+/// taken — the new event becomes visible on the Calendar grid (red
+/// dot) and the Clock face (bell + HH:MM), so no toast confirmation
+/// is needed.
+#[cfg(all(feature = "watch", feature = "embassy-base"))]
+fn action_add_quick_test() {
+    let _ = crate::watch::add_quick_event(5, b"Quick test");
+}
+#[cfg(all(feature = "watch", not(feature = "embassy-base")))]
+fn action_add_quick_test() {}
+
+/// Expand a literal list of slot indices into menu rows wrapped by
+/// Back / slot rows / Clear all.  Events are populated by
+/// `import_alarms_from_fat12` at boot from `ALARMS.ICS` — there's no
+/// on-device add path; this submenu is observe-only plus a "Clear all"
+/// destructive action.  One shared formatter + visibility predicate
+/// handles all 31 slot rows via `MenuItemKind::SlotInfo`.
+#[cfg(feature = "watch")]
+macro_rules! events_items {
+    ($($n:literal),* $(,)?) => {
+        [
+            MenuItem { label: || "< Back", kind: MenuItemKind::Back },
+            // Drops a "Quick test" event 5 min from now — silently
+            // no-ops without a synced wall clock; the new event shows
+            // up via the Calendar dot + Clock-face bell.
+            MenuItem {
+                label: || "Quick test +5min",
+                kind: MenuItemKind::Action(action_add_quick_test),
+            },
+            MenuItem { label: || "", kind: MenuItemKind::Separator },
+            $(MenuItem {
+                label: || "",
+                kind: MenuItemKind::SlotInfo {
+                    format: fmt_alarm_slot,
+                    visible: slot_alarm_visible,
+                    slot: $n,
+                },
+            },)*
+            MenuItem { label: || "", kind: MenuItemKind::Separator },
+            MenuItem {
+                label: || "Clear all",
+                kind: MenuItemKind::Action(crate::watch::clear_imported_alarms),
+            },
+        ]
+    };
+}
+
+// 1 (Back) + 1 (Quick test) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) = 36.
+#[cfg(feature = "watch")]
+static EVENTS_ITEMS: [MenuItem; 36] = events_items!(
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 28, 29, 30, 31,
+);
+
 #[cfg(feature = "game")]
 fn play_melody(_index: usize) {
     #[cfg(feature = "embassy-base")]
@@ -1323,7 +1465,7 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
 ];
 
 #[cfg(feature = "watch")]
-const SETTINGS_ITEMS_LEN: usize = 9;
+const SETTINGS_ITEMS_LEN: usize = 10;
 #[cfg(not(feature = "watch"))]
 const SETTINGS_ITEMS_LEN: usize = 8;
 
@@ -1356,6 +1498,11 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "Alarm",
         kind: MenuItemKind::Submenu(&ALARM_ITEMS),
+    },
+    #[cfg(feature = "watch")]
+    MenuItem {
+        label: || "Events",
+        kind: MenuItemKind::Submenu(&EVENTS_ITEMS),
     },
     MenuItem {
         label: || "",
@@ -1636,7 +1783,13 @@ static ADVERT_ITEMS: [MenuItem; 1] = [MenuItem {
 
 #[cfg(feature = "watch")]
 static WATCH_ITEMS: [MenuItem; 1] = [MenuItem {
-    label: || "Watch",
+    label: || "Clock",
+    kind: MenuItemKind::Action(|| {}),
+}];
+
+#[cfg(feature = "watch")]
+static CALENDAR_ITEMS: [MenuItem; 1] = [MenuItem {
+    label: || "Calendar",
     kind: MenuItemKind::Action(|| {}),
 }];
 
@@ -1683,8 +1836,20 @@ pub static DISPLAY_STATE: DisplayMutex = DisplayMutex::new(RefCell::new(DisplayS
         ScreenState::new(&ADVERT_ITEMS),
         #[cfg(feature = "watch")]
         ScreenState::new(&WATCH_ITEMS),
+        #[cfg(feature = "watch")]
+        ScreenState::new(&CALENDAR_ITEMS),
     ],
-    [GAME_ENABLED, true, true, true, true, WATCH_ENABLED],
+    [
+        GAME_ENABLED,
+        true,
+        true,
+        true,
+        true,
+        #[cfg(feature = "watch")]
+        WATCH_ENABLED,
+        #[cfg(feature = "watch")]
+        WATCH_ENABLED,
+    ],
 )));
 
 // ── Scrolling menu renderer
@@ -1745,6 +1910,15 @@ where
         if item_idx >= 0 {
             if let Some(item) = items.get(item_idx as usize) {
                 let fg = if is_center { WHITE } else { BLACK };
+                // Hidden SlotInfo: render nothing — the row stays blank
+                // (the center row keeps its black highlight, but that's
+                // an edge case nav can't normally land on).
+                if matches!(
+                    item.kind,
+                    MenuItemKind::SlotInfo { visible, slot, .. } if !visible(slot)
+                ) {
+                    continue;
+                }
                 if matches!(item.kind, MenuItemKind::Separator) {
                     // Draw a thin horizontal rule across the row
                     Rectangle::new(Point::new(MENU_X + 8, text_y), Size::new(MENU_W - 16, 1))
@@ -1763,12 +1937,16 @@ where
                             let _ = label.push_str("< ");
                         }
                     }
-                    // ValueStepper writes its own value via `format`; every other
-                    // kind uses the static `MenuItem::label` callback.
-                    if let MenuItemKind::ValueStepper { format, .. } = item.kind {
-                        format(&mut label);
-                    } else {
-                        let _ = label.push_str((item.label)());
+                    // ValueStepper / Info write their own value via `format`;
+                    // every other kind uses the static `MenuItem::label`
+                    // callback.
+                    match item.kind {
+                        MenuItemKind::ValueStepper { format, .. }
+                        | MenuItemKind::Info { format } => format(&mut label),
+                        MenuItemKind::SlotInfo { format, slot, .. } => format(&mut label, slot),
+                        _ => {
+                            let _ = label.push_str((item.label)());
+                        }
                     }
                     if matches!(item.kind, MenuItemKind::Submenu(_)) {
                         let _ = label.push_str(" >");

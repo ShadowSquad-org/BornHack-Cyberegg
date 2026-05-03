@@ -27,7 +27,8 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH, board,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_WATCH,
+    board,
     draw_graphics, health_err, unix_now, with_health,
 };
 use ssd1675::UpdateMode;
@@ -121,6 +122,10 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "watch")]
     {
         bornhack_aegg::watch::load_settings_from_kv().await;
+        // If `ALARMS.ICS` is present on the FAT12 partition, populate slots
+        // 1..N_ALARMS with one-shot calendar alarms.  Runs *after* the kv
+        // load so the user's primary alarm (slot 0) isn't overwritten.
+        bornhack_aegg::watch::import_alarms_from_fat12().await;
         spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
         spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
     }
@@ -424,8 +429,17 @@ async fn display_loop(
         // left in the panel (e.g. minigame cursor before it was
         // changed to dithered B/W) would otherwise stick around.
         // Consume the flag with `swap` so the upgrade applies once.
-        let do_full =
-            bornhack_aegg::FULL_REFRESH_PENDING.swap(false, core::sync::atomic::Ordering::Relaxed);
+        //
+        // We also force a full tri-color refresh whenever the BLE
+        // pairing PIN dialog is up.  Without it the PIN box renders
+        // cleanly on the B/W plane but RED pixels from the underlying
+        // screen (e.g. Calendar's today-fill or event dots) bleed
+        // through, which makes the PIN unreadable on the Calendar
+        // screen specifically.  The pairing window is short, so the
+        // slower refresh per cycle is fine.
+        let do_full = bornhack_aegg::FULL_REFRESH_PENDING
+            .swap(false, core::sync::atomic::Ordering::Relaxed)
+            || bornhack_aegg::BLE_PASSKEY.load(core::sync::atomic::Ordering::Relaxed) != u32::MAX;
 
         let sprite_advance = match select(
             async {
@@ -582,6 +596,14 @@ async fn wait_display_event(
                 Either::First(Either3::Second(_)) => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
                 Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+                // Calendar is intentionally left off the minute-tick
+                // redraw list.  The fast-LUT refresh path doesn't update
+                // the red plane (today highlight, event dots, day-view
+                // "now" line all live there), so a per-minute wakeup
+                // would re-render the B/W layer for no visible gain
+                // while still costing an EPD update.  Calendar redraws
+                // only on button input — the user navigating in or
+                // pressing anything will pick up wall-clock changes.
                 Either::Second(Either4::Second(_)) if active_screen == SCREEN_PM => return false,
                 Either::Second(Either4::Third(_)) if active_screen == SCREEN_CHANNEL => {
                     return false;
@@ -605,6 +627,8 @@ async fn wait_display_event(
             Either::First(Either3::Second(_)) => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_MAIN => return false,
             Either::First(Either3::Third(_)) if active_screen == SCREEN_WATCH => return false,
+            // Calendar deliberately ignores the minute tick — see the
+            // matching arm in the mesh-feature branch above for why.
             _ => {}
         }
     }

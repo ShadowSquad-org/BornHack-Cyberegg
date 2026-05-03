@@ -7,6 +7,14 @@
 //! 7-segment digit primitives live in [`super::clock`]; we reuse those
 //! primitives for the alarm-edit `HH:MM` display.
 //!
+//! There are [`N_ALARMS`] independent alarm slots.  Slot 0 is the
+//! "primary" alarm — it's the one the existing on-screen edit and
+//! Settings → Alarm submenu mutate, and it persists under the original
+//! `alarm_*` kv keys for backward compatibility.  Slots 1..7 are
+//! reachable through the slot-aware `*_n(slot)` accessors and are
+//! checked by the trigger every minute alongside slot 0; later commits
+//! wire them into UI and persistence.
+//!
 //! Edit-mode buttons mirror the Settings-menu stepper pattern:
 //!
 //!   Row-nav (default after entering edit mode):
@@ -20,17 +28,25 @@
 //!     * Fire/Execute  — exit field editing, back to row-nav
 //!     * Cancel        — exit field editing, back to row-nav
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::clock;
+use super::ics::SUMMARY_LEN;
 use crate::menu::ButtonId;
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, RED, TriColor, WHITE};
+
+/// Maximum number of independent alarm slots.  Slot 0 is the user-editable
+/// "primary" alarm; slots 1..N_ALARMS-1 hold imported calendar events and
+/// other automation.  At ~11 bytes of atomics per slot, 32 slots cost
+/// ~352 bytes of RAM — comfortable for an unfiltered Bornhack day's worth
+/// of events.
+pub const N_ALARMS: usize = 32;
 
 // ── Edit-mode state ─────────────────────────────────────────────────────────
 
@@ -170,16 +186,43 @@ pub(super) fn dispatch_edit(btn: ButtonId) -> bool {
     true
 }
 
-// ── Persisted alarm state ───────────────────────────────────────────────────
+// ── Per-slot persisted state ────────────────────────────────────────────────
+//
+// Each field is an array indexed by slot (0..N_ALARMS).  Slot 0 mirrors the
+// previous single-alarm state and uses the same kv keys, so existing badges
+// keep their settings across the upgrade.
 
-static ALARM_HOUR: AtomicU8 = AtomicU8::new(7);
-static ALARM_MINUTE: AtomicU8 = AtomicU8::new(0);
-static ALARM_ENABLED: AtomicBool = AtomicBool::new(false);
+static ALARM_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(7) }; N_ALARMS];
+static ALARM_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+static ALARM_ENABLED: [AtomicBool; N_ALARMS] = [const { AtomicBool::new(false) }; N_ALARMS];
 /// Day-of-week mask: bit 0 = Mon .. bit 6 = Sun. Default = every day.
-static ALARM_DAYS: AtomicU8 = AtomicU8::new(0b0111_1111);
+static ALARM_DAYS: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0b0111_1111) }; N_ALARMS];
 /// Index into [`crate::fw::buzzer::MELODIES`] used as the alarm ringtone.
 /// Default: 8 = the dedicated `ALARM` beep-beep pattern.
-static ALARM_MELODY: AtomicU8 = AtomicU8::new(8);
+static ALARM_MELODY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(8) }; N_ALARMS];
+/// Optional one-shot date.  When `year` is non-zero, the slot fires only on
+/// the exact matching `year-month-day` (and then self-disables) — used for
+/// calendar-event alarms.  `year == 0` means recurring per the day mask.
+static ALARM_YEAR: [AtomicU16; N_ALARMS] = [const { AtomicU16::new(0) }; N_ALARMS];
+static ALARM_MONTH: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+static ALARM_DAY: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+/// Event end time (hour, minute) per slot.  Used by the Calendar
+/// day-view to render events as duration blocks.  When `DTEND` is
+/// missing in the source ICS the importer mirrors the start time
+/// (zero-duration event → renders as a thin marker).  Multi-day
+/// events are clamped to 23:59 of the start day at import time so
+/// the day-view doesn't have to handle midnight crossings.  These
+/// fields are not consulted by `check_and_fire_alarm`; the alarm
+/// fires at the start time only.
+static ALARM_END_HOUR: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_ALARMS];
+/// Event SUMMARY (calendar title) per slot, NUL-padded ASCII.  Stored as
+/// per-byte atomics to match the rest of the alarm state — no
+/// synchronisation primitive needed and the byte-by-byte loads are
+/// negligible compared to a screen redraw.  Empty for slot 0 (the
+/// manual alarm has no title) and overwritten at boot from `ALARMS.ICS`.
+static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
+    [const { [const { AtomicU8::new(0) }; SUMMARY_LEN] }; N_ALARMS];
 
 /// Curated alarm-tone choices: (menu label, melody index).
 /// Order is the cycle order in the Settings → Alarm → Tone stepper.
@@ -196,57 +239,257 @@ const ALARM_TONES: &[(&str, u8)] = &[
     ("Tone: Samsung", 11),
 ];
 
-pub fn alarm_hour() -> u8 {
-    ALARM_HOUR.load(Ordering::Relaxed)
-}
-pub fn alarm_minute() -> u8 {
-    ALARM_MINUTE.load(Ordering::Relaxed)
-}
-pub fn alarm_enabled() -> bool {
-    ALARM_ENABLED.load(Ordering::Relaxed)
+#[inline]
+fn s(slot: usize) -> usize {
+    slot.min(N_ALARMS - 1)
 }
 
-pub fn alarm_inc_hour() {
-    let h = ALARM_HOUR.load(Ordering::Relaxed);
-    ALARM_HOUR.store((h + 1) % 24, Ordering::Relaxed);
-    super::signal_settings_dirty();
+// ── Slot-aware accessors ────────────────────────────────────────────────────
+
+pub fn alarm_hour_n(slot: usize) -> u8 {
+    ALARM_HOUR[s(slot)].load(Ordering::Relaxed)
 }
-pub fn alarm_dec_hour() {
-    let h = ALARM_HOUR.load(Ordering::Relaxed);
-    ALARM_HOUR.store(if h == 0 { 23 } else { h - 1 }, Ordering::Relaxed);
-    super::signal_settings_dirty();
+pub fn alarm_minute_n(slot: usize) -> u8 {
+    ALARM_MINUTE[s(slot)].load(Ordering::Relaxed)
 }
-pub fn alarm_inc_minute() {
-    let m = ALARM_MINUTE.load(Ordering::Relaxed);
-    ALARM_MINUTE.store((m + 1) % 60, Ordering::Relaxed);
-    super::signal_settings_dirty();
+pub fn alarm_enabled_n(slot: usize) -> bool {
+    ALARM_ENABLED[s(slot)].load(Ordering::Relaxed)
 }
-pub fn alarm_dec_minute() {
-    let m = ALARM_MINUTE.load(Ordering::Relaxed);
-    ALARM_MINUTE.store(if m == 0 { 59 } else { m - 1 }, Ordering::Relaxed);
-    super::signal_settings_dirty();
+pub fn alarm_days_n(slot: usize) -> u8 {
+    ALARM_DAYS[s(slot)].load(Ordering::Relaxed) & 0x7F
 }
-pub fn alarm_toggle_enabled() {
-    let v = ALARM_ENABLED.load(Ordering::Relaxed);
-    ALARM_ENABLED.store(!v, Ordering::Relaxed);
-    super::signal_settings_dirty();
+pub fn alarm_melody_n(slot: usize) -> u8 {
+    ALARM_MELODY[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)] // only used by the trigger / future ICS importer
+pub fn alarm_year_n(slot: usize) -> u16 {
+    ALARM_YEAR[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)]
+pub fn alarm_month_n(slot: usize) -> u8 {
+    ALARM_MONTH[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)]
+pub fn alarm_day_n(slot: usize) -> u8 {
+    ALARM_DAY[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)]
+pub fn alarm_end_hour_n(slot: usize) -> u8 {
+    ALARM_END_HOUR[s(slot)].load(Ordering::Relaxed)
+}
+#[allow(dead_code)]
+pub fn alarm_end_minute_n(slot: usize) -> u8 {
+    ALARM_END_MINUTE[s(slot)].load(Ordering::Relaxed)
 }
 
-pub fn alarm_days() -> u8 {
-    ALARM_DAYS.load(Ordering::Relaxed) & 0x7F
+/// Returns the slot's SUMMARY as a heapless string.  Empty if no
+/// summary was set (e.g. slot 0, or pre-import).
+#[allow(dead_code)]
+pub fn alarm_summary_n(slot: usize) -> heapless::String<SUMMARY_LEN> {
+    let i = s(slot);
+    let mut out: heapless::String<SUMMARY_LEN> = heapless::String::new();
+    for byte_atomic in ALARM_SUMMARY[i].iter() {
+        let b = byte_atomic.load(Ordering::Relaxed);
+        if b == 0 {
+            break;
+        }
+        let _ = out.push(b as char);
+    }
+    out
 }
 
 /// `day` is 0 = Mon .. 6 = Sun.
+pub fn alarm_day_enabled_n(slot: usize, day: u8) -> bool {
+    day < 7 && (alarm_days_n(slot) >> day) & 1 != 0
+}
+
+/// Returns `true` if `slot` is a one-shot calendar alarm (year != 0) bound to
+/// a specific date, rather than a recurring weekly alarm.
+#[allow(dead_code)] // only used by check_and_fire_alarm under embassy-base
+pub fn alarm_is_one_shot_n(slot: usize) -> bool {
+    alarm_year_n(slot) != 0
+}
+
+// The slot-aware setters below are intentionally pub but currently have no
+// in-tree caller — they're the entry point external code (calendar import,
+// future multi-alarm UI) will use to populate slots > 0.  Without
+// `#[allow(dead_code)]` rustc warns until that wiring lands.
+
+/// Set or clear a slot's one-shot date.  Pass `(0, 0, 0)` to make the slot
+/// recurring (governed by its day mask) again.
+#[allow(dead_code)]
+pub fn set_alarm_date_n(slot: usize, year: u16, month: u8, day: u8) {
+    let i = s(slot);
+    ALARM_YEAR[i].store(year, Ordering::Relaxed);
+    ALARM_MONTH[i].store(month, Ordering::Relaxed);
+    ALARM_DAY[i].store(day, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_time_n(slot: usize, hour: u8, minute: u8) {
+    let i = s(slot);
+    ALARM_HOUR[i].store(hour.min(23), Ordering::Relaxed);
+    ALARM_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+/// Set the slot's event end time.  Used by the ICS importer to record
+/// the `DTEND` of each event so the day-view can render duration
+/// blocks.  Defaults to the start time when `DTEND` is missing or
+/// degenerate (zero-duration event renders as a thin marker).
+#[allow(dead_code)]
+pub fn set_alarm_end_time_n(slot: usize, hour: u8, minute: u8) {
+    let i = s(slot);
+    ALARM_END_HOUR[i].store(hour.min(23), Ordering::Relaxed);
+    ALARM_END_MINUTE[i].store(minute.min(59), Ordering::Relaxed);
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_enabled_n(slot: usize, enabled: bool) {
+    ALARM_ENABLED[s(slot)].store(enabled, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+#[allow(dead_code)]
+pub fn set_alarm_melody_n(slot: usize, melody: u8) {
+    ALARM_MELODY[s(slot)].store(melody, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+
+/// Set the slot's SUMMARY (event title) from a NUL-padded byte buffer.
+#[allow(dead_code)]
+pub fn set_alarm_summary_n(slot: usize, src: &[u8; SUMMARY_LEN]) {
+    let i = s(slot);
+    for (j, b) in src.iter().enumerate() {
+        ALARM_SUMMARY[i][j].store(*b, Ordering::Relaxed);
+    }
+}
+
+/// Find the lowest empty event slot index (>= 1) suitable for a new
+/// event.  Returns None if all event slots (1..N_ALARMS) are populated.
+pub fn first_empty_event_slot() -> Option<usize> {
+    (1..N_ALARMS).find(|&slot| !alarm_enabled_n(slot))
+}
+
+/// Add an event scheduled `minutes_ahead` minutes from the current wall
+/// clock, with the given summary.  Picks the first empty event slot.
+/// Returns the firing `(hour, minute)` on success, or `None` if the
+/// wall clock isn't synced or all event slots are full.
+#[cfg(feature = "embassy-base")]
+pub fn add_quick_event(minutes_ahead: u16, summary: &[u8]) -> Option<(u8, u8)> {
+    let c = clock::wall_clock()?;
+    let slot = first_empty_event_slot()?;
+
+    // Roll over hour/day boundaries via plain integer math, then ask
+    // fasttime to handle the calendar arithmetic if we crossed midnight.
+    let total_mins = c.hour as u32 * 60 + c.minute as u32 + minutes_ahead as u32;
+    let day_offset = (total_mins / (24 * 60)) as i64;
+    let mins_in_day = total_mins % (24 * 60);
+    let target_hour = (mins_in_day / 60) as u8;
+    let target_min = (mins_in_day % 60) as u8;
+
+    let (year, month, day) = if day_offset == 0 {
+        (c.year, c.month, c.day)
+    } else {
+        let d = fasttime::Date::from_ymd(c.year as i32, c.month, c.day).ok()?;
+        let d2 = d.add_days(day_offset).ok()?;
+        (d2.year as u16, d2.month, d2.day)
+    };
+
+    set_alarm_date_n(slot, year, month, day);
+    set_alarm_time_n(slot, target_hour, target_min);
+    let mut buf = [0u8; SUMMARY_LEN];
+    let mut i = 0usize;
+    for &b in summary {
+        if i >= SUMMARY_LEN {
+            break;
+        }
+        if (0x20..=0x7e).contains(&b) {
+            buf[i] = b;
+            i += 1;
+        }
+    }
+    set_alarm_summary_n(slot, &buf);
+    set_alarm_enabled_n(slot, true);
+    Some((target_hour, target_min))
+}
+
+/// Clear all imported alarms — disable + zero-date slots 1..N_ALARMS.  Slot 0
+/// (the user's manual alarm) is left alone.  Used by the Events menu to
+/// undo an `ALARMS.ICS` import without rebooting; the next boot would
+/// overwrite slots 1..7 again from the file anyway, so this is mostly for
+/// "I changed my mind, take them off the watch face *now*" flows.
+pub fn clear_imported_alarms() {
+    for slot in 1..N_ALARMS {
+        ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
+        ALARM_YEAR[slot].store(0, Ordering::Relaxed);
+        ALARM_MONTH[slot].store(0, Ordering::Relaxed);
+        ALARM_DAY[slot].store(0, Ordering::Relaxed);
+        ALARM_END_HOUR[slot].store(0, Ordering::Relaxed);
+        ALARM_END_MINUTE[slot].store(0, Ordering::Relaxed);
+        for byte_atomic in ALARM_SUMMARY[slot].iter() {
+            byte_atomic.store(0, Ordering::Relaxed);
+        }
+    }
+    super::signal_settings_dirty();
+}
+
+// ── Slot-0 (primary) accessors — backward-compatible thin wrappers ──────────
+
+pub fn alarm_hour() -> u8 {
+    alarm_hour_n(0)
+}
+pub fn alarm_minute() -> u8 {
+    alarm_minute_n(0)
+}
+pub fn alarm_enabled() -> bool {
+    alarm_enabled_n(0)
+}
+pub fn alarm_days() -> u8 {
+    alarm_days_n(0)
+}
+pub fn alarm_melody() -> u8 {
+    alarm_melody_n(0)
+}
 pub fn alarm_day_enabled(day: u8) -> bool {
-    day < 7 && (alarm_days() >> day) & 1 != 0
+    alarm_day_enabled_n(0, day)
+}
+
+// ── Slot-0 mutators (used by the existing menu/edit UI) ─────────────────────
+
+pub fn alarm_inc_hour() {
+    let h = ALARM_HOUR[0].load(Ordering::Relaxed);
+    ALARM_HOUR[0].store((h + 1) % 24, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+pub fn alarm_dec_hour() {
+    let h = ALARM_HOUR[0].load(Ordering::Relaxed);
+    ALARM_HOUR[0].store(if h == 0 { 23 } else { h - 1 }, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+pub fn alarm_inc_minute() {
+    let m = ALARM_MINUTE[0].load(Ordering::Relaxed);
+    ALARM_MINUTE[0].store((m + 1) % 60, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+pub fn alarm_dec_minute() {
+    let m = ALARM_MINUTE[0].load(Ordering::Relaxed);
+    ALARM_MINUTE[0].store(if m == 0 { 59 } else { m - 1 }, Ordering::Relaxed);
+    super::signal_settings_dirty();
+}
+pub fn alarm_toggle_enabled() {
+    let v = ALARM_ENABLED[0].load(Ordering::Relaxed);
+    ALARM_ENABLED[0].store(!v, Ordering::Relaxed);
+    super::signal_settings_dirty();
 }
 
 pub fn alarm_toggle_day(day: u8) {
     if day >= 7 {
         return;
     }
-    let v = ALARM_DAYS.load(Ordering::Relaxed);
-    ALARM_DAYS.store((v ^ (1 << day)) & 0x7F, Ordering::Relaxed);
+    let v = ALARM_DAYS[0].load(Ordering::Relaxed);
+    ALARM_DAYS[0].store((v ^ (1 << day)) & 0x7F, Ordering::Relaxed);
     super::signal_settings_dirty();
 }
 
@@ -255,7 +498,7 @@ pub fn alarm_toggle_day(day: u8) {
 /// alarm-edit Days field.  A "Custom" mask (anything else) jumps to
 /// Daily on either direction.
 pub fn alarm_step_days_preset(forward: bool) {
-    let cur = ALARM_DAYS.load(Ordering::Relaxed) & 0x7F;
+    let cur = ALARM_DAYS[0].load(Ordering::Relaxed) & 0x7F;
     let next: u8 = match (cur, forward) {
         (0x7F, true) => 0x1F,
         (0x1F, true) => 0x60,
@@ -267,7 +510,7 @@ pub fn alarm_step_days_preset(forward: bool) {
         (0x1F, false) => 0x7F,
         _ => 0x7F,
     };
-    ALARM_DAYS.store(next, Ordering::Relaxed);
+    ALARM_DAYS[0].store(next, Ordering::Relaxed);
     super::signal_settings_dirty();
 }
 
@@ -289,10 +532,6 @@ pub fn alarm_enabled_label() -> &'static str {
     }
 }
 
-pub fn alarm_melody() -> u8 {
-    ALARM_MELODY.load(Ordering::Relaxed)
-}
-
 fn alarm_tone_position() -> usize {
     let m = alarm_melody();
     ALARM_TONES
@@ -309,7 +548,7 @@ pub fn alarm_inc_melody() {
     let pos = alarm_tone_position();
     let next = (pos + 1) % ALARM_TONES.len();
     let idx = ALARM_TONES[next].1;
-    ALARM_MELODY.store(idx, Ordering::Relaxed);
+    ALARM_MELODY[0].store(idx, Ordering::Relaxed);
     super::signal_settings_dirty();
     #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(idx as usize);
@@ -323,7 +562,7 @@ pub fn alarm_dec_melody() {
         pos - 1
     };
     let idx = ALARM_TONES[prev].1;
-    ALARM_MELODY.store(idx, Ordering::Relaxed);
+    ALARM_MELODY[0].store(idx, Ordering::Relaxed);
     super::signal_settings_dirty();
     #[cfg(feature = "embassy-base")]
     crate::fw::buzzer::play(idx as usize);
@@ -337,23 +576,23 @@ pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
     if let Ok(1) = ns.get("alarm_h", &mut b).await
         && b[0] < 24
     {
-        ALARM_HOUR.store(b[0], Ordering::Relaxed);
+        ALARM_HOUR[0].store(b[0], Ordering::Relaxed);
     }
     if let Ok(1) = ns.get("alarm_m", &mut b).await
         && b[0] < 60
     {
-        ALARM_MINUTE.store(b[0], Ordering::Relaxed);
+        ALARM_MINUTE[0].store(b[0], Ordering::Relaxed);
     }
     if let Ok(1) = ns.get("alarm_on", &mut b).await {
-        ALARM_ENABLED.store(b[0] != 0, Ordering::Relaxed);
+        ALARM_ENABLED[0].store(b[0] != 0, Ordering::Relaxed);
     }
     if let Ok(1) = ns.get("alarm_days", &mut b).await {
-        ALARM_DAYS.store(b[0] & 0x7F, Ordering::Relaxed);
+        ALARM_DAYS[0].store(b[0] & 0x7F, Ordering::Relaxed);
     }
     if let Ok(1) = ns.get("alarm_mel", &mut b).await
         && ALARM_TONES.iter().any(|(_, idx)| *idx == b[0])
     {
-        ALARM_MELODY.store(b[0], Ordering::Relaxed);
+        ALARM_MELODY[0].store(b[0], Ordering::Relaxed);
     }
 }
 
@@ -379,24 +618,58 @@ static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
     (),
 > = embassy_sync::signal::Signal::new();
 
-/// Called from the minute-tick task: if the alarm is enabled, today is in the
-/// day mask, and the local time matches `HH:MM`, fire the buzzer. The
-/// alarm-ring task then repeats the melody up to a few times unless dismissed.
+/// Walks all `N_ALARMS` slots; for each enabled slot, fires the buzzer if
+/// the local time matches and either:
+///  * the slot is a one-shot calendar alarm (`year != 0`) whose date is today,
+///    or
+///  * the slot is a recurring weekly alarm (`year == 0`) whose day mask covers
+///    today.
+///
+/// One-shot slots auto-disable after firing so they don't ring again on the
+/// next reboot if the badge is rebooted while still on the same calendar day.
+///
+/// Only the *first* matching slot fires per minute boundary — running two
+/// melodies on top of each other would just sound bad.  Slot order is the
+/// natural numeric one (slot 0 wins ties).
 #[cfg(feature = "embassy-base")]
 pub fn check_and_fire_alarm() {
-    if !alarm_enabled() {
-        return;
-    }
     let Some(c) = clock::wall_clock() else {
         return;
     };
-    if !alarm_day_enabled(c.weekday) {
-        return;
-    }
-    if c.hour == alarm_hour() && c.minute == alarm_minute() {
-        ALARM_RINGING.store(true, Ordering::Relaxed);
-        ALARM_RING_SIGNAL.signal(());
-        crate::fw::buzzer::play(alarm_melody() as usize);
+    for slot in 0..N_ALARMS {
+        if !alarm_enabled_n(slot) {
+            continue;
+        }
+        // Date- vs day-mask gate.
+        if alarm_is_one_shot_n(slot) {
+            if alarm_year_n(slot) != c.year
+                || alarm_month_n(slot) != c.month
+                || alarm_day_n(slot) != c.day
+            {
+                continue;
+            }
+        } else if !alarm_day_enabled_n(slot, c.weekday) {
+            continue;
+        }
+        if c.hour == alarm_hour_n(slot) && c.minute == alarm_minute_n(slot) {
+            ALARM_RINGING.store(true, Ordering::Relaxed);
+            ALARM_RING_SIGNAL.signal(());
+            // One-shot (imported calendar) slots have no per-event tone
+            // UI — they inherit slot 0's melody so the user's chosen
+            // Settings → Alarm → Tone applies to every alarm consistently.
+            let melody = if alarm_is_one_shot_n(slot) {
+                alarm_melody_n(0)
+            } else {
+                alarm_melody_n(slot)
+            };
+            crate::fw::buzzer::play(melody as usize);
+            // One-shot alarms auto-disable after firing.
+            if alarm_is_one_shot_n(slot) {
+                ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
+                super::signal_settings_dirty();
+            }
+            return;
+        }
     }
 }
 
@@ -418,7 +691,9 @@ pub fn dismiss_alarm_if_ringing() -> bool {
 /// the ringing flag so an un-dismissed alarm stops eating button presses.
 ///
 /// The first play is triggered by `check_and_fire_alarm`; this task handles
-/// the repeats and the final cleanup.
+/// the repeats and the final cleanup.  The repeat melody is whichever slot's
+/// tone is currently set on slot 0 — close enough; chaining the
+/// originating-slot index through the ring task is overkill for now.
 #[cfg(feature = "embassy-base")]
 #[embassy_executor::task]
 pub async fn alarm_ring_timeout_task() {
@@ -442,39 +717,122 @@ pub async fn alarm_ring_timeout_task() {
 
 // ── Drawing ─────────────────────────────────────────────────────────────────
 
-/// Black box with white text in the header showing `ALM HH:MM` when an alarm
-/// is armed. Uses pure B&W so it survives the fast minute-tick refresh.
+/// Returns `true` if any slot has an enabled alarm.
+fn any_alarm_enabled() -> bool {
+    (0..N_ALARMS).any(alarm_enabled_n)
+}
+
+/// Find the soonest enabled alarm whose firing is still in the future *today*.
+/// Recurring alarms count if the day mask covers today; one-shot alarms count
+/// if their date matches today.  Returns `(hour, minute)` or `None`.
+fn next_alarm_today(c: &super::clock::Clock) -> Option<(u8, u8)> {
+    let mut earliest: Option<(u8, u8)> = None;
+    for slot in 0..N_ALARMS {
+        if !alarm_enabled_n(slot) {
+            continue;
+        }
+        let active_today = if alarm_is_one_shot_n(slot) {
+            alarm_year_n(slot) == c.year
+                && alarm_month_n(slot) == c.month
+                && alarm_day_n(slot) == c.day
+        } else {
+            alarm_day_enabled_n(slot, c.weekday)
+        };
+        if !active_today {
+            continue;
+        }
+        let h = alarm_hour_n(slot);
+        let m = alarm_minute_n(slot);
+        // Only future-today: strictly after the current minute.
+        if h < c.hour || (h == c.hour && m <= c.minute) {
+            continue;
+        }
+        let better = match earliest {
+            None => true,
+            Some((eh, em)) => h < eh || (h == eh && m < em),
+        };
+        if better {
+            earliest = Some((h, m));
+        }
+    }
+    earliest
+}
+
+/// Render a small red bell, centred at `(cx, cy)`.  Roughly 13×13 pixels:
+/// a circular dome on top blended into a slightly flared skirt, then a
+/// wider rim, and a clapper hanging below.  The dome+skirt avoids the
+/// pointy "Christmas tree" silhouette a triangle gives at this size.
+fn draw_bell<D>(display: &mut D, cx: i32, cy: i32) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let red = PrimitiveStyle::with_fill(RED);
+    // Dome — 9 px circle, top-left at (cx-4, cy-5).  Gives a rounded
+    // top instead of a sharp triangular apex.
+    Circle::new(Point::new(cx - 4, cy - 5), 9)
+        .into_styled(red)
+        .draw(display)?;
+    // Skirt — straight-sided rectangle blended into the bottom of the
+    // dome, 2 px wider than the dome's max diameter to give the bell
+    // its characteristic flare.
+    Rectangle::new(Point::new(cx - 5, cy + 1), Size::new(11, 3))
+        .into_styled(red)
+        .draw(display)?;
+    // Rim — 13 px wide, sits flush below the skirt.
+    Rectangle::new(Point::new(cx - 6, cy + 4), Size::new(13, 2))
+        .into_styled(red)
+        .draw(display)?;
+    // Clapper — small dot hanging below the rim.
+    Rectangle::new(Point::new(cx - 1, cy + 7), Size::new(2, 2))
+        .into_styled(red)
+        .draw(display)?;
+    Ok(())
+}
+
+/// Header indicator: a small red bell, optionally followed by the time of
+/// the next alarm scheduled for later today (`HH:MM` in black).
+///
+/// Visibility:
+///   * No alarms enabled anywhere → nothing rendered.
+///   * Alarm(s) enabled but none firing later today → bell only.
+///   * Alarm enabled with a future firing today → bell + that `HH:MM`.
+///
+/// The bell uses the red plane, which only refreshes on a full
+/// tri-color update, so toggling alarms while sitting on the watch face
+/// can leave the bell stale until the next full refresh.  The `HH:MM` is
+/// drawn in black and updates on every redraw.
 pub(super) fn draw_indicator<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    if !alarm_enabled() {
+    if !any_alarm_enabled() {
         return Ok(());
     }
-    let mut buf: heapless::String<12> = heapless::String::new();
-    let _ = core::fmt::write(
-        &mut buf,
-        format_args!("ALM {:02}:{:02}", alarm_hour(), alarm_minute()),
-    );
 
-    let box_x = 44i32;
-    let box_y = 1i32;
-    let box_w = 62u32;
-    let box_h = 14u32;
-    Rectangle::new(Point::new(box_x, box_y), Size::new(box_w, box_h))
-        .into_styled(PrimitiveStyle::with_fill(BLACK))
+    // Bell — fixed position in the header band.
+    let bell_cx = 56i32;
+    let bell_cy = 8i32;
+    draw_bell(display, bell_cx, bell_cy)?;
+
+    // Time — only if there's an upcoming firing today.
+    let Some(c) = clock::wall_clock() else {
+        return Ok(());
+    };
+    if let Some((h, m)) = next_alarm_today(&c) {
+        let mut buf: heapless::String<8> = heapless::String::new();
+        let _ = core::fmt::write(&mut buf, format_args!("{:02}:{:02}", h, m));
+        let left = TextStyleBuilder::new()
+            .baseline(Baseline::Middle)
+            .alignment(Alignment::Left)
+            .build();
+        Text::with_text_style(
+            &buf,
+            Point::new(bell_cx + 10, bell_cy),
+            MonoTextStyle::new(&FONT_6X10, BLACK),
+            left,
+        )
         .draw(display)?;
-    let centered = TextStyleBuilder::new()
-        .baseline(Baseline::Middle)
-        .alignment(Alignment::Center)
-        .build();
-    Text::with_text_style(
-        &buf,
-        Point::new(box_x + box_w as i32 / 2, box_y + box_h as i32 / 2),
-        MonoTextStyle::new(&FONT_6X10, WHITE),
-        centered,
-    )
-    .draw(display)?;
+    }
     Ok(())
 }
 
