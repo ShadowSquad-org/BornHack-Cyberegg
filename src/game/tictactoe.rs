@@ -14,8 +14,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use crate::ui;
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor, WHITE, ui};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -56,7 +55,8 @@ static RESULT: AtomicU8 = AtomicU8::new(0);
 /// Whose turn: true = player, false = AI.
 static PLAYER_TURN: AtomicBool = AtomicBool::new(true);
 
-/// Difficulty: 0 = Normal (mistakes possible), 1 = Impossible (perfect minimax).
+/// Difficulty: 0 = Normal (mistakes possible), 1 = Impossible (perfect
+/// minimax).
 const DIFFICULTY_IMPOSSIBLE: u8 = 1;
 static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_IMPOSSIBLE);
 /// Difficulty-picker overlay open at the start of each game.

@@ -534,9 +534,7 @@ impl<const M: usize> DisplayState<M> {
         // Cancel returns to passive.  See `crate::watch::calendar` for the
         // full mode table.
         #[cfg(feature = "watch")]
-        if self.active_screen == crate::SCREEN_CALENDAR
-            && crate::watch::calendar::dispatch(btn)
-        {
+        if self.active_screen == crate::SCREEN_CALENDAR && crate::watch::calendar::dispatch(btn) {
             return;
         }
 
@@ -1282,7 +1280,8 @@ macro_rules! events_items {
     };
 }
 
-// 1 (Back) + 1 (Quick test) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) = 36.
+// 1 (Back) + 1 (Quick test) + 1 (Sep) + 31 (slot rows) + 1 (Sep) + 1 (Clear) =
+// 36.
 #[cfg(feature = "watch")]
 static EVENTS_ITEMS: [MenuItem; 36] = events_items!(
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
@@ -1916,64 +1915,66 @@ where
         }
 
         if item_idx >= 0
-            && let Some(item) = items.get(item_idx as usize) {
-                let fg = if is_center { WHITE } else { BLACK };
-                // Hidden SlotInfo: render nothing — the row stays blank
-                // (the center row keeps its black highlight, but that's
-                // an edge case nav can't normally land on).
-                if matches!(
-                    item.kind,
-                    MenuItemKind::SlotInfo { visible, slot, .. } if !visible(slot)
-                ) {
-                    continue;
-                }
-                if matches!(item.kind, MenuItemKind::Separator) {
-                    // Draw a thin horizontal rule across the row
-                    Rectangle::new(Point::new(MENU_X + 8, text_y), Size::new(MENU_W - 16, 1))
-                        .into_styled(PrimitiveStyle::with_fill(fg))
-                        .draw(display)?;
-                } else {
-                    let mut label: heapless::String<24> = heapless::String::new();
-                    let is_stepper = matches!(
-                        item.kind,
-                        MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. }
-                    );
-                    if is_stepper {
-                        if stepper_active && is_center {
-                            let _ = label.push_str("[ ");
-                        } else {
-                            let _ = label.push_str("< ");
-                        }
-                    }
-                    // ValueStepper / Info write their own value via `format`;
-                    // every other kind uses the static `MenuItem::label`
-                    // callback.
-                    match item.kind {
-                        MenuItemKind::ValueStepper { format, .. }
-                        | MenuItemKind::Info { format } => format(&mut label),
-                        MenuItemKind::SlotInfo { format, slot, .. } => format(&mut label, slot),
-                        _ => {
-                            let _ = label.push_str((item.label)());
-                        }
-                    }
-                    if matches!(item.kind, MenuItemKind::Submenu(_)) {
-                        let _ = label.push_str(" >");
-                    } else if is_stepper {
-                        if stepper_active && is_center {
-                            let _ = label.push_str(" ]");
-                        } else {
-                            let _ = label.push_str(" >");
-                        }
-                    }
-                    Text::with_text_style(
-                        &label,
-                        Point::new(MENU_X + MENU_W as i32 / 2, text_y),
-                        MonoTextStyle::new(&FONT_7X13_BOLD, fg),
-                        text_style,
-                    )
-                    .draw(display)?;
-                }
+            && let Some(item) = items.get(item_idx as usize)
+        {
+            let fg = if is_center { WHITE } else { BLACK };
+            // Hidden SlotInfo: render nothing — the row stays blank
+            // (the center row keeps its black highlight, but that's
+            // an edge case nav can't normally land on).
+            if matches!(
+                item.kind,
+                MenuItemKind::SlotInfo { visible, slot, .. } if !visible(slot)
+            ) {
+                continue;
             }
+            if matches!(item.kind, MenuItemKind::Separator) {
+                // Draw a thin horizontal rule across the row
+                Rectangle::new(Point::new(MENU_X + 8, text_y), Size::new(MENU_W - 16, 1))
+                    .into_styled(PrimitiveStyle::with_fill(fg))
+                    .draw(display)?;
+            } else {
+                let mut label: heapless::String<24> = heapless::String::new();
+                let is_stepper = matches!(
+                    item.kind,
+                    MenuItemKind::Stepper { .. } | MenuItemKind::ValueStepper { .. }
+                );
+                if is_stepper {
+                    if stepper_active && is_center {
+                        let _ = label.push_str("[ ");
+                    } else {
+                        let _ = label.push_str("< ");
+                    }
+                }
+                // ValueStepper / Info write their own value via `format`;
+                // every other kind uses the static `MenuItem::label`
+                // callback.
+                match item.kind {
+                    MenuItemKind::ValueStepper { format, .. } | MenuItemKind::Info { format } => {
+                        format(&mut label)
+                    }
+                    MenuItemKind::SlotInfo { format, slot, .. } => format(&mut label, slot),
+                    _ => {
+                        let _ = label.push_str((item.label)());
+                    }
+                }
+                if matches!(item.kind, MenuItemKind::Submenu(_)) {
+                    let _ = label.push_str(" >");
+                } else if is_stepper {
+                    if stepper_active && is_center {
+                        let _ = label.push_str(" ]");
+                    } else {
+                        let _ = label.push_str(" >");
+                    }
+                }
+                Text::with_text_style(
+                    &label,
+                    Point::new(MENU_X + MENU_W as i32 / 2, text_y),
+                    MonoTextStyle::new(&FONT_7X13_BOLD, fg),
+                    text_style,
+                )
+                .draw(display)?;
+            }
+        }
     }
 
     Ok(())

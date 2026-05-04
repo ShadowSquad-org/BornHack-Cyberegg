@@ -7,17 +7,17 @@ use embassy_time::Timer;
 
 /// All available melodies, addressable by index.
 pub const MELODIES: &[&[Tone]] = &[
-    melodies::STARTUP,        // 0
-    melodies::RICK_INTRO,     // 1
-    melodies::IMPERIAL_MARCH, // 2
-    melodies::SANDSTORM,      // 3
-    melodies::PINK_PANTHER,   // 4
-    melodies::TROLOLO,        // 5
-    melodies::PET_WARN,       // 6 — pet severity alert (not in the menu)
-    melodies::FUNNY_ENDING,   // 7 — played when the pet leaves
-    melodies::ALARM,          // 8 — watch-app wake alarm
-    melodies::DAISY_BELL,     // 9 — HAL 9000's parting song, player-pickable
-    melodies::NOKIA,          // 10 — Nokia Tune (Tárrega's Gran Vals)
+    melodies::STARTUP,          // 0
+    melodies::RICK_INTRO,       // 1
+    melodies::IMPERIAL_MARCH,   // 2
+    melodies::SANDSTORM,        // 3
+    melodies::PINK_PANTHER,     // 4
+    melodies::TROLOLO,          // 5
+    melodies::PET_WARN,         // 6 — pet severity alert (not in the menu)
+    melodies::FUNNY_ENDING,     // 7 — played when the pet leaves
+    melodies::ALARM,            // 8 — watch-app wake alarm
+    melodies::DAISY_BELL,       // 9 — HAL 9000's parting song, player-pickable
+    melodies::NOKIA,            // 10 — Nokia Tune (Tárrega's Gran Vals)
     melodies::OVER_THE_HORIZON, // 11 — Samsung's "Over the Horizon" hook
 ];
 
@@ -191,7 +191,8 @@ macro_rules! tone {
 /// per-half-period timer wakes needed. For each note `set_period` loads the
 /// correct COUNTERTOP, a 50% `DutyCycle` is set, and `enable()`/`disable()`
 /// bookend the `Timer::after_millis` wait. The idle pin level is LOW
-/// (configured via [`embassy_nrf::pwm::SimpleConfig`]), so silence and rests keep the pin low.
+/// (configured via [`embassy_nrf::pwm::SimpleConfig`]), so silence and rests
+/// keep the pin low.
 pub struct Buzzer<'d> {
     pwm: SimplePwm<'d>,
 }

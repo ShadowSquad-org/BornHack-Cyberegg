@@ -7,23 +7,21 @@
 //!
 //! # Strategy
 //!
-//! - **Year >= 2026.**  Anything before `2026-01-01 00:00 UTC` is
-//!   discarded as a stale or unset clock.
-//! - **Hop compensation.**  Each sample is corrected by adding
-//!   `SECONDS_PER_HOP * hops` seconds to its timestamp before
-//!   anything else, on the assumption that timestamps written at the
-//!   originator have been ageing in transit.
-//! - **First valid sample seeds the clock.**  No averaging yet —
-//!   the first plausible timestamp we hear becomes the wall clock.
-//! - **Subsequent samples drive a rolling median.**  Each later
-//!   sample is converted to a *signed* delta from the running clock.
-//!   Any sample whose corrected delta is outside ±1 h is rejected
-//!   outright.  The remaining deltas are buffered; once five are
-//!   collected, the median is added to the wall clock and the
-//!   buffer resets to start a new batch.
-//! - **BLE companion is authoritative.**  Once `SET_DEVICE_TIME`
-//!   has run, `BLE_TIME_LOCKED` latches and on-air refinement
-//!   stops permanently for the boot.
+//! - **Year >= 2026.**  Anything before `2026-01-01 00:00 UTC` is discarded as
+//!   a stale or unset clock.
+//! - **Hop compensation.**  Each sample is corrected by adding `SECONDS_PER_HOP
+//!   * hops` seconds to its timestamp before anything else, on the assumption
+//!   that timestamps written at the originator have been ageing in transit.
+//! - **First valid sample seeds the clock.**  No averaging yet — the first
+//!   plausible timestamp we hear becomes the wall clock.
+//! - **Subsequent samples drive a rolling median.**  Each later sample is
+//!   converted to a *signed* delta from the running clock. Any sample whose
+//!   corrected delta is outside ±1 h is rejected outright.  The remaining
+//!   deltas are buffered; once five are collected, the median is added to the
+//!   wall clock and the buffer resets to start a new batch.
+//! - **BLE companion is authoritative.**  Once `SET_DEVICE_TIME` has run,
+//!   `BLE_TIME_LOCKED` latches and on-air refinement stops permanently for the
+//!   boot.
 //!
 //! Caller is responsible for filtering on the source's trust
 //! criteria (signature verified, MAC passed, role appropriate) —
@@ -31,6 +29,7 @@
 
 use core::cell::RefCell;
 use core::sync::atomic::Ordering;
+
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 

@@ -2,24 +2,21 @@
 //! `SUMMARY` from `BEGIN:VEVENT` / `END:VEVENT` blocks.
 //!
 //! What we actually need from an ICS file:
-//!   * `DTSTART` — the event start, in any of:
-//!     `DTSTART:YYYYMMDDTHHMMSS`             (floating local time),
-//!     `DTSTART:YYYYMMDDTHHMMSSZ`            (UTC),
+//!   * `DTSTART` — the event start, in any of: `DTSTART:YYYYMMDDTHHMMSS`
+//!     (floating local time), `DTSTART:YYYYMMDDTHHMMSSZ`            (UTC),
 //!     `DTSTART;TZID=Europe/Copenhagen:YYYYMMDDTHHMMSS`.
 //!   * `DTEND` — same shapes, optional.  When absent the event has zero
 //!     duration (renders as a thin marker on the day-view).
-//!   * `SUMMARY` — the event title.  We keep up to the first 31 ASCII
-//!     bytes for the on-device label; non-ASCII bytes are dropped.
+//!   * `SUMMARY` — the event title.  We keep up to the first 31 ASCII bytes for
+//!     the on-device label; non-ASCII bytes are dropped.
 //!
 //! Timezone handling is split across the parser and its caller:
-//!   * The parser detects the trailing `Z` and reports `is_utc` per
-//!     timestamp.  All time values are returned verbatim (no offset
-//!     applied).
+//!   * The parser detects the trailing `Z` and reports `is_utc` per timestamp.
+//!     All time values are returned verbatim (no offset applied).
 //!   * The caller (`watch::import_alarms_from_fat12`) applies
-//!     `crate::TIMEZONE_OFFSET` to UTC timestamps before storing them in
-//!     alarm slots.  TZID parameters are stripped at parse time and the
-//!     accompanying value is treated as floating local — we don't ship
-//!     a tzdata table.
+//!     `crate::TIMEZONE_OFFSET` to UTC timestamps before storing them in alarm
+//!     slots.  TZID parameters are stripped at parse time and the accompanying
+//!     value is treated as floating local — we don't ship a tzdata table.
 //!
 //! Out of scope: line folding (continuation lines starting with a space),
 //! VALUE= overrides, RRULE recurrence, escape-sequence decoding (`\,`,
@@ -142,8 +139,7 @@ impl Iterator for Parser<'_> {
                 // Default end = start (zero-duration event when DTEND is
                 // missing).  Same UTC flag so the caller's timezone
                 // conversion is consistent across both timestamps.
-                let (ey, emo, ed, eh, emi, eutc) =
-                    dtend.unwrap_or((y, mo, d, h, mi, utc));
+                let (ey, emo, ed, eh, emi, eutc) = dtend.unwrap_or((y, mo, d, h, mi, utc));
                 return Some(Event {
                     year: y,
                     month: mo,

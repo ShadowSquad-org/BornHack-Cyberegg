@@ -118,9 +118,10 @@ pub async fn init() {
         // If a saved game is active but has no name, prompt for one.
         if pet_name().is_empty()
             && let Some(s) = unsafe { (*GAME.get()).as_mut() }
-                && s.phase == super::engine::Phase::Active {
-                    s.naming_pending = true;
-                }
+            && s.phase == super::engine::Phase::Active
+        {
+            s.naming_pending = true;
+        }
 
         // Unicorn Realm (past pets).
         let mut buf = [0u8; REALM_SAVE_SIZE];
@@ -140,18 +141,19 @@ async fn try_load() -> Option<GameState> {
     let ns = kv::namespace("game");
     let mut buf = [0u8; SAVE_SIZE];
     if let Ok(n) = ns.get("state", &mut buf).await
-        && n == SAVE_SIZE {
-            if let Some(mut s) = GameState::from_bytes(&buf) {
-                s.last_update_tick = 0;
-                defmt::info!(
-                    "game: restored from flash (gen={} age={})",
-                    s.generation,
-                    s.age_ticks
-                );
-                return Some(s);
-            }
-            defmt::warn!("game: corrupt save data");
+        && n == SAVE_SIZE
+    {
+        if let Some(mut s) = GameState::from_bytes(&buf) {
+            s.last_update_tick = 0;
+            defmt::info!(
+                "game: restored from flash (gen={} age={})",
+                s.generation,
+                s.age_ticks
+            );
+            return Some(s);
         }
+        defmt::warn!("game: corrupt save data");
+    }
     None
 }
 

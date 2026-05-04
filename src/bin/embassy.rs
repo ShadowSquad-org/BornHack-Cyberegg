@@ -1,13 +1,6 @@
 #![no_std]
 #![no_main]
 
-use embassy_executor::Spawner;
-use embassy_nrf::config::HfclkSource;
-use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
-use embassy_nrf::pac::wdt::vals::{Halt as WdtHalt, Sleep as WdtSleep};
-use embassy_nrf::pwm::SimplePwm;
-use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
-use embassy_time::Timer;
 use bornhack_aegg::fw::battery::{self, battery_task, init as init_battery};
 use bornhack_aegg::fw::button::{BTN_WATCH, run_buttons};
 use bornhack_aegg::fw::buzzer::{Buzzer, buzzer_task};
@@ -27,14 +20,21 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH,
-    board,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH, board,
     draw_graphics, health_err, unix_now, with_health,
 };
+use defmt_rtt as _;
+use embassy_executor::Spawner;
+use embassy_nrf::config::HfclkSource;
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::pac::wdt::vals::{Halt as WdtHalt, Sleep as WdtSleep};
+use embassy_nrf::pwm::SimplePwm;
+use embassy_nrf::wdt::{Config as WdtConfig, Watchdog};
+use embassy_time::Timer;
+use panic_probe as _;
 use ssd1675::UpdateMode;
 use ssd1675::graphics::Color;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
 // ---------------------------------------------------------------------------
 // Main

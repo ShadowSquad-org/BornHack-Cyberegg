@@ -2,12 +2,12 @@
 extern crate embedded_graphics as eg;
 extern crate embedded_graphics_simulator as simulator;
 
+use bornhack_aegg::menu::ButtonId;
+use bornhack_aegg::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
 use eg::pixelcolor::Rgb888;
 use eg::prelude::*;
 use embedded_graphics_simulator::sdl2::Keycode;
 use embedded_graphics_simulator::{OutputSettings, SimulatorDisplay, SimulatorEvent, Window};
-use bornhack_aegg::menu::ButtonId;
-use bornhack_aegg::{DISPLAY_STATE, TriColor, draw_graphics, with_display_state_mut};
 
 /// Adapter that translates TriColor draw calls to an Rgb888 SimulatorDisplay.
 struct TriColorDisplay<'a>(&'a mut SimulatorDisplay<Rgb888>);
@@ -126,8 +126,8 @@ fn main() -> Result<(), core::convert::Infallible> {
 fn handle_button(btn: ButtonId) {
     #[cfg(feature = "game")]
     {
-        let on_game = bornhack_aegg::with_display_state!(|s| s.active_screen())
-            == bornhack_aegg::SCREEN_GAME;
+        let on_game =
+            bornhack_aegg::with_display_state!(|s| s.active_screen()) == bornhack_aegg::SCREEN_GAME;
         if on_game && bornhack_aegg::game::input::dispatch(btn) {
             return;
         }

@@ -8,19 +8,18 @@
 //! when needed" pattern, so the user can scroll past Calendar with
 //! Left/Right without it grabbing the input:
 //!
-//!   * **Passive** (default on entry): the grid is rendered but the
-//!     cursor border is hidden.  Up/Down/Left/Right/Cancel fall through
-//!     to the menu layer so screen-nav works.  Fire/Execute is the only
-//!     consumed button — it transitions into Active.
+//!   * **Passive** (default on entry): the grid is rendered but the cursor
+//!     border is hidden.  Up/Down/Left/Right/Cancel fall through to the menu
+//!     layer so screen-nav works.  Fire/Execute is the only consumed button —
+//!     it transitions into Active.
 //!
-//!   * **Active**: cursor border becomes visible.  Up/Down/Left/Right
-//!     move the cursor one cell (crossing month boundaries via
-//!     fasttime arithmetic).  Fire/Execute drills into Day-detail.
-//!     Cancel returns to Passive.
+//!   * **Active**: cursor border becomes visible.  Up/Down/Left/Right move the
+//!     cursor one cell (crossing month boundaries via fasttime arithmetic).
+//!     Fire/Execute drills into Day-detail. Cancel returns to Passive.
 //!
-//!   * **Day detail**: full-screen list of every event on the cursor
-//!     day, scrollable, reusing the same alarm-slot state.  Cancel
-//!     returns to Active.
+//!   * **Day detail**: full-screen list of every event on the cursor day,
+//!     scrollable, reusing the same alarm-slot state.  Cancel returns to
+//!     Active.
 //!
 //! Today's cell gets a red fill with the day number in white.  Days
 //! with one or more events get a small red dot above the day number.
@@ -29,14 +28,14 @@
 //! event in Passive *and* Active so you see today's plan at a glance
 //! the moment you land on the screen.
 
+use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::iso_8859_1::{FONT_6X13_BOLD, FONT_7X13_BOLD};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
-
-use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
 
 use super::alarm::{
     N_ALARMS, alarm_day_n, alarm_enabled_n, alarm_end_hour_n, alarm_end_minute_n, alarm_hour_n,
@@ -425,8 +424,13 @@ where
     let weekday_style = MonoTextStyle::new(&FONT_6X10, BLACK);
     for (col, name) in DAY_NAMES_SHORT.iter().enumerate() {
         let cx = GRID_LEFT_X + col as i32 * COL_W + COL_W / 2;
-        Text::with_text_style(name, Point::new(cx, WEEKDAY_STRIP_Y), weekday_style, centered)
-            .draw(display)?;
+        Text::with_text_style(
+            name,
+            Point::new(cx, WEEKDAY_STRIP_Y),
+            weekday_style,
+            centered,
+        )
+        .draw(display)?;
     }
 
     // ── Grid cells ─────────────────────────────────────────────────────────
@@ -521,12 +525,7 @@ where
         let mut row: heapless::String<48> = heapless::String::new();
         let _ = core::fmt::write(
             &mut row,
-            format_args!(
-                "{:02}:{:02} {}",
-                ev0.hour,
-                ev0.minute,
-                summary.as_str()
-            ),
+            format_args!("{:02}:{:02} {}", ev0.hour, ev0.minute, summary.as_str()),
         );
         Text::with_text_style(
             &row,
@@ -538,10 +537,7 @@ where
 
         if cursor_evs.len() > 1 {
             let mut more: heapless::String<24> = heapless::String::new();
-            let _ = core::fmt::write(
-                &mut more,
-                format_args!("+ {} more", cursor_evs.len() - 1),
-            );
+            let _ = core::fmt::write(&mut more, format_args!("+ {} more", cursor_evs.len() - 1));
             Text::with_text_style(
                 &more,
                 Point::new(4, FOOTER_Y_2),
@@ -813,9 +809,9 @@ where
     let above = day_evs
         .iter()
         .any(|ev| (ev.hour as i32 * 60 + ev.minute as i32) < tl_start_hour * 60);
-    let below = day_evs.iter().any(|ev| {
-        (ev.hour as i32 * 60 + ev.minute as i32) >= (tl_start_hour + HOURS_VISIBLE) * 60
-    });
+    let below = day_evs
+        .iter()
+        .any(|ev| (ev.hour as i32 * 60 + ev.minute as i32) >= (tl_start_hour + HOURS_VISIBLE) * 60);
     if above {
         Text::with_text_style("^", Point::new(146, TL_TOP_Y + 4), arrow_style, centered)
             .draw(display)?;

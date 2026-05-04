@@ -129,9 +129,10 @@ const ICS_READ_BUF_LEN: usize = 16 * 1024;
 
 #[cfg(feature = "embassy-base")]
 pub async fn import_alarms_from_fat12() {
+    use core::sync::atomic::Ordering;
+
     use crate::fw::fat12;
     use crate::fw::led::{self, LED_BLUE, LedState};
-    use core::sync::atomic::Ordering;
 
     let Some(name) = fat12::to_8_3("ALARMS.ICS") else {
         return;
@@ -171,7 +172,12 @@ pub async fn import_alarms_from_fat12() {
         }
         let (sy, sm, sd, sh, smi) = if event.start_is_utc {
             shift_utc_to_local(
-                event.year, event.month, event.day, event.hour, event.minute, tz_offset,
+                event.year,
+                event.month,
+                event.day,
+                event.hour,
+                event.minute,
+                tz_offset,
             )
         } else {
             (event.year, event.month, event.day, event.hour, event.minute)
@@ -198,12 +204,11 @@ pub async fn import_alarms_from_fat12() {
         // Day-view assumes start and end are on the same day.  Multi-
         // day events get clamped to 23:59 of the start day so the
         // renderer doesn't have to reason about midnight crossings.
-        let (final_eh, final_emi) =
-            if (ey, em, ed) == (sy, sm, sd) {
-                (eh, emi)
-            } else {
-                (23, 59)
-            };
+        let (final_eh, final_emi) = if (ey, em, ed) == (sy, sm, sd) {
+            (eh, emi)
+        } else {
+            (23, 59)
+        };
 
         alarm::set_alarm_time_n(slot, sh, smi);
         alarm::set_alarm_date_n(slot, sy, sm, sd);

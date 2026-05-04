@@ -913,11 +913,11 @@ impl ContactStore {
                 let key = slot_key(idx);
                 if let Ok(n) = self.kv.get(key.as_str(), &mut cbuf).await
                     && n == CONTACT_SIZE
-                        && let Some(c) =
-                            Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
-                            && !c.is_deleted() {
-                                count += 1;
-                            }
+                    && let Some(c) = Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
+                    && !c.is_deleted()
+                {
+                    count += 1;
+                }
                 embassy_futures::yield_now().await;
             }
 
@@ -1078,19 +1078,21 @@ impl ContactStore {
             let mut cbuf = [0u8; CONTACT_SIZE];
             if let Ok(n) = self.kv.get(slot_key(slot).as_str(), &mut cbuf).await
                 && n == CONTACT_SIZE
-                    && let Some(existing) =
-                        Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
-                        && !existing.is_deleted() && existing.pub_key == contact.pub_key {
-                            let mut updated = contact.clone();
-                            updated.flags |= existing.flags & FLAG_FAVORITE;
-                            if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
-                                return Ok(AddResult::Updated);
-                            }
-                            self.kv
-                                .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
-                                .await?;
-                            return Ok(AddResult::Updated);
-                        }
+                && let Some(existing) =
+                    Contact::from_bytes(cbuf[..CONTACT_SIZE].try_into().unwrap())
+                && !existing.is_deleted()
+                && existing.pub_key == contact.pub_key
+            {
+                let mut updated = contact.clone();
+                updated.flags |= existing.flags & FLAG_FAVORITE;
+                if updated.to_bytes() == cbuf[..CONTACT_SIZE] {
+                    return Ok(AddResult::Updated);
+                }
+                self.kv
+                    .set(slot_key(slot).as_str(), &updated.to_bytes(), true)
+                    .await?;
+                return Ok(AddResult::Updated);
+            }
             // Index pointed at a stale/deleted slot — fall through to add.
         }
 
