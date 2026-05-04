@@ -20,8 +20,8 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH, board,
-    draw_graphics, health_err, unix_now, with_health,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_NAME, SCREEN_TOKEN,
+    SCREEN_WATCH, board, draw_graphics, health_err, unix_now, with_health,
 };
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -437,9 +437,17 @@ async fn display_loop(
         // through, which makes the PIN unreadable on the Calendar
         // screen specifically.  The pairing window is short, so the
         // slower refresh per cycle is fine.
+        // The Name screen's HELLO/my-name-is banner sits on the red
+        // plane, which the fast Mode1 LUT skips entirely.  Without
+        // forcing the full path here, the banner renders stale (or
+        // missing) on every redraw after the first boot-time
+        // tri-color paint.  Redraws on this screen are rare —
+        // button-driven only, no minute-tick — so the per-redraw
+        // cost is acceptable.
         let do_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
-            || bornhack_aegg::BLE_PASSKEY.load(core::sync::atomic::Ordering::Relaxed) != u32::MAX;
+            || bornhack_aegg::BLE_PASSKEY.load(core::sync::atomic::Ordering::Relaxed) != u32::MAX
+            || active_screen == SCREEN_NAME;
 
         let sprite_advance = match select(
             async {
