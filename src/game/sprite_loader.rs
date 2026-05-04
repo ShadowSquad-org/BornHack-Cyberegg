@@ -301,7 +301,8 @@ fn decode_rle_line(src: &[u8], dst: &mut [u8], bytes_per_line: usize) -> usize {
 // Blit
 // ---------------------------------------------------------------------------
 
-/// Blit a PCX file (by [`fat12::FileRef`]) onto the display at position (`x`, `y`).
+/// Blit a PCX file (by [`fat12::FileRef`]) onto the display at position (`x`,
+/// `y`).
 ///
 /// Streams the PCX from flash through a small sliding buffer, RLE-decodes
 /// one scanline at a time, and writes 2bpp pixels into the black and red

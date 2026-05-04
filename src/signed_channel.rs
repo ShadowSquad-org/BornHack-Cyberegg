@@ -5,9 +5,9 @@
 //!
 //! Two APDUs per command:
 //!
-//! 1. **GET CHALLENGE** (`CLA=0x80 INS=0x02`) — PCB returns 16 fresh
-//!    random bytes.  The PCB stores the challenge in RAM, scoped to
-//!    the current ISO-DEP session.
+//! 1. **GET CHALLENGE** (`CLA=0x80 INS=0x02`) — PCB returns 16 fresh random
+//!    bytes.  The PCB stores the challenge in RAM, scoped to the current
+//!    ISO-DEP session.
 //! 2. **SIGNED CMD** (`CLA=0x80 INS=0x01`) — data field:
 //!
 //!        [plaintext command, 1+ bytes] || [64 B Ed25519 signature]
@@ -152,10 +152,13 @@ impl Session {
 
 #[cfg(target_arch = "arm")]
 mod csprng {
-    use super::CHALLENGE_LEN;
     use core::sync::atomic::{AtomicBool, Ordering};
-    use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
+
+    use embassy_sync::blocking_mutex::Mutex;
+    use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use sha2::{Digest, Sha256};
+
+    use super::CHALLENGE_LEN;
 
     static SEEDED: AtomicBool = AtomicBool::new(false);
     static STATE: Mutex<CriticalSectionRawMutex, core::cell::RefCell<[u8; 32]>> =
@@ -227,9 +230,10 @@ pub use csprng::Csprng;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use heapless::Vec;
+
+    use super::*;
 
     fn test_keypair() -> (SigningKey, [u8; 32]) {
         let seed: [u8; 32] = [

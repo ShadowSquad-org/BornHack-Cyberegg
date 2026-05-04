@@ -1,9 +1,11 @@
 use defmt::{todo, *};
+use defmt_rtt as _;
+use embassy_nrf as _;
 use embassy_nrf::nfct::{Config as NfcConfig, NfcId, NfcT};
 use embassy_nrf::peripherals::NFCT;
 use embassy_nrf::{Peri, bind_interrupts, nfct};
 use heapless::Vec as HVec;
-use {defmt_rtt as _, embassy_nrf as _, panic_probe as _};
+use panic_probe as _;
 
 use super::iso14443::iso14443_3;
 use super::iso14443::iso14443_4::{Card, IsoDep};
@@ -85,9 +87,9 @@ pub async fn run_nfct(nfct: Peri<'_, NFCT>) {
     #[cfg(feature = "signed-channel")]
     let mut session = match Session::new(AUTHORIZED_PUBLIC_KEY) {
         Ok(s) => s,
-        Err(_) => defmt::panic!(
-            "AUTHORIZED_PUBLIC_KEY in signed_channel.rs is not a valid Ed25519 point"
-        ),
+        Err(_) => {
+            defmt::panic!("AUTHORIZED_PUBLIC_KEY in signed_channel.rs is not a valid Ed25519 point")
+        }
     };
     #[cfg(feature = "signed-channel")]
     info!("signed channel: challenge-response mode");
@@ -265,10 +267,7 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
         }
     };
 
-    info!(
-        "signed: verify ok, plaintext len={=usize}",
-        plaintext.len()
-    );
+    info!("signed: verify ok, plaintext len={=usize}", plaintext.len());
     // The signed APDU's only payload kind today is a station command
     // dispatched into the game lifecycle.  In an `embassy-mesh`-only
     // build (signed-channel: yes, game: no) there's nothing to apply
@@ -308,12 +307,11 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 /// After every NDEF write, see whether the buffer now holds a
 /// complete NDEF text record.  Two effects can apply on the same
 /// payload:
-///   * If `text` starts with `"token:"`, forward the value to the
-///     token screen (always, regardless of features).
-///   * If the `game` feature is enabled and the text matches a
-///     station phrase, apply the effect, show the toast, and re-arm
-///     the buffer back to the default URL so the next phone-read
-///     shows the `badge.team` URL again.
+///   * If `text` starts with `"token:"`, forward the value to the token screen
+///     (always, regardless of features).
+///   * If the `game` feature is enabled and the text matches a station phrase,
+///     apply the effect, show the toast, and re-arm the buffer back to the
+///     default URL so the next phone-read shows the `badge.team` URL again.
 fn try_apply_station(ndef_buf: &mut [u8; NDEF_BUF_LEN]) {
     let nlen = u16::from_be_bytes([ndef_buf[0], ndef_buf[1]]) as usize;
     if nlen == 0 || 2 + nlen > ndef_buf.len() {

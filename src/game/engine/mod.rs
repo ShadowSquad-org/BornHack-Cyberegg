@@ -57,8 +57,7 @@ impl PetKind {
     }
 
     /// All available pet kinds, in order.
-    pub const ALL: &'static [PetKind] =
-        &[PetKind::Bartholomeus, PetKind::Cat, PetKind::Slug];
+    pub const ALL: &'static [PetKind] = &[PetKind::Bartholomeus, PetKind::Cat, PetKind::Slug];
 }
 
 /// Lifecycle phase of the pet.
@@ -336,7 +335,9 @@ impl GameState {
             return;
         }
 
-        if self.phase == Phase::Gone { return }
+        if self.phase == Phase::Gone {
+            return;
+        }
 
         self.age_ticks += total_delta;
 

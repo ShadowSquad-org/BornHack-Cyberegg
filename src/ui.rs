@@ -180,9 +180,12 @@ where
         let row_top = list_y + i as i32 * ITEM_H;
         let row_mid = row_top + ITEM_H / 2;
         if i == pos {
-            Rectangle::new(Point::new(inner_x, row_top), Size::new(inner_w, ITEM_H as u32))
-                .into_styled(PrimitiveStyle::with_fill(BLACK))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(inner_x, row_top),
+                Size::new(inner_w, ITEM_H as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(display)?;
             Text::with_text_style(
                 label,
                 Point::new(inner_x + 6, row_mid),

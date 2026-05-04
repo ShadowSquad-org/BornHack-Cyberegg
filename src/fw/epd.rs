@@ -1,15 +1,16 @@
 use core::convert::Infallible;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
+use defmt_rtt as _;
 use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pin as GpioPin, Port, Pull};
 use embassy_nrf::spim::{Config, Frequency, InterruptHandler, Spim};
 use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
+use panic_probe as _;
 pub use ssd1675::LutMode;
 use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
 // EPD display configuration - compile-time constants with generics
 pub struct EpdConfig<const ROWS: u16, const COLS: u8>;

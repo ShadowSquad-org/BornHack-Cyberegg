@@ -19,6 +19,7 @@ pub mod engine;
 pub mod input;
 pub mod lifecycle;
 pub mod lightsout;
+pub mod maze;
 pub mod modal;
 pub mod nav;
 pub mod nim;
@@ -29,7 +30,6 @@ pub mod stat_bar;
 pub mod station;
 pub mod tictactoe;
 pub mod traits_view;
-pub mod maze;
 // ── Action feedback toast ────────────────────────────────────────────────────
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 

@@ -28,22 +28,23 @@
 //! - Add `pub mod maze;` to `src/game/mod.rs`.
 //! - In `draw_screen_game` add the takeover guard (see mod.rs comment below).
 //! - In `input.rs` add the input block (see input.rs comment below).
-//! - In `modal.rs` add `"Maze"` to the Play items list and `"Maze" => { super::maze::open(); close(); }` to activate.
+//! - In `modal.rs` add `"Maze"` to the Play items list and `"Maze" => {
+//!   super::maze::open(); close(); }` to activate.
 //!
 //! State is held entirely in module-level statics — no heap, no alloc.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
-use embedded_graphics::{
-    mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
-    prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
-};
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_7X13_BOLD;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use crate::{BLACK, TriColor, WHITE};
 
-// ── Maze dimensions ───────────────────────────────────────────────────────────
+// ── Maze dimensions
+// ───────────────────────────────────────────────────────────
 
 /// Number of cells along each axis.
 const W: usize = 18;
@@ -55,7 +56,8 @@ const CELL: i32 = 8;
 /// Pixel border around the whole maze.
 const BORDER: i32 = 4;
 
-// ── Wall bitmask encoding ─────────────────────────────────────────────────────
+// ── Wall bitmask encoding
+// ─────────────────────────────────────────────────────
 //
 // For every cell we store which of its FOUR walls are OPEN (passage exists).
 // Using a nibble: bit 0=North, bit 1=East, bit 2=South, bit 3=West.
@@ -72,14 +74,16 @@ const EAST: u8 = 0b0010;
 const SOUTH: u8 = 0b0100;
 const WEST: u8 = 0b1000;
 
-// ── Exit cell encoding ────────────────────────────────────────────────────────
+// ── Exit cell encoding
+// ────────────────────────────────────────────────────────
 //
 // Up to 4 exits. Each exit is stored as the (row, col) of the border cell that
 // has been "punched through".  0xFF = unused slot.
 
 const MAX_EXITS: usize = 4;
 
-// ── Global state ──────────────────────────────────────────────────────────────
+// ── Global state
+// ──────────────────────────────────────────────────────────────
 
 /// Whether the maze screen is currently active.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -115,15 +119,21 @@ static VISITED: [AtomicU32; PACK_LEN] = [const { AtomicU32::new(0) }; PACK_LEN];
 /// Exit positions: packed as (row << 8 | col).  0xFFFF = unused.
 static EXITS: [AtomicU32; MAX_EXITS] = [const { AtomicU32::new(0xFFFF) }; MAX_EXITS];
 
-// ── Maze source ───────────────────────────────────────────────────────────────
+// ── Maze source
+// ───────────────────────────────────────────────────────────────
 //
 // Set MAZE_BASE64 to a non-empty base64 string exported from the maze editor
 // to load that specific maze instead of generating a random one.
 // Leave it as "" to always generate a random maze.
-//const MAZE_BASE64: &str = "TVoBEhICEQoAAf////8JCVRkqqqqysbGxvc9qqqqWFVVVVWnqqqqODk5WVVlqqrqqqrqXNdVpqr6qqpYVVXTZar6qijaVVVUFab6qkxUVVVVRWX+ylVVVTVZUVVR0lFVVeN4/vv6+v7bVfJYVXRYVFVUVVRUVTX6m1XXVVVVFaPaollVVfNdRaL6qppVVdZVcap4qqpZVVU1uqq6qqq6XVWjqqqqbKqqWTGqqqqKNaqqmg==";
+//const MAZE_BASE64: &str =
+// "TVoBEhICEQoAAf////
+// 8JCVRkqqqqysbGxvc9qqqqWFVVVVWnqqqqODk5WVVlqqrqqqrqXNdVpqr6qqpYVVXTZar6qijaVVVUFab6qkxUVVVVRWX+ylVVVTVZUVVR0lFVVeN4/
+// vv6+v7bVfJYVXRYVFVUVVRUVTX6m1XXVVVVFaPaollVVfNdRaL6qppVVdZVcap4qqpZVVU1uqq6qqq6XVWjqqqqbKqqWTGqqqqKNaqqmg=="
+// ;
 const MAZE_BASE64: &str = "";
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Public API
+// ────────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
@@ -159,9 +169,11 @@ pub fn close() {
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
-// ── Movement ──────────────────────────────────────────────────────────────────
+// ── Movement
+// ──────────────────────────────────────────────────────────────────
 
-// ── Cheat codes ───────────────────────────────────────────────────────────────
+// ── Cheat codes
+// ───────────────────────────────────────────────────────────────
 //
 // Two independent sequences are tracked simultaneously using separate position
 // counters so entering one can't accidentally interfere with the other.
@@ -172,13 +184,14 @@ pub fn close() {
 // Button codes: 0=Up  1=Down  2=Left  3=Right  4=Execute
 
 const CHEAT_SEQ_REVEAL: [u8; 7] = [0, 0, 1, 4, 2, 2, 3];
-const CHEAT_SEQ_REGEN:  [u8; 4] = [0, 4, 4, 1];
+const CHEAT_SEQ_REGEN: [u8; 4] = [0, 4, 4, 1];
 
 /// Position within the REGEN sequence (0 = not started).
 static REGEN_POS: AtomicU8 = AtomicU8::new(0);
 
 /// Advance a cheat sequence tracker.  Returns true when the sequence completes.
-/// `pos_atomic` is the AtomicU8 tracking progress; `seq` is the target sequence.
+/// `pos_atomic` is the AtomicU8 tracking progress; `seq` is the target
+/// sequence.
 fn advance_seq(pos_atomic: &AtomicU8, seq: &[u8], code: u8) -> bool {
     let pos = pos_atomic.load(Ordering::Relaxed) as usize;
     if seq[pos] == code {
@@ -217,36 +230,52 @@ fn check_cheat(code: u8) {
 }
 
 pub fn move_up() {
-    if WON.load(Ordering::Relaxed) { close(); return; }
+    if WON.load(Ordering::Relaxed) {
+        close();
+        return;
+    }
     check_cheat(0);
     try_move_dir(0); // North
 }
 
 pub fn move_down() {
-    if WON.load(Ordering::Relaxed) { close(); return; }
+    if WON.load(Ordering::Relaxed) {
+        close();
+        return;
+    }
     check_cheat(1);
     try_move_dir(2); // South
 }
 
 pub fn move_left() {
-    if WON.load(Ordering::Relaxed) { close(); return; }
+    if WON.load(Ordering::Relaxed) {
+        close();
+        return;
+    }
     check_cheat(2);
     try_move_dir(3); // West
 }
 
 pub fn move_right() {
-    if WON.load(Ordering::Relaxed) { close(); return; }
+    if WON.load(Ordering::Relaxed) {
+        close();
+        return;
+    }
     check_cheat(3);
     try_move_dir(1); // East
 }
 
 /// Fire / Execute on the win screen also closes.
 pub fn activate() {
-    if WON.load(Ordering::Relaxed) { close(); return; }
+    if WON.load(Ordering::Relaxed) {
+        close();
+        return;
+    }
     check_cheat(4);
 }
 
-// ── Movement helpers ──────────────────────────────────────────────────────────
+// ── Movement helpers
+// ──────────────────────────────────────────────────────────
 
 /// Try to move in a direction (0=N, 1=E, 2=S, 3=W).
 fn try_move_dir(dir: u8) {
@@ -290,7 +319,9 @@ fn check_exit_escape(row: usize, col: usize, dir: u8) {
     // Is this cell an exit whose open wall faces in `dir`?
     let packed = ((row as u32) << 8) | col as u32;
     let is_exit = EXITS.iter().any(|s| s.load(Ordering::Relaxed) == packed);
-    if !is_exit { return; }
+    if !is_exit {
+        return;
+    }
 
     // The exit wall must be open in that direction.
     let walls = WALLS[row * W + col].load(Ordering::Relaxed);
@@ -300,7 +331,8 @@ fn check_exit_escape(row: usize, col: usize, dir: u8) {
     }
 }
 
-// ── Visited bitfield helpers ──────────────────────────────────────────────────
+// ── Visited bitfield helpers
+// ──────────────────────────────────────────────────
 
 fn mark_visited(row: usize, col: usize) {
     let i = row * W + col;
@@ -322,7 +354,8 @@ fn clear_visited() {
     }
 }
 
-// ── Wall helpers ──────────────────────────────────────────────────────────────
+// ── Wall helpers
+// ──────────────────────────────────────────────────────────────
 
 fn open_wall(row: usize, col: usize, dir: u8) {
     WALLS[row * W + col].fetch_or(dir, Ordering::Relaxed);
@@ -334,7 +367,8 @@ fn clear_walls() {
     }
 }
 
-// ── Simple PRNG ───────────────────────────────────────────────────────────────
+// ── Simple PRNG
+// ───────────────────────────────────────────────────────────────
 
 /// Global PRNG state (updated by each call).
 static RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
@@ -351,7 +385,9 @@ fn rng_next() -> u32 {
 /// Seed the PRNG from embassy uptime or a compile-time fallback.
 fn rng_seed() -> u32 {
     #[cfg(feature = "embassy-base")]
-    { embassy_time::Instant::now().as_ticks() as u32 }
+    {
+        embassy_time::Instant::now().as_ticks() as u32
+    }
     #[cfg(feature = "simulator")]
     {
         // Use wall-clock nanoseconds so each run gets a different maze.
@@ -362,10 +398,13 @@ fn rng_seed() -> u32 {
             .unwrap_or(0xFEED_FACE)
     }
     #[cfg(not(any(feature = "embassy-base", feature = "simulator")))]
-    { 0xFEED_FACE }
+    {
+        0xFEED_FACE
+    }
 }
 
-// ── Stack for iterative DFS ───────────────────────────────────────────────────
+// ── Stack for iterative DFS
+// ───────────────────────────────────────────────────
 //
 // Recursive Backtracker (DFS) requires a stack of cell indices.  Maximum depth
 // is CELLS = 324 entries × 2 bytes each = 648 bytes on the stack.  The
@@ -382,7 +421,10 @@ struct Stack {
 
 impl Stack {
     const fn new() -> Self {
-        Self { buf: [0u16; STACK_MAX], top: 0 }
+        Self {
+            buf: [0u16; STACK_MAX],
+            top: 0,
+        }
     }
     fn push(&mut self, v: u16) {
         if self.top < STACK_MAX {
@@ -391,12 +433,20 @@ impl Stack {
         }
     }
     fn pop(&mut self) -> Option<u16> {
-        if self.top == 0 { None } else { self.top -= 1; Some(self.buf[self.top]) }
+        if self.top == 0 {
+            None
+        } else {
+            self.top -= 1;
+            Some(self.buf[self.top])
+        }
     }
-    fn is_empty(&self) -> bool { self.top == 0 }
+    fn is_empty(&self) -> bool {
+        self.top == 0
+    }
 }
 
-// ── Maze generation ───────────────────────────────────────────────────────────
+// ── Maze generation
+// ───────────────────────────────────────────────────────────
 
 // Bitmap visited helpers — operate on a stack-local `[u32; PACK_LEN]`
 // buffer passed in by the caller.  Generation and the BFS exit
@@ -410,7 +460,8 @@ fn gen_is_visited(buf: &[u32; PACK_LEN], i: usize) -> bool {
     buf[i / 32] & (1 << (i % 32)) != 0
 }
 
-// ── Load maze from base64 ─────────────────────────────────────────────────────
+// ── Load maze from base64
+// ─────────────────────────────────────────────────────
 
 /// Decode a base64 string produced by the maze editor and populate the maze
 /// state from it.  Returns false and leaves state unchanged if decoding fails.
@@ -431,26 +482,38 @@ fn load_from_base64(encoded: &str) -> bool {
     let mut buf = [0u8; 256];
     let decoded_len = match base64_decode(encoded.as_bytes(), &mut buf) {
         Some(n) => n,
-        None    => return false,
+        None => return false,
     };
     let data = &buf[..decoded_len];
 
     // ── Validate header ───────────────────────────────────────────────────
-    if decoded_len < 17 { return false; }
-    if &data[0..2] != b"MZ" { return false; }
-    if data[2] != 1 { return false; }   // version
+    if decoded_len < 17 {
+        return false;
+    }
+    if &data[0..2] != b"MZ" {
+        return false;
+    }
+    if data[2] != 1 {
+        return false;
+    } // version
 
-    let w        = data[3] as usize;
-    let h        = data[4] as usize;
-    let n_exits  = data[5] as usize;
+    let w = data[3] as usize;
+    let h = data[4] as usize;
+    let n_exits = data[5] as usize;
 
-    if w == 0 || h == 0 || w > 32 || h > 32 { return false; }
-    if n_exits > MAX_EXITS { return false; }
+    if w == 0 || h == 0 || w > 32 || h > 32 {
+        return false;
+    }
+    if n_exits > MAX_EXITS {
+        return false;
+    }
 
-    let wall_start  = 16usize;
-    let cells       = w * h;
-    let wall_bytes  = cells.div_ceil(2);
-    if decoded_len < wall_start + wall_bytes { return false; }
+    let wall_start = 16usize;
+    let cells = w * h;
+    let wall_bytes = cells.div_ceil(2);
+    if decoded_len < wall_start + wall_bytes {
+        return false;
+    }
 
     // ── Load into statics ─────────────────────────────────────────────────
     // Clear everything first.
@@ -459,12 +522,18 @@ fn load_from_base64(encoded: &str) -> bool {
     CHEAT_POS.store(0, Ordering::Relaxed);
     REGEN_POS.store(0, Ordering::Relaxed);
     REVEALED.store(false, Ordering::Relaxed);
-    for slot in &EXITS { slot.store(0xFFFF, Ordering::Relaxed); }
+    for slot in &EXITS {
+        slot.store(0xFFFF, Ordering::Relaxed);
+    }
 
     // Wall data
     for idx in 0..cells {
-        let byte   = data[wall_start + idx / 2];
-        let nibble = if idx % 2 == 0 { byte & 0xF } else { (byte >> 4) & 0xF };
+        let byte = data[wall_start + idx / 2];
+        let nibble = if idx % 2 == 0 {
+            byte & 0xF
+        } else {
+            (byte >> 4) & 0xF
+        };
         let r = idx / w;
         let c = idx % w;
         if r < H && c < W {
@@ -477,7 +546,9 @@ fn load_from_base64(encoded: &str) -> bool {
     for i in 0..MAX_EXITS {
         let er = data[6 + i * 2];
         let ec = data[7 + i * 2];
-        if er == 0xFF || exit_count >= n_exits { break; }
+        if er == 0xFF || exit_count >= n_exits {
+            break;
+        }
         if (er as usize) < H && (ec as usize) < W {
             EXITS[exit_count].store(((er as u32) << 8) | ec as u32, Ordering::Relaxed);
             exit_count += 1;
@@ -499,7 +570,8 @@ fn load_from_base64(encoded: &str) -> bool {
 }
 
 /// Minimal base64 decoder (standard alphabet, with or without '=' padding).
-/// Writes decoded bytes into `out`, returns number of bytes written or None on error.
+/// Writes decoded bytes into `out`, returns number of bytes written or None on
+/// error.
 fn base64_decode(input: &[u8], out: &mut [u8]) -> Option<usize> {
     #[inline(always)]
     fn dec(c: u8) -> u8 {
@@ -507,15 +579,17 @@ fn base64_decode(input: &[u8], out: &mut [u8]) -> Option<usize> {
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
             b'0'..=b'9' => c - b'0' + 52,
-            b'+'        => 62,
-            b'/'        => 63,
-            _           => 0xFF,
+            b'+' => 62,
+            b'/' => 63,
+            _ => 0xFF,
         }
     }
 
     // Strip trailing '=' padding.
     let mut end = input.len();
-    while end > 0 && input[end - 1] == b'=' { end -= 1; }
+    while end > 0 && input[end - 1] == b'=' {
+        end -= 1;
+    }
     let input = &input[..end];
 
     let mut out_pos = 0usize;
@@ -524,23 +598,35 @@ fn base64_decode(input: &[u8], out: &mut [u8]) -> Option<usize> {
     while i + 1 < input.len() {
         let a = dec(input[i]);
         let b = dec(input[i + 1]);
-        if a == 0xFF || b == 0xFF { return None; }
+        if a == 0xFF || b == 0xFF {
+            return None;
+        }
 
-        if out_pos >= out.len() { return None; }
+        if out_pos >= out.len() {
+            return None;
+        }
         out[out_pos] = (a << 2) | (b >> 4);
         out_pos += 1;
 
         if i + 2 < input.len() {
             let c = dec(input[i + 2]);
-            if c == 0xFF { return None; }
-            if out_pos >= out.len() { return None; }
+            if c == 0xFF {
+                return None;
+            }
+            if out_pos >= out.len() {
+                return None;
+            }
             out[out_pos] = ((b & 0x0F) << 4) | (c >> 2);
             out_pos += 1;
 
             if i + 3 < input.len() {
                 let d = dec(input[i + 3]);
-                if d == 0xFF { return None; }
-                if out_pos >= out.len() { return None; }
+                if d == 0xFF {
+                    return None;
+                }
+                if out_pos >= out.len() {
+                    return None;
+                }
                 out[out_pos] = ((c & 0x03) << 6) | d;
                 out_pos += 1;
             }
@@ -563,13 +649,27 @@ struct Queue {
 }
 
 impl Queue {
-    fn new() -> Self { Self { buf: [0u16; CELLS], head: 0, tail: 0 } }
+    fn new() -> Self {
+        Self {
+            buf: [0u16; CELLS],
+            head: 0,
+            tail: 0,
+        }
+    }
     fn push(&mut self, v: u16) {
-        if self.tail < CELLS { self.buf[self.tail] = v; self.tail += 1; }
+        if self.tail < CELLS {
+            self.buf[self.tail] = v;
+            self.tail += 1;
+        }
     }
     fn pop(&mut self) -> Option<u16> {
-        if self.head == self.tail { None }
-        else { let v = self.buf[self.head]; self.head += 1; Some(v) }
+        if self.head == self.tail {
+            None
+        } else {
+            let v = self.buf[self.head];
+            self.head += 1;
+            Some(v)
+        }
     }
 }
 
@@ -620,16 +720,24 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
         // Explore all four open passages.
         let neighbours: [(u8, usize, usize); 4] = [
             (NORTH, r.wrapping_sub(1), c),
-            (EAST,  r, c + 1),
+            (EAST, r, c + 1),
             (SOUTH, r + 1, c),
-            (WEST,  r, c.wrapping_sub(1)),
+            (WEST, r, c.wrapping_sub(1)),
         ];
 
         for (dir_bit, nr, nc) in neighbours {
-            if nr >= H || nc >= W { continue; }
-            if walls & dir_bit == 0 { continue; }                  // wall blocks
-            if gen_is_visited(&visited, nr * W + nc) { continue; } // already seen
-            if is_existing_exit(nr, nc) { continue; }              // treat as wall
+            if nr >= H || nc >= W {
+                continue;
+            }
+            if walls & dir_bit == 0 {
+                continue;
+            } // wall blocks
+            if gen_is_visited(&visited, nr * W + nc) {
+                continue;
+            } // already seen
+            if is_existing_exit(nr, nc) {
+                continue;
+            } // treat as wall
 
             gen_mark(&mut visited, nr * W + nc);
             q.push((nr * W + nc) as u16);
@@ -646,16 +754,16 @@ fn exits_independently_reachable(cand_row: usize, cand_col: usize, already_place
 
         let reachable = [
             (NORTH, er.wrapping_sub(1), ec),
-            (EAST,  er, ec + 1),
+            (EAST, er, ec + 1),
             (SOUTH, er + 1, ec),
-            (WEST,  er, ec.wrapping_sub(1)),
+            (WEST, er, ec.wrapping_sub(1)),
         ]
         .iter()
         .any(|&(dir_bit, nr, nc)| {
             nr < H && nc < W
                 && exit_walls & dir_bit != 0                // passage exists
                 && gen_is_visited(&visited, nr * W + nc)    // neighbour was reached
-                && !is_existing_exit(nr, nc)                // neighbour isn't another exit
+                && !is_existing_exit(nr, nc) // neighbour isn't another exit
         });
 
         if !reachable {
@@ -701,19 +809,23 @@ fn generate() {
 
         // North
         if row > 0 && !gen_is_visited(&gen_visited, (row - 1) * W + col) {
-            neighbours[n_count] = 0; n_count += 1;
+            neighbours[n_count] = 0;
+            n_count += 1;
         }
         // East
         if col + 1 < W && !gen_is_visited(&gen_visited, row * W + col + 1) {
-            neighbours[n_count] = 1; n_count += 1;
+            neighbours[n_count] = 1;
+            n_count += 1;
         }
         // South
         if row + 1 < H && !gen_is_visited(&gen_visited, (row + 1) * W + col) {
-            neighbours[n_count] = 2; n_count += 1;
+            neighbours[n_count] = 2;
+            n_count += 1;
         }
         // West
         if col > 0 && !gen_is_visited(&gen_visited, row * W + col - 1) {
-            neighbours[n_count] = 3; n_count += 1;
+            neighbours[n_count] = 3;
+            n_count += 1;
         }
 
         if n_count == 0 {
@@ -764,13 +876,13 @@ fn generate() {
 
         // Pick a random border segment and position.
         let side = (rng_next() % 4) as usize;
-        let pos  = (rng_next() as usize) % (if side < 2 { W } else { H });
+        let pos = (rng_next() as usize) % (if side < 2 { W } else { H });
 
         let (row, col) = match side {
-            0 => (0, pos),       // top row
-            1 => (H - 1, pos),   // bottom row
-            2 => (pos, 0),       // left col
-            _ => (pos, W - 1),   // right col
+            0 => (0, pos),     // top row
+            1 => (H - 1, pos), // bottom row
+            2 => (pos, 0),     // left col
+            _ => (pos, W - 1), // right col
         };
 
         let out_dir = match side {
@@ -831,7 +943,9 @@ fn find_start_pos() -> (usize, usize) {
         // Check minimum distance from every exit.
         let far_enough = EXITS.iter().all(|slot| {
             let ev = slot.load(Ordering::Relaxed);
-            if ev == 0xFFFF { return true; } // unused slot
+            if ev == 0xFFFF {
+                return true;
+            } // unused slot
             let er = (ev >> 8) as usize;
             let ec = (ev & 0xFF) as usize;
             let dist = row.abs_diff(er) + col.abs_diff(ec);
@@ -846,7 +960,8 @@ fn find_start_pos() -> (usize, usize) {
     (H / 2, W / 2)
 }
 
-// ── Drawing ───────────────────────────────────────────────────────────────────
+// ── Drawing
+// ───────────────────────────────────────────────────────────────────
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -940,36 +1055,52 @@ where
     // Draw exit gaps in the border — only if the player has visited the exit cell.
     for slot in &EXITS {
         let ev = slot.load(Ordering::Relaxed);
-        if ev == 0xFFFF { continue; }
+        if ev == 0xFFFF {
+            continue;
+        }
         let er = (ev >> 8) as usize;
         let ec = (ev & 0xFF) as usize;
 
         // Only reveal the exit once the player has stood on that border cell.
-        if !is_visited(er, ec) { continue; }
+        if !is_visited(er, ec) {
+            continue;
+        }
 
         let walls = WALLS[er * W + ec].load(Ordering::Relaxed);
         let px = BORDER + (ec as i32) * CELL;
         let py = BORDER + (er as i32) * CELL;
 
         if walls & NORTH != 0 && er == 0 {
-            Rectangle::new(Point::new(px + 1, 0), Size::new((CELL - 2) as u32, BORDER as u32))
-                .into_styled(PrimitiveStyle::with_fill(crate::RED))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(px + 1, 0),
+                Size::new((CELL - 2) as u32, BORDER as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(crate::RED))
+            .draw(display)?;
         }
         if walls & SOUTH != 0 && er == H - 1 {
-            Rectangle::new(Point::new(px + 1, 152 - BORDER), Size::new((CELL - 2) as u32, BORDER as u32))
-                .into_styled(PrimitiveStyle::with_fill(crate::RED))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(px + 1, 152 - BORDER),
+                Size::new((CELL - 2) as u32, BORDER as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(crate::RED))
+            .draw(display)?;
         }
         if walls & WEST != 0 && ec == 0 {
-            Rectangle::new(Point::new(0, py + 1), Size::new(BORDER as u32, (CELL - 2) as u32))
-                .into_styled(PrimitiveStyle::with_fill(crate::RED))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(0, py + 1),
+                Size::new(BORDER as u32, (CELL - 2) as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(crate::RED))
+            .draw(display)?;
         }
         if walls & EAST != 0 && ec == W - 1 {
-            Rectangle::new(Point::new(152 - BORDER, py + 1), Size::new(BORDER as u32, (CELL - 2) as u32))
-                .into_styled(PrimitiveStyle::with_fill(crate::RED))
-                .draw(display)?;
+            Rectangle::new(
+                Point::new(152 - BORDER, py + 1),
+                Size::new(BORDER as u32, (CELL - 2) as u32),
+            )
+            .into_styled(PrimitiveStyle::with_fill(crate::RED))
+            .draw(display)?;
         }
     }
 
@@ -979,12 +1110,9 @@ where
         let py = BORDER + (player_row as i32) * CELL;
         let ps = (CELL / 2) as u32; // 4px player square
         let offset = (CELL - ps as i32) / 2;
-        Rectangle::new(
-            Point::new(px + offset, py + offset),
-            Size::new(ps, ps),
-        )
-        .into_styled(PrimitiveStyle::with_fill(crate::RED))
-        .draw(display)?;
+        Rectangle::new(Point::new(px + offset, py + offset), Size::new(ps, ps))
+            .into_styled(PrimitiveStyle::with_fill(crate::RED))
+            .draw(display)?;
     }
 
     Ok(())
@@ -1003,13 +1131,11 @@ where
 
     let steps = STEPS.load(Ordering::Relaxed);
 
-    Text::with_text_style("You escaped!", Point::new(76, 55), font_big, centered)
-        .draw(display)?;
+    Text::with_text_style("You escaped!", Point::new(76, 55), font_big, centered).draw(display)?;
 
     let mut buf: heapless::String<32> = heapless::String::new();
     let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("Steps: {}", steps));
-    Text::with_text_style(buf.as_str(), Point::new(76, 80), font_big, centered)
-        .draw(display)?;
+    Text::with_text_style(buf.as_str(), Point::new(76, 80), font_big, centered).draw(display)?;
 
     Text::with_text_style("Press any button", Point::new(76, 110), font_big, centered)
         .draw(display)?;
@@ -1017,31 +1143,27 @@ where
     Ok(())
 }
 
-// ── Integration notes (for the developer) ─────────────────────────────────────
+// ── Integration notes (for the developer)
+// ─────────────────────────────────────
 //
-// 1.  src/game/mod.rs — add to the `pub mod` list:
-//         pub mod maze;
+// 1. src/game/mod.rs — add to the `pub mod` list: pub mod maze;
 //
 //     In `draw_screen_game`, add BEFORE the tictactoe check:
 //         if maze::is_active() {
 //             return maze::draw(display);
 //         }
 //
-// 2.  src/game/input.rs — add a new block BEFORE the lightsout block:
-//         if super::maze::is_active() {
-//             match btn {
-//                 ButtonId::Cancel  => super::maze::close(),
-//                 ButtonId::Up      => super::maze::move_up(),
-//                 ButtonId::Down    => super::maze::move_down(),
-//                 ButtonId::Left    => super::maze::move_left(),
-//                 ButtonId::Right   => super::maze::move_right(),
-//                 ButtonId::Fire | ButtonId::Execute => super::maze::activate(),
-//             }
-//             return true;
-//         }
+// 2. src/game/input.rs — add a new block BEFORE the lightsout block: if
+//    super::maze::is_active() { match btn { ButtonId::Cancel  =>
+//    super::maze::close(), ButtonId::Up      => super::maze::move_up(),
+//    ButtonId::Down    => super::maze::move_down(), ButtonId::Left    =>
+//    super::maze::move_left(), ButtonId::Right   => super::maze::move_right(),
+//    ButtonId::Fire | ButtonId::Execute => super::maze::activate(), } return
+//    true; }
 //
-// 3.  src/game/modal.rs — in `ModalKind::items()` for `Self::Play`:
-//         Self::Play => &["Play now", "Tic Tac Toe", "Lights Out", "Maze", "Play music", "Cancel"],
+// 3. src/game/modal.rs — in `ModalKind::items()` for `Self::Play`: Self::Play
+//    => &["Play now", "Tic Tac Toe", "Lights Out", "Maze", "Play music",
+//    "Cancel"],
 //
 //     In the `activate_item` match, add:
 //         "Maze" => { super::maze::open(); close(); }

@@ -458,40 +458,41 @@ async fn push_grp_txt(
         if grp.channel_hash == blink_hash
             && !crate::IGNORE_BLINK.load(core::sync::atomic::Ordering::Relaxed)
             && grp_txt::verify_mac(&blink_key, &grp).is_ok()
-                && let Ok(dec) = grp_txt::decrypt(&blink_key, &grp) {
-                    let text = core::str::from_utf8(&dec.text).unwrap_or("");
-                    // The command is the last char after "sender: " prefix.
-                    let cmd = text
-                        .rsplit(": ")
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .as_bytes()
-                        .first()
-                        .copied();
-                    match cmd {
-                        Some(b'r') | Some(b'R') => {
-                            crate::fw::led::set_led(
-                                &crate::fw::led::LED_RED,
-                                crate::fw::led::LedState::BlinkOnce,
-                            );
-                        }
-                        Some(b'g') | Some(b'G') => {
-                            crate::fw::led::set_led(
-                                &crate::fw::led::LED_GREEN,
-                                crate::fw::led::LedState::BlinkOnce,
-                            );
-                        }
-                        Some(b'b') | Some(b'B') => {
-                            crate::fw::led::set_led(
-                                &crate::fw::led::LED_BLUE,
-                                crate::fw::led::LedState::BlinkOnce,
-                            );
-                        }
-                        _ => {}
-                    }
-                    defmt::info!("blinkme: cmd={=u8:#04x}", cmd.unwrap_or(0));
+            && let Ok(dec) = grp_txt::decrypt(&blink_key, &grp)
+        {
+            let text = core::str::from_utf8(&dec.text).unwrap_or("");
+            // The command is the last char after "sender: " prefix.
+            let cmd = text
+                .rsplit(": ")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .as_bytes()
+                .first()
+                .copied();
+            match cmd {
+                Some(b'r') | Some(b'R') => {
+                    crate::fw::led::set_led(
+                        &crate::fw::led::LED_RED,
+                        crate::fw::led::LedState::BlinkOnce,
+                    );
                 }
+                Some(b'g') | Some(b'G') => {
+                    crate::fw::led::set_led(
+                        &crate::fw::led::LED_GREEN,
+                        crate::fw::led::LedState::BlinkOnce,
+                    );
+                }
+                Some(b'b') | Some(b'B') => {
+                    crate::fw::led::set_led(
+                        &crate::fw::led::LED_BLUE,
+                        crate::fw::led::LedState::BlinkOnce,
+                    );
+                }
+                _ => {}
+            }
+            defmt::info!("blinkme: cmd={=u8:#04x}", cmd.unwrap_or(0));
+        }
     }
 
     let ch = match channels.iter().find(|c| c.hash == grp.channel_hash) {
@@ -543,10 +544,12 @@ async fn push_grp_txt(
                 // Check if this is our own message echoed back by a repeater.
                 crate::CHANNEL_MSG_RING.lock(|cell| {
                     if let Some(entry) = cell.borrow_mut().find_by_hash_mut(content_hash)
-                        && entry.is_own && entry.repeat_count < 9 {
-                            entry.repeat_count += 1;
-                            crate::LORA_MSG_SIGNAL.signal(());
-                        }
+                        && entry.is_own
+                        && entry.repeat_count < 9
+                    {
+                        entry.repeat_count += 1;
+                        crate::LORA_MSG_SIGNAL.signal(());
+                    }
                 });
                 defmt::debug!(
                     "GrpTxt: duplicate suppressed (hash={=u32:#010x})",
@@ -924,13 +927,13 @@ async fn log_txt_msg(
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
     if let Some(hint_pk) = hint
         && hint_pk[0] == msg.src_hash
-            && let Some(c) = store.find_by_key(&hint_pk).await
-                && try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
-                    .await
-                    .is_ok()
-                {
-                    return;
-                }
+        && let Some(c) = store.find_by_key(&hint_pk).await
+        && try_handle_txt_msg(lora, &c, &msg, rssi, path_len_byte, path, identity, &store)
+            .await
+            .is_ok()
+    {
+        return;
+    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index. One
     // flash `get` for the bucket + up to `MAX_SLOTS_PER_BUCKET` slot reads.
@@ -2623,12 +2626,12 @@ async fn handle_response_recv(payload: &[u8], identity: &DeviceIdentity) {
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
     if let Some(hint_pk) = hint
         && hint_pk[0] == msg.src_hash
-            && try_dispatch_response_by_pk(&hint_pk, &msg, identity)
-                .await
-                .is_ok()
-            {
-                return;
-            }
+        && try_dispatch_response_by_pk(&hint_pk, &msg, identity)
+            .await
+            .is_ok()
+    {
+        return;
+    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
     // of a 300-slot linear scan. Covers unsolicited responses from peers we
@@ -2715,47 +2718,48 @@ async fn try_dispatch_response_by_pk(
     // Pending anonymous status ping (legacy ANON_REQ-with-empty-password path).
     let pending_status = crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.get());
     if let Some(pending_key) = pending_status
-        && pending_key == pub_key {
-            crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
+        && pending_key == pub_key
+    {
+        crate::PENDING_STATUS_PUBKEY.lock(|cell| cell.set(None));
 
-            // Status pong body: [uptime:4 LE][battery_mv:2 LE]
-            let uptime_secs = if dec.text.len() >= 4 {
-                u32::from_le_bytes([
-                    dec.text.first().copied().unwrap_or(0),
-                    dec.text.get(1).copied().unwrap_or(0),
-                    dec.text.get(2).copied().unwrap_or(0),
-                    dec.text.get(3).copied().unwrap_or(0),
-                ])
-            } else {
-                0
-            };
-            let battery_mv = if dec.text.len() >= 6 {
-                u16::from_le_bytes([
-                    dec.text.get(4).copied().unwrap_or(0),
-                    dec.text.get(5).copied().unwrap_or(0),
-                ])
-            } else {
-                0
-            };
+        // Status pong body: [uptime:4 LE][battery_mv:2 LE]
+        let uptime_secs = if dec.text.len() >= 4 {
+            u32::from_le_bytes([
+                dec.text.first().copied().unwrap_or(0),
+                dec.text.get(1).copied().unwrap_or(0),
+                dec.text.get(2).copied().unwrap_or(0),
+                dec.text.get(3).copied().unwrap_or(0),
+            ])
+        } else {
+            0
+        };
+        let battery_mv = if dec.text.len() >= 6 {
+            u16::from_le_bytes([
+                dec.text.get(4).copied().unwrap_or(0),
+                dec.text.get(5).copied().unwrap_or(0),
+            ])
+        } else {
+            0
+        };
 
-            defmt::info!(
-                "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
-                &sender_pk[..6],
-                resp_type,
-                uptime_secs,
-                battery_mv,
-            );
+        defmt::info!(
+            "Response recv: STATUS from {=[u8]:02x} resp_type={=u8} uptime={=u32}s batt={=u16}mV",
+            &sender_pk[..6],
+            resp_type,
+            uptime_secs,
+            battery_mv,
+        );
 
-            // Build a synthetic RepeaterStats blob with only the two fields the
-            // anonymous ping carries; the phone parses the same wire format as
-            // for the authenticated GET_STATUS reply.
-            let mut stats = [0u8; 56];
-            stats[0..2].copy_from_slice(&battery_mv.to_le_bytes()); // batt_milli_volts
-            stats[20..24].copy_from_slice(&uptime_secs.to_le_bytes()); // total_up_time_secs
+        // Build a synthetic RepeaterStats blob with only the two fields the
+        // anonymous ping carries; the phone parses the same wire format as
+        // for the authenticated GET_STATUS reply.
+        let mut stats = [0u8; 56];
+        stats[0..2].copy_from_slice(&battery_mv.to_le_bytes()); // batt_milli_volts
+        stats[20..24].copy_from_slice(&uptime_secs.to_le_bytes()); // total_up_time_secs
 
-            let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
-            return Ok(());
-        }
+        let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
+        return Ok(());
+    }
 
     // Pending admin status request (REQ_TYPE_GET_STATUS, tag-based match).
     // Plaintext layout: [ts:4 LE][RepeaterStats:56]. After txt_msg::decrypt
@@ -2764,35 +2768,36 @@ async fn try_dispatch_response_by_pk(
     // 56-byte blob and parse it manually.
     let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
     if let Some(admin_tag) = pending_admin_status
-        && dec.timestamp == admin_tag {
-            crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
+        && dec.timestamp == admin_tag
+    {
+        crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
 
-            let mut stats = [0u8; 56];
-            stats[0] = dec.flags;
-            let tail_len = dec.text.len().min(55);
-            stats[1..1 + tail_len].copy_from_slice(&dec.text[..tail_len]);
+        let mut stats = [0u8; 56];
+        stats[0] = dec.flags;
+        let tail_len = dec.text.len().min(55);
+        stats[1..1 + tail_len].copy_from_slice(&dec.text[..tail_len]);
 
-            let result = parse_repeater_stats(&stats, pub_key, dec.timestamp);
+        let result = parse_repeater_stats(&stats, pub_key, dec.timestamp);
 
-            defmt::info!(
-                "Response recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
-                &sender_pk[..6],
-                result.tag,
-                result.total_up_time_secs,
-                result.batt_milli_volts,
-                result.curr_tx_queue_len,
-                result.last_rssi,
-                result.last_snr_x4,
-                result.n_packets_recv,
-                result.n_packets_sent,
-            );
+        defmt::info!(
+            "Response recv: ADMIN_STATUS from {=[u8]:02x} tag={=u32:#010x} up={=u32}s batt={=u16}mV queue={=u16} rssi={=i16} snrX4={=i16} recv={=u32} sent={=u32}",
+            &sender_pk[..6],
+            result.tag,
+            result.total_up_time_secs,
+            result.batt_milli_volts,
+            result.curr_tx_queue_len,
+            result.last_rssi,
+            result.last_snr_x4,
+            result.n_packets_recv,
+            result.n_packets_sent,
+        );
 
-            let _ = crate::ADMIN_STATUS_RESULT_CHANNEL.try_send(result);
+        let _ = crate::ADMIN_STATUS_RESULT_CHANNEL.try_send(result);
 
-            // Forward the raw stats blob to BLE for PUSH_CODE_STATUS_RESPONSE.
-            let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
-            return Ok(());
-        }
+        // Forward the raw stats blob to BLE for PUSH_CODE_STATUS_RESPONSE.
+        let _ = crate::STATUS_RESULT_CHANNEL.try_send(crate::StatusResult { pub_key, stats });
+        return Ok(());
+    }
 
     // Pending generic binary request (CMD_SEND_BINARY_REQ /
     // PUSH_CODE_BINARY_RESPONSE). Response body starts at plaintext[4]; in our
@@ -2802,59 +2807,61 @@ async fn try_dispatch_response_by_pk(
     // in zero bytes aren't truncated.
     let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
     if let Some(binary_tag) = pending_binary
-        && dec.timestamp == binary_tag {
-            crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
+        && dec.timestamp == binary_tag
+    {
+        crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
 
-            // msg.data is the raw ciphertext; length is a multiple of AES block size.
-            // Body length = total plaintext - timestamp(4) = msg.data.len() - 4.
-            let body_len = msg.data.len().saturating_sub(4);
-            let mut body: heapless::Vec<u8, { crate::MAX_BINARY_RESP_BODY }> = heapless::Vec::new();
-            if body_len > 0 {
-                let _ = body.push(dec.flags);
-                let tail_need = body_len - 1;
-                let tail_copy = dec.text.len().min(tail_need);
-                let _ = body.extend_from_slice(&dec.text[..tail_copy]);
-                // Zero-pad the rest so the block-aligned length is preserved.
-                while body.len() < body_len.min(crate::MAX_BINARY_RESP_BODY) {
-                    let _ = body.push(0);
-                }
+        // msg.data is the raw ciphertext; length is a multiple of AES block size.
+        // Body length = total plaintext - timestamp(4) = msg.data.len() - 4.
+        let body_len = msg.data.len().saturating_sub(4);
+        let mut body: heapless::Vec<u8, { crate::MAX_BINARY_RESP_BODY }> = heapless::Vec::new();
+        if body_len > 0 {
+            let _ = body.push(dec.flags);
+            let tail_need = body_len - 1;
+            let tail_copy = dec.text.len().min(tail_need);
+            let _ = body.extend_from_slice(&dec.text[..tail_copy]);
+            // Zero-pad the rest so the block-aligned length is preserved.
+            while body.len() < body_len.min(crate::MAX_BINARY_RESP_BODY) {
+                let _ = body.push(0);
             }
-
-            defmt::info!(
-                "Response recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
-                &sender_pk[..6],
-                binary_tag,
-                body.len(),
-            );
-
-            let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
-                pub_key,
-                tag: binary_tag,
-                body,
-            });
-            return Ok(());
         }
+
+        defmt::info!(
+            "Response recv: BINARY from {=[u8]:02x} tag={=u32:#010x} body={=usize}B",
+            &sender_pk[..6],
+            binary_tag,
+            body.len(),
+        );
+
+        let _ = crate::BINARY_RESULT_CHANNEL.try_send(crate::BinaryResult {
+            pub_key,
+            tag: binary_tag,
+            body,
+        });
+        return Ok(());
+    }
 
     // Pending telemetry request (tag-based match).
     let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
     if let Some(telem_tag) = pending_telem
-        && dec.timestamp == telem_tag {
-            crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+        && dec.timestamp == telem_tag
+    {
+        crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
 
-            // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
-            let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
-            let _ = lpp.push(dec.flags);
-            let _ = lpp.extend_from_slice(&dec.text);
+        // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
+        let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
+        let _ = lpp.push(dec.flags);
+        let _ = lpp.extend_from_slice(&dec.text);
 
-            defmt::info!(
-                "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
-                &sender_pk[..6],
-                lpp.len(),
-            );
+        defmt::info!(
+            "Response recv: TELEM from {=[u8]:02x} lpp={=usize}B",
+            &sender_pk[..6],
+            lpp.len(),
+        );
 
-            let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult { pub_key, lpp });
-            return Ok(());
-        }
+        let _ = crate::TELEM_RESULT_CHANNEL.try_send(crate::TelemResult { pub_key, lpp });
+        return Ok(());
+    }
 
     // No pending status / admin-status / telemetry request — treat as a
     // login response. The MAC verified, so this contact is the right peer.
@@ -2949,12 +2956,12 @@ async fn handle_path_recv(payload: &[u8], rssi: i16, identity: &DeviceIdentity) 
     let hint = crate::LAST_REQ_TARGET.lock(|cell| cell.get());
     if let Some(hint_pk) = hint
         && hint_pk[0] == msg.src_hash
-            && try_dispatch_path_by_pk(&hint_pk, &msg, rssi, &store, identity)
-                .await
-                .is_ok()
-            {
-                return;
-            }
+        && try_dispatch_path_by_pk(&hint_pk, &msg, rssi, &store, identity)
+            .await
+            .is_ok()
+    {
+        return;
+    }
 
     // Fallback: look up candidate slots via the `hi` hash-byte index instead
     // of a 300-slot linear scan. Covers unsolicited Path returns from peers
@@ -3168,38 +3175,38 @@ async fn try_dispatch_path_by_pk(
         // Pending discovery request (tag = extra[0..4]).
         let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
         if let Some(disc_tag) = pending_disc
-            && dec.extra.len() >= 4 {
-                let resp_tag =
-                    u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-                if resp_tag == disc_tag {
-                    crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
+            && dec.extra.len() >= 4
+        {
+            let resp_tag =
+                u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
+            if resp_tag == disc_tag {
+                crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
 
-                    let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> =
-                        heapless::Vec::new();
-                    let _ = out_path.extend_from_slice(&dec.path);
-                    let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> =
-                        heapless::Vec::new();
+                let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> =
+                    heapless::Vec::new();
+                let _ = out_path.extend_from_slice(&dec.path);
+                let in_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
 
-                    let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
-                    pub_key.copy_from_slice(sender_pk);
+                let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
+                pub_key.copy_from_slice(sender_pk);
 
-                    defmt::info!(
-                        "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
-                        &sender_pk[..6],
-                        disc_tag,
-                        dec.path_len_byte,
-                    );
+                defmt::info!(
+                    "Path recv: DISCOVERY response from {=[u8]:02x} tag={=u32:#010x} out_path_len={=u8}",
+                    &sender_pk[..6],
+                    disc_tag,
+                    dec.path_len_byte,
+                );
 
-                    let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
-                        pub_key,
-                        out_path_len_byte: dec.path_len_byte,
-                        out_path,
-                        in_path_len_byte: 0xFF,
-                        in_path,
-                    });
-                    return Ok(());
-                }
+                let _ = crate::DISCOVERY_RESULT_CHANNEL.try_send(crate::DiscoveryResult {
+                    pub_key,
+                    out_path_len_byte: dec.path_len_byte,
+                    out_path,
+                    in_path_len_byte: 0xFF,
+                    in_path,
+                });
+                return Ok(());
             }
+        }
 
         // Default: treat as a login response.
         handle_path_login_response(&dec.extra, sender_pk);

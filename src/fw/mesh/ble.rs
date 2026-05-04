@@ -42,11 +42,12 @@ impl CryptoRng for TrngSeed {}
 use embassy_executor::Spawner;
 use embassy_nrf::mode::Blocking;
 use embassy_nrf::{Peri, bind_interrupts, peripherals, rng};
+use meshcore;
+use meshcore_companion as companion;
 use nrf_mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, SoftdeviceController};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
-use {meshcore, meshcore_companion as companion};
 
 use super::bonds::{BOND_CMD_CHANNEL, BondCmd, INITIAL_BONDS};
 use super::{channels, contacts, msg_queue, settings};
@@ -644,45 +645,44 @@ async fn nus_peripheral_loop<C>(
             // ---------------------------------------------------------------
             if let Some((ref mut slot, ref mut remaining, ref mut most_recent_lastmod)) =
                 contacts_stream
-                && outbox.is_empty() {
-                    if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
+                && outbox.is_empty()
+            {
+                if *slot >= contacts::MAX_CONTACTS || *remaining == 0 {
+                    outbox_push(
+                        outbox,
+                        &companion::Response::ContactEnd {
+                            lastmod: *most_recent_lastmod,
+                        },
+                    );
+                    defmt::debug!("companion: GET_CONTACTS complete");
+                    contacts_stream = None;
+                } else {
+                    let c = contacts::ContactStore::new().read_slot(*slot).await;
+                    *slot += 1;
+                    if let Some(c) = c {
+                        if c.lastmod > *most_recent_lastmod {
+                            *most_recent_lastmod = c.lastmod;
+                        }
+                        let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
                         outbox_push(
                             outbox,
-                            &companion::Response::ContactEnd {
-                                lastmod: *most_recent_lastmod,
-                            },
+                            &companion::Response::ContactDetails(companion::response::NewAdvert {
+                                pub_key: &c.pub_key,
+                                adv_type: c.node_type,
+                                flags: c.flags,
+                                out_path_len: c.out_path_len,
+                                out_path: &c.out_path,
+                                name: &c.name[..name_end],
+                                last_advert_timestamp: c.last_advert_ts,
+                                gps_lat: c.gps_lat,
+                                gps_lon: c.gps_lon,
+                                lastmod: c.lastmod,
+                            }),
                         );
-                        defmt::debug!("companion: GET_CONTACTS complete");
-                        contacts_stream = None;
-                    } else {
-                        let c = contacts::ContactStore::new().read_slot(*slot).await;
-                        *slot += 1;
-                        if let Some(c) = c {
-                            if c.lastmod > *most_recent_lastmod {
-                                *most_recent_lastmod = c.lastmod;
-                            }
-                            let name_end = c.name.iter().position(|&b| b == 0).unwrap_or(32);
-                            outbox_push(
-                                outbox,
-                                &companion::Response::ContactDetails(
-                                    companion::response::NewAdvert {
-                                        pub_key: &c.pub_key,
-                                        adv_type: c.node_type,
-                                        flags: c.flags,
-                                        out_path_len: c.out_path_len,
-                                        out_path: &c.out_path,
-                                        name: &c.name[..name_end],
-                                        last_advert_timestamp: c.last_advert_ts,
-                                        gps_lat: c.gps_lat,
-                                        gps_lon: c.gps_lon,
-                                        lastmod: c.lastmod,
-                                    },
-                                ),
-                            );
-                            *remaining = remaining.saturating_sub(1);
-                        }
+                        *remaining = remaining.saturating_sub(1);
                     }
                 }
+            }
 
             // ---------------------------------------------------------------
             // Wait for the next event.
@@ -1164,10 +1164,8 @@ async fn nus_peripheral_loop<C>(
 
                                 Ok(companion::cmd::Command::SetDeviceTime(ts)) => {
                                     crate::set_wall_clock(ts);
-                                    crate::BLE_TIME_LOCKED.store(
-                                        true,
-                                        core::sync::atomic::Ordering::Relaxed,
-                                    );
+                                    crate::BLE_TIME_LOCKED
+                                        .store(true, core::sync::atomic::Ordering::Relaxed);
                                     defmt::info!("companion: SET_DEVICE_TIME unix={=u32}", ts);
                                     companion::Response::Ok
                                 }

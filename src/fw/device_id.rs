@@ -23,9 +23,9 @@ pub fn get() -> [u8; 2] {
 
 /// Return the 6-byte BLE random static address derived from FICR DEVICEADDR.
 ///
-/// FICR DEVICEADDR\[0\] holds the lower 32 bits and DEVICEADDR\[1\] the upper 16
-/// bits of the factory-assigned 48-bit address.  The top 2 bits of byte 5 are
-/// forced to `0b11` as required for a random static address (BT Core Spec
+/// FICR DEVICEADDR\[0\] holds the lower 32 bits and DEVICEADDR\[1\] the upper
+/// 16 bits of the factory-assigned 48-bit address.  The top 2 bits of byte 5
+/// are forced to `0b11` as required for a random static address (BT Core Spec
 /// §1.3.2.1).
 pub fn get_ble_addr() -> [u8; 6] {
     let lo = embassy_nrf::pac::FICR.deviceaddr(0).read().to_le_bytes();

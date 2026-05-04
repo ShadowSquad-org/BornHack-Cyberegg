@@ -4,18 +4,18 @@
 //! Whoever is forced to take the last stick **loses**.
 //!
 //! Input is two-phase:
-//!   1. Row select — Up/Down moves a dithered cursor between rows;
-//!      Fire commits the row.
-//!   2. Count select — Left grows the take-count (rightmost sticks
-//!      turn dithered grey to mark them for removal); Right shrinks
-//!      it; Fire commits the move.
+//!   1. Row select — Up/Down moves a dithered cursor between rows; Fire commits
+//!      the row.
+//!   2. Count select — Left grows the take-count (rightmost sticks turn
+//!      dithered grey to mark them for removal); Right shrinks it; Fire commits
+//!      the move.
 //!
 //! Difficulty:
-//!   - **Normal**: 35 % chance per EI move of playing a random legal
-//!     move instead of the optimal Nim strategy.
-//!   - **Hard**: always optimal — XOR-strategy for standard Nim,
-//!     switching to "leave an odd count of 1-piles" once every pile
-//!     has ≤1 stick (misère endgame rule).
+//!   - **Normal**: 35 % chance per EI move of playing a random legal move
+//!     instead of the optimal Nim strategy.
+//!   - **Hard**: always optimal — XOR-strategy for standard Nim, switching to
+//!     "leave an odd count of 1-piles" once every pile has ≤1 stick (misère
+//!     endgame rule).
 //!
 //! State held in module-level atomics — no heap, no alloc.
 
@@ -27,8 +27,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
-use crate::ui;
-use crate::{BLACK, TriColor, WHITE};
+use crate::{BLACK, TriColor, WHITE, ui};
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +40,8 @@ const ROW_PITCH: i32 = 26;
 const TOP_Y: i32 = 12;
 const SCREEN_W: i32 = 152;
 
-// ── Game state (atomics) ──────────────────────────────────────────────────────
+// ── Game state (atomics)
+// ──────────────────────────────────────────────────────
 
 const PHASE_ROW_SELECT: u8 = 0;
 const PHASE_COUNT_SELECT: u8 = 1;
@@ -67,7 +67,8 @@ static DIFFICULTY: AtomicU8 = AtomicU8::new(DIFFICULTY_HARD);
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
 static MENU_POS: AtomicU8 = AtomicU8::new(MENU_HARD);
 
-// ── Public API ────────────────────────────────────────────────────────────────
+// ── Public API
+// ────────────────────────────────────────────────────────────────
 
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
@@ -226,7 +227,8 @@ pub fn activate() {
     }
 }
 
-// ── EI turn ───────────────────────────────────────────────────────────────────
+// ── EI turn
+// ───────────────────────────────────────────────────────────────────
 
 fn ei_turn() {
     let mut piles = read_rows();
@@ -269,11 +271,10 @@ fn ei_move(piles: &[u8; ROW_COUNT]) -> (usize, u8) {
 /// exists (all piles empty — game already over).
 ///
 /// Strategy:
-/// * If at least one pile has ≥2 sticks: play standard Nim — XOR all
-///   pile sizes; if non-zero, reduce a pile so the XOR becomes 0.
-///   Special case: when exactly one pile has ≥2 sticks, switch to the
-///   misère endgame plan and leave an odd count of 1-piles for the
-///   opponent.
+/// * If at least one pile has ≥2 sticks: play standard Nim — XOR all pile
+///   sizes; if non-zero, reduce a pile so the XOR becomes 0. Special case: when
+///   exactly one pile has ≥2 sticks, switch to the misère endgame plan and
+///   leave an odd count of 1-piles for the opponent.
 /// * If every pile has ≤1 stick: leave an odd count of 1-piles.
 fn misere_optimal(piles: &[u8; ROW_COUNT]) -> Option<(usize, u8)> {
     let big_piles = piles.iter().filter(|&&p| p >= 2).count();
@@ -347,7 +348,8 @@ fn random_move(piles: &[u8; ROW_COUNT]) -> (usize, u8) {
     (0, 0)
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers
+// ───────────────────────────────────────────────────────────────────
 
 fn read_rows() -> [u8; ROW_COUNT] {
     let mut out = [0u8; ROW_COUNT];
@@ -376,7 +378,8 @@ fn entropy_byte() -> u8 {
     }
 }
 
-// ── Drawing ───────────────────────────────────────────────────────────────────
+// ── Drawing
+// ───────────────────────────────────────────────────────────────────
 
 pub fn draw<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -418,9 +421,12 @@ where
             if to_remove {
                 draw_dithered_stick(display, x, row_y)?;
             } else {
-                Rectangle::new(Point::new(x, row_y), Size::new(STICK_W as u32, STICK_H as u32))
-                    .into_styled(PrimitiveStyle::with_fill(BLACK))
-                    .draw(display)?;
+                Rectangle::new(
+                    Point::new(x, row_y),
+                    Size::new(STICK_W as u32, STICK_H as u32),
+                )
+                .into_styled(PrimitiveStyle::with_fill(BLACK))
+                .draw(display)?;
             }
         }
     }
@@ -462,13 +468,7 @@ where
 
 /// Dithered B/W rectangle ring around a row to mark the cursor.  Pure
 /// B/W so it survives the fast LUT refresh.
-fn draw_row_highlight<D>(
-    display: &mut D,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> Result<(), D::Error>
+fn draw_row_highlight<D>(display: &mut D, x: i32, y: i32, w: i32, h: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {

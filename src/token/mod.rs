@@ -14,22 +14,20 @@
 //! There are no button interactions on this screen; it is navigated to/from
 //! using the standard left/right screen-switching buttons.
 
+use core::cell::RefCell;
+use core::sync::atomic::AtomicU32;
 #[cfg(feature = "embassy-base")]
 use core::sync::atomic::Ordering;
-use core::sync::atomic::AtomicU32;
-
-use embedded_graphics::prelude::*;
-use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
-
-use crate::{TriColor, draw_frame};
-use core::cell::RefCell;
 
 // ---------------------------------------------------------------------------
 // Mutex — embassy vs simulator (mirrors NODE_NAME in lib.rs)
 // ---------------------------------------------------------------------------
-
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
+use embedded_graphics::prelude::*;
+use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+
+use crate::{TriColor, draw_frame};
 
 /// Maximum byte length of the stored token string.
 pub const TOKEN_MAX_LEN: usize = 64;
@@ -176,8 +174,13 @@ where
     let line2_full = &s[line1_end..];
 
     if line2_full.is_empty() {
-        Text::with_text_style(line1, Point::new(76, 84), crate::ui::TEXT_BOLD_BLACK, centered)
-            .draw(display)?;
+        Text::with_text_style(
+            line1,
+            Point::new(76, 84),
+            crate::ui::TEXT_BOLD_BLACK,
+            centered,
+        )
+        .draw(display)?;
     } else {
         let line2_end = line2_full
             .char_indices()
@@ -185,10 +188,20 @@ where
             .map(|(i, _)| i)
             .unwrap_or(line2_full.len());
         let line2 = &line2_full[..line2_end];
-        Text::with_text_style(line1, Point::new(76, 76), crate::ui::TEXT_BOLD_BLACK, centered)
-            .draw(display)?;
-        Text::with_text_style(line2, Point::new(76, 92), crate::ui::TEXT_BOLD_BLACK, centered)
-            .draw(display)?;
+        Text::with_text_style(
+            line1,
+            Point::new(76, 76),
+            crate::ui::TEXT_BOLD_BLACK,
+            centered,
+        )
+        .draw(display)?;
+        Text::with_text_style(
+            line2,
+            Point::new(76, 92),
+            crate::ui::TEXT_BOLD_BLACK,
+            centered,
+        )
+        .draw(display)?;
     }
 
     Ok(())
