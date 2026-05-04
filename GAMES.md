@@ -190,8 +190,8 @@ turn and become **wrecks** if they get trapped — wrecks have their
 own merge series.
 
 ### Tile lineup
-1. Grass → 2. Bush → 3. Tree → 4. Small tent → 5. Big tent →
-6. Pavilion → 7. Festival camp → 8. BornHack → 9. CyberÆgg.
+(1) Grass → (2) Bush → (3) Tree → (4) Small tent → (5) Big tent →
+(6) Village → (7) Festival camp → (8) BornHack → (9) CyberÆgg.
 
 Vehicle series (when cars get trapped):
 Wreck → Junkyard → Scrapheap.
