@@ -268,6 +268,18 @@ pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
 /// Toggled from the Bornagotchi → Mute menu entry.
 pub static GAME_MUTE: AtomicBool = AtomicBool::new(false);
 
+/// When true, `bin/embassy::main` plays the Startup melody once after
+/// boot init finishes.  Default `true` — the badge boots quietly only
+/// if the user has explicitly turned it off in Settings → Boot chime.
+/// Loaded from kv at boot; menu toggle is wired through
+/// `BOOT_CHIME_CHANGED_SIGNAL` and `fw::config::boot_chime_persister_task`.
+pub static BOOT_CHIME_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Fired by the Settings menu when `BOOT_CHIME_ENABLED` is toggled,
+/// waking the persister task to write the new value to flash.
+#[cfg(feature = "embassy-base")]
+pub static BOOT_CHIME_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// When true, the LoRa radio is put into standby and the meshcore task
 /// pauses all RX/TX until re-enabled.
 pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);

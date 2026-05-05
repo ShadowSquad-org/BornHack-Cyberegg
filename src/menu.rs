@@ -858,6 +858,21 @@ fn action_game_mute_toggle() {
     crate::GAME_MUTE.store(!cur, Ordering::Relaxed);
 }
 
+fn label_boot_chime() -> &'static str {
+    if crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed) {
+        "Boot chime: On"
+    } else {
+        "Boot chime: Off"
+    }
+}
+
+fn action_boot_chime_toggle() {
+    let cur = crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed);
+    crate::BOOT_CHIME_ENABLED.store(!cur, Ordering::Relaxed);
+    #[cfg(feature = "embassy-base")]
+    crate::BOOT_CHIME_CHANGED_SIGNAL.signal(());
+}
+
 fn label_ignore_blink() -> &'static str {
     if crate::IGNORE_BLINK.load(Ordering::Relaxed) {
         "Ignore Blink: ON"
@@ -1466,9 +1481,9 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
 ];
 
 #[cfg(feature = "watch")]
-const SETTINGS_ITEMS_LEN: usize = 10;
+const SETTINGS_ITEMS_LEN: usize = 11;
 #[cfg(not(feature = "watch"))]
-const SETTINGS_ITEMS_LEN: usize = 8;
+const SETTINGS_ITEMS_LEN: usize = 9;
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1504,6 +1519,10 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "Events",
         kind: MenuItemKind::Submenu(&EVENTS_ITEMS),
+    },
+    MenuItem {
+        label: label_boot_chime,
+        kind: MenuItemKind::Action(action_boot_chime_toggle),
     },
     MenuItem {
         label: || "",

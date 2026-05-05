@@ -118,6 +118,16 @@ async fn main(spawner: Spawner) {
     // task reads or writes flash-backed state.
     kv::init().await;
 
+    // ── Device-config flags ──────────────────────────────────────────────
+    // Load any persisted user-toggled config (currently just the boot
+    // chime) into its in-RAM atomic, then spawn the persister so menu
+    // toggles get written back to flash.
+    bornhack_aegg::BOOT_CHIME_ENABLED.store(
+        bornhack_aegg::fw::config::get_boot_chime().await,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+    spawner.must_spawn(bornhack_aegg::fw::config::boot_chime_persister_task());
+
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
@@ -333,13 +343,16 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
 
     // ── Boot-complete chime ───────────────────────────────────────────────
-    // Plays unconditionally on every boot (first boot included) — the
-    // user-audible signal that init has finished and the badge is
-    // ready.  Fires before the first-boot sponsor slideshow so the
-    // sound and the slideshow don't compete for attention, and so the
-    // chime always plays at the same wall-clock moment in the boot
-    // sequence regardless of whether the slideshow is going to run.
-    bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
+    // Plays once on every boot (first boot included) when the user
+    // hasn't disabled it via Settings → Boot chime.  The audible
+    // signal that init has finished and the badge is ready.  Fires
+    // before the first-boot sponsor slideshow so the sound and the
+    // slideshow don't compete for attention, and so the chime always
+    // plays at the same wall-clock moment in the boot sequence
+    // regardless of whether the slideshow is going to run.
+    if bornhack_aegg::BOOT_CHIME_ENABLED.load(core::sync::atomic::Ordering::Relaxed) {
+        bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
+    }
 
     // ── First-boot sponsor slideshow ────────────────────────────────────
     if !bornhack_aegg::fw::sponsors::already_shown().await {
