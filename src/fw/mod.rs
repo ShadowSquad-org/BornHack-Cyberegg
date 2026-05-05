@@ -2,7 +2,6 @@ pub mod battery;
 pub mod board;
 pub mod button;
 pub mod buzzer;
-pub mod config;
 pub mod device_id;
 pub mod epd;
 pub mod fat12;

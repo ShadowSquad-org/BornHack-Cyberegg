@@ -869,8 +869,8 @@ fn label_boot_chime() -> &'static str {
 fn action_boot_chime_toggle() {
     let cur = crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed);
     crate::BOOT_CHIME_ENABLED.store(!cur, Ordering::Relaxed);
-    #[cfg(feature = "embassy-base")]
-    crate::BOOT_CHIME_CHANGED_SIGNAL.signal(());
+    #[cfg(all(feature = "embassy-base", feature = "watch"))]
+    crate::watch::SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
 fn label_ignore_blink() -> &'static str {

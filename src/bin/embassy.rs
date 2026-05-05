@@ -118,16 +118,6 @@ async fn main(spawner: Spawner) {
     // task reads or writes flash-backed state.
     kv::init().await;
 
-    // ── Device-config flags ──────────────────────────────────────────────
-    // Load any persisted user-toggled config (currently just the boot
-    // chime) into its in-RAM atomic, then spawn the persister so menu
-    // toggles get written back to flash.
-    bornhack_aegg::BOOT_CHIME_ENABLED.store(
-        bornhack_aegg::fw::config::get_boot_chime().await,
-        core::sync::atomic::Ordering::Relaxed,
-    );
-    spawner.must_spawn(bornhack_aegg::fw::config::boot_chime_persister_task());
-
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
