@@ -714,6 +714,19 @@ async fn log_advert(
     // `timestamp=0` until their wall clock is set).
     super::contacts_screen::note_observed(&a.pub_key);
 
+    // Record the full advert metadata so the Contacts screen can show
+    // discovery rows (heard but not yet in the persistent store) and
+    // the popup's "Add" action can promote them later.  Always called
+    // — the screen's cache rebuild dedupes against `ContactStore`.
+    super::discovery::note(
+        &a.pub_key,
+        name_str.as_str(),
+        a.role.to_u8(),
+        lat,
+        lon,
+        a.timestamp,
+    );
+
     // Wake the Contacts-screen cache so it can rebuild from the
     // persisted contact store now that this advert has landed in it.
     crate::ADVERT_SIGNAL.signal(());

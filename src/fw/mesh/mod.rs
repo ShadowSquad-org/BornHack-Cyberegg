@@ -13,6 +13,7 @@ pub mod channels;
 pub mod contacts;
 pub mod contacts_screen;
 pub mod device_identity;
+pub mod discovery;
 pub mod meshcore;
 pub mod msg_queue;
 pub mod persister;

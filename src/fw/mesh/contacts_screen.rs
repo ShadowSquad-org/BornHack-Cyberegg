@@ -83,6 +83,11 @@ pub struct ContactRow {
     /// This is the source of truth for the "Last:" column and the live
     /// dot — local time base, works regardless of inter-badge clock sync.
     pub observed_at_secs: Option<u64>,
+    /// `true` when this row is backed by a persistent `ContactStore`
+    /// slot.  `false` when it's a discovery-only entry (heard via advert
+    /// but not yet promoted).  Drives the popup item set: saved rows
+    /// get Save / Forget; discovery rows get Add.
+    pub is_saved: bool,
 }
 
 impl ContactRow {
@@ -102,6 +107,25 @@ impl ContactRow {
             gps_lat: c.gps_lat,
             gps_lon: c.gps_lon,
             observed_at_secs,
+            is_saved: true,
+        }
+    }
+
+    /// Build a row from a discovery-cache entry — these aren't in the
+    /// persistent store yet, so `flags = 0` (no favorite) and
+    /// `out_path_len = OUT_PATH_UNKNOWN` (no known route).
+    fn from_discovery(e: &super::discovery::DiscoveryEntry) -> Self {
+        Self {
+            pub_key: e.pub_key,
+            name: e.name.clone(),
+            node_type: e.node_type,
+            flags: 0,
+            last_advert_ts: e.advert_ts,
+            out_path_len: OUT_PATH_UNKNOWN,
+            gps_lat: e.gps_lat,
+            gps_lon: e.gps_lon,
+            observed_at_secs: Some(e.observed_at_secs),
+            is_saved: false,
         }
     }
 
@@ -270,6 +294,11 @@ pub enum Mutation {
     SetFavorite([u8; 32], bool),
     /// Remove the contact slot for `pub_key`.
     Forget([u8; 32]),
+    /// Promote a discovery-cache entry into a persistent contact slot.
+    /// The persister looks up the entry by `pub_key` and calls
+    /// `add_or_update`; if the discovery entry has been evicted by the
+    /// time the persister runs, the request is silently dropped.
+    Add([u8; 32]),
 }
 
 pub static MUTATION_QUEUE: embassy_sync::channel::Channel<CriticalSectionRawMutex, Mutation, 4> =
@@ -288,6 +317,19 @@ pub async fn mutation_persister_task() {
             }
             Mutation::Forget(pk) => {
                 let _ = store.delete(&pk).await;
+            }
+            Mutation::Add(pk) => {
+                if let Some(d) = super::discovery::get(&pk) {
+                    let contact = super::contacts::Contact::from_advert(
+                        d.pub_key,
+                        d.name.as_bytes(),
+                        d.node_type,
+                        d.advert_ts,
+                        d.gps_lat,
+                        d.gps_lon,
+                    );
+                    let _ = store.add_or_update(&contact).await;
+                }
             }
         }
         // Wake the cache refresh so the UI reflects the change.
@@ -318,6 +360,20 @@ fn cached_apply_forget(pub_key: &[u8; 32]) {
         let mut list = c.borrow_mut();
         if let Some(pos) = list.iter().position(|e| &e.pub_key == pub_key) {
             list.remove(pos);
+        }
+    });
+}
+
+/// Mark the cached row as saved so the popup item set switches from
+/// discovery (Add primary) to saved (Save/Forget) for any further
+/// interaction before the persister task confirms the write.
+fn cached_apply_add(pub_key: &[u8; 32]) {
+    CACHED_CONTACTS.lock(|c| {
+        for e in c.borrow_mut().iter_mut() {
+            if &e.pub_key == pub_key {
+                e.is_saved = true;
+                break;
+            }
         }
     });
 }
@@ -447,6 +503,8 @@ pub async fn refresh_cache() {
     let store = ContactStore::new();
     let mut top: heapless::Vec<ContactRow, CACHE_CAP> = heapless::Vec::new();
 
+    // Pass 1: persistent ContactStore.  These are the authoritative
+    // saved rows; insert into the sorted-by-recency window.
     for idx in 0..MAX_CONTACTS {
         let Some(c) = store.read_slot(idx).await else {
             continue;
@@ -456,25 +514,20 @@ pub async fn refresh_cache() {
         }
         let observed = lookup_observation(&c.pub_key);
         let e = ContactRow::from_contact(&c, observed);
-
-        // Sort key: prefer our local observation time (truthful — we know
-        // exactly when *we* heard them).  For contacts we haven't heard
-        // this session, fall back to their `last_advert_ts` clamped to
-        // u64 so it sorts below anything observed locally.  Heard-this-
-        // session entries always rank above heard-only-from-flash.
-        let e_key = sort_key(&e);
-        let pos = top
-            .iter()
-            .position(|x| sort_key(x) < e_key)
-            .unwrap_or(top.len());
-        if pos >= CACHE_CAP {
-            continue;
-        }
-        if top.len() == CACHE_CAP {
-            let _ = top.pop();
-        }
-        let _ = top.insert(pos, e);
+        insert_sorted(&mut top, e);
     }
+
+    // Pass 2: discovery-cache entries that aren't already in `top`
+    // (i.e. not persisted).  Merge them in as `is_saved=false`.  The
+    // popup's Add action promotes them; once promoted, the next rebuild
+    // sees them via Pass 1 and the duplicate filter here drops them.
+    super::discovery::for_each(|d| {
+        let already = top.iter().any(|x| x.pub_key == d.pub_key);
+        if already {
+            return;
+        }
+        insert_sorted(&mut top, ContactRow::from_discovery(d));
+    });
 
     CACHED_CONTACTS.lock(|cell| {
         let mut list = cell.borrow_mut();
@@ -483,6 +536,24 @@ pub async fn refresh_cache() {
             let _ = list.push(e.clone());
         }
     });
+}
+
+/// Insert `e` into a sorted-desc-by-recency cache, dropping the worst
+/// entry when the cache is full.  Insertion-sort: cheap because
+/// `CACHE_CAP` is tiny.
+fn insert_sorted(top: &mut heapless::Vec<ContactRow, CACHE_CAP>, e: ContactRow) {
+    let e_key = sort_key(&e);
+    let pos = top
+        .iter()
+        .position(|x| sort_key(x) < e_key)
+        .unwrap_or(top.len());
+    if pos >= CACHE_CAP {
+        return;
+    }
+    if top.len() == CACHE_CAP {
+        let _ = top.pop();
+    }
+    let _ = top.insert(pos, e);
 }
 
 /// Sort key for the discovery list.  Entries observed this session win
@@ -570,11 +641,23 @@ fn role_glyph(node_type: u8) -> Option<&'static str> {
     }
 }
 
-/// Role-aware popup item set.  Index 0 is the primary action and is
-/// preselected on entry.  Save/Forget appear for every role since the
-/// curate semantics apply equally — only the primary differs.
-fn popup_items(node_type: u8, is_favorite: bool) -> heapless::Vec<&'static str, 6> {
+/// Role- and saved-state-aware popup item set.  Index 0 is the primary
+/// action and is preselected.  Discovery rows (`is_saved == false`)
+/// expose **Add** as the primary action; saved rows expose Save / Forget
+/// curation.
+fn popup_items(node_type: u8, is_saved: bool, is_favorite: bool) -> heapless::Vec<&'static str, 6> {
     let mut v: heapless::Vec<&'static str, 6> = heapless::Vec::new();
+    if !is_saved {
+        // Heard-but-not-saved.  Add is primary; PM still works (we
+        // have the pub_key) for chat nodes even before Adding.
+        let _ = v.push("Add");
+        if node_type == 1 {
+            let _ = v.push("PM");
+        }
+        let _ = v.push("Info");
+        let _ = v.push("< Cancel");
+        return v;
+    }
     let fav_label: &'static str = if is_favorite { "Unsave" } else { "Save" };
     match node_type {
         1 => {
@@ -672,10 +755,10 @@ pub fn dispatch(btn: ButtonId) -> bool {
             },
 
             Mode::Popup { target, pos } => {
-                let entry_meta =
-                    filtered_get(filter, target).map(|e| (e.pub_key, e.node_type, e.is_favorite()));
+                let entry_meta = filtered_get(filter, target)
+                    .map(|e| (e.pub_key, e.node_type, e.is_saved, e.is_favorite()));
                 let items = entry_meta
-                    .map(|(_, nt, fav)| popup_items(nt, fav))
+                    .map(|(_, nt, saved, fav)| popup_items(nt, saved, fav))
                     .unwrap_or_default();
                 let n = items.len() as u8;
                 match btn {
@@ -730,6 +813,16 @@ pub fn dispatch(btn: ButtonId) -> bool {
                                 if b.scroll > b.cursor {
                                     b.scroll = b.cursor;
                                 }
+                                b.mode = Mode::List;
+                            }
+                            ("Add", Some((pk, ..))) => {
+                                // Promote a discovery row to a saved
+                                // contact.  Flip is_saved in the cache
+                                // immediately so the row's popup item
+                                // set updates next time, then queue the
+                                // persistent write.
+                                cached_apply_add(&pk);
+                                let _ = MUTATION_QUEUE.try_send(Mutation::Add(pk));
                                 b.mode = Mode::List;
                             }
                             _ => {
@@ -920,35 +1013,37 @@ where
                 name_x = 22;
             }
 
-            // Name (with optional ★ prefix for favorites).
+            // Name with optional prefix glyph.  Mutually exclusive:
+            //  * saved + favorite          → "*" prefix
+            //  + unsaved (discovery row)   → "+" prefix (Add to use)
+            //  (none)                       → just the name
             let name = entry.name.as_str();
             let display_name = if name.is_empty() { "(unknown)" } else { name };
-            // Truncate to fit ~14 chars at 7 px/char before the right column.
             let max_chars = 14usize;
             let truncated = if display_name.len() > max_chars {
                 &display_name[..max_chars]
             } else {
                 display_name
             };
-            if entry.is_favorite() {
-                Text::with_text_style("*", Point::new(name_x, row_mid + 5), txt_style, bottom)
-                    .draw(display)?;
-                Text::with_text_style(
-                    truncated,
-                    Point::new(name_x + 8, row_mid + 5),
-                    txt_style,
-                    bottom,
-                )
-                .draw(display)?;
+            let prefix: Option<&'static str> = if entry.is_favorite() {
+                Some("*")
+            } else if !entry.is_saved {
+                Some("+")
             } else {
-                Text::with_text_style(
-                    truncated,
-                    Point::new(name_x, row_mid + 5),
-                    txt_style,
-                    bottom,
-                )
-                .draw(display)?;
+                None
+            };
+            let name_offset = if prefix.is_some() { 8 } else { 0 };
+            if let Some(g) = prefix {
+                Text::with_text_style(g, Point::new(name_x, row_mid + 5), txt_style, bottom)
+                    .draw(display)?;
             }
+            Text::with_text_style(
+                truncated,
+                Point::new(name_x + name_offset, row_mid + 5),
+                txt_style,
+                bottom,
+            )
+            .draw(display)?;
 
             // Last-seen, right-aligned.
             let rel = fmt_relative(entry.observed_at_secs);
@@ -973,7 +1068,10 @@ where
             let n = entry.name.as_str();
             let n = if n.len() > 14 { &n[..14] } else { n };
             let _ = t.push_str(if n.is_empty() { "(unknown)" } else { n });
-            (t, popup_items(entry.node_type, entry.is_favorite()))
+            (
+                t,
+                popup_items(entry.node_type, entry.is_saved, entry.is_favorite()),
+            )
         }
         None => (
             heapless::String::<16>::new(),
