@@ -708,8 +708,14 @@ async fn log_advert(
 
     let (lat, lon) = a.position.unwrap_or((0, 0));
 
-    // Wake the People-screen cache so it can rebuild from the persisted
-    // contact store now that this advert has landed in it.
+    // Stamp the local-observation table so the Contacts screen can
+    // render an accurate "Last:" relative time and live-dot — the
+    // advert's own timestamp is unreliable (most badges advertise
+    // `timestamp=0` until their wall clock is set).
+    super::contacts_screen::note_observed(&a.pub_key);
+
+    // Wake the Contacts-screen cache so it can rebuild from the
+    // persisted contact store now that this advert has landed in it.
     crate::ADVERT_SIGNAL.signal(());
 
     let mut ble_name: heapless::Vec<u8, 32> = heapless::Vec::new();

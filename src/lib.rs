@@ -555,7 +555,7 @@ where
         #[cfg(not(feature = "mesh"))]
         SCREEN_CHANNEL => draw_screen_lora(display, bat_prc),
         #[cfg(feature = "mesh")]
-        SCREEN_ADVERT => fw::mesh::people::draw(display, bat_prc),
+        SCREEN_ADVERT => fw::mesh::contacts_screen::draw(display, bat_prc),
         SCREEN_TOKEN => token::draw(display),
         #[cfg(feature = "watch")]
         SCREEN_WATCH => watch::draw(display),

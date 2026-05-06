@@ -1,8 +1,8 @@
-# People screen — meshcore on-badge UI redesign
+# Contacts screen — meshcore on-badge UI redesign
 
 The badge is more than a passive Bluetooth companion — it has a working chat
 UI on its own.  This doc captures the design we agreed on for restructuring
-the meshcore-related screens around a single **People** view that surfaces
+the meshcore-related screens around a single **Contacts** view that surfaces
 contacts and adverts together, with a popup menu for per-contact actions.
 
 It's a redesign of the existing `SCREEN_ADVERT` (which today shows only the
@@ -23,14 +23,14 @@ It's a redesign of the existing `SCREEN_ADVERT` (which today shows only the
 
 ## Architecture
 
-`SCREEN_ADVERT` is replaced by a **People** screen.  The advert *is* a
+`SCREEN_ADVERT` is replaced by a **Contacts** screen.  The advert *is* a
 contact event: every received advert updates `contacts.rs`'s slot for that
-`pub_key` (creating it on first sight), and the People screen renders the
+`pub_key` (creating it on first sight), and the Contacts screen renders the
 contact store sorted by `last_advert_ts` descending.
 
 ```
 ┌────────────────────────────────────────────────┐
-│ People                                  [85%]  │  ← header (existing pattern)
+│ Contacts                                [85%]  │  ← header (existing pattern)
 ├────────────────────────────────────────────────┤
 │ ●  ☰  alice                              3m    │
 │    ☰  bob                                12m   │
@@ -70,7 +70,7 @@ up at a 7-day camp:
 ### Passive-screen indicator
 
 Add a small `+N` glyph to the passive (main) screen header showing the
-count of new contacts heard since the user last opened the People screen.
+count of new contacts heard since the user last opened the Contacts screen.
 No LED chirp by default — easy to get spammy at a busy venue — but a
 Settings toggle can turn the chirp on for those who want it.
 
@@ -141,15 +141,15 @@ Reachable from the popup's `Info` item.  Per-contact info screen.
 |---------------|----------------------------------------------|
 | Fire / Execute| Open PM thread (chat nodes only)             |
 | Left / Right  | Prev / next contact (now safe — sub-mode)    |
-| Cancel        | Back to People list                          |
+| Cancel        | Back to Contacts list                          |
 
-All paths return to the People list on Cancel — predictable.
+All paths return to the Contacts list on Cancel — predictable.
 
 ## Implementation notes
 
 - The contacts store (`fw/mesh/contacts.rs`) already holds `name`, `pub_key`,
   `node_type`, `out_path_len`, `last_advert_ts`, `flags` (`FLAG_FAVORITE`),
-  and persists across reboots.  The People screen is a new **view** over
+  and persists across reboots.  The Contacts screen is a new **view** over
   that data — no schema change required.
 - The existing `LAST_ADVERT` global / `SCREEN_ADVERT` rendering can be
   removed once the new screen takes over.

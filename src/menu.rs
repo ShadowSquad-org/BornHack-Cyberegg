@@ -521,12 +521,20 @@ impl<const M: usize> DisplayState<M> {
             }
         }
 
-        // People (Advert) screen intercepts list/popup/detail input.  Returns
-        // true when Cancel/Left/Right should propagate to the screen-swipe
-        // carousel; everything else stays inside the screen.
+        // Contacts (Advert) screen intercepts list/popup/detail input.
+        // Returns true when Cancel/Left/Right should propagate to the
+        // screen-swipe carousel; everything else stays inside the screen.
+        // The popup's PM/Info actions can request a screen switch — they
+        // can't call back into `set_active_screen` directly because we're
+        // already inside `DISPLAY_STATE`'s borrow_mut, so they leave the
+        // request in `take_pending_nav()` for us to drain here.
         #[cfg(feature = "mesh")]
         if self.active_screen == crate::SCREEN_ADVERT {
-            let leave = crate::fw::mesh::people::dispatch(btn);
+            let leave = crate::fw::mesh::contacts_screen::dispatch(btn);
+            if let Some(target) = crate::fw::mesh::contacts_screen::take_pending_nav() {
+                self.set_active_screen(target);
+                return;
+            }
             if leave {
                 // Fall through to the screen-swipe / cancel handler.
             } else {

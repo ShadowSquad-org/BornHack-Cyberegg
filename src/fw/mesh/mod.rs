@@ -11,10 +11,10 @@ pub mod bonds;
 pub mod channel_browser;
 pub mod channels;
 pub mod contacts;
+pub mod contacts_screen;
 pub mod device_identity;
 pub mod meshcore;
 pub mod msg_queue;
-pub mod people;
 pub mod persister;
 pub mod repeater;
 pub mod repeater_time;
@@ -138,8 +138,8 @@ pub static CACHED_CHANNELS: Mutex<
 > = Mutex::new(RefCell::new(heapless::Vec::new()));
 
 /// Fired whenever a fresh advert lands in the persistent contact store.
-/// The People screen's cache-refresh task waits on this to rebuild its
-/// in-RAM display cache.
+/// The Contacts screen's cache-refresh task waits on this to rebuild
+/// its in-RAM display cache.
 pub static ADVERT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Advert data forwarded to the BLE task for push to the companion app (0x8A).
