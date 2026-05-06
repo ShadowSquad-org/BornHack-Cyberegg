@@ -268,6 +268,14 @@ pub static IGNORE_BLINK: AtomicBool = AtomicBool::new(false);
 /// Toggled from the Bornagotchi → Mute menu entry.
 pub static GAME_MUTE: AtomicBool = AtomicBool::new(false);
 
+/// When true, `bin/embassy::main` plays the Startup melody once after
+/// boot init finishes.  Default `true` — the badge boots quietly only
+/// if the user has explicitly turned it off in Settings → Boot chime.
+/// Loaded from the `"watch"` kv namespace at boot; menu toggles signal
+/// `watch::SETTINGS_DIRTY_SIGNAL` so the existing watch persister task
+/// writes the new value to flash.
+pub static BOOT_CHIME_ENABLED: AtomicBool = AtomicBool::new(true);
+
 /// When true, the LoRa radio is put into standby and the meshcore task
 /// pauses all RX/TX until re-enabled.
 pub static LORA_DISABLED: AtomicBool = AtomicBool::new(false);

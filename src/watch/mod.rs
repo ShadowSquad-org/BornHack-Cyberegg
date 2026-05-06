@@ -81,26 +81,34 @@ pub fn dispatch(btn: ButtonId) -> bool {
 
 // ── KV load / persist ───────────────────────────────────────────────────────
 
-/// Load persisted watch settings (alarm + face choice) from the `"watch"` kv
-/// namespace. Call once at boot, after `kv::init()`. Silently leaves defaults
-/// in place if a key is missing or invalid.
+/// Load persisted watch settings (alarm + face choice + boot chime) from
+/// the `"watch"` kv namespace. Call once at boot, after `kv::init()`.
+/// Silently leaves defaults in place if a key is missing or invalid.
 #[cfg(feature = "embassy-base")]
 pub async fn load_settings_from_kv() {
+    use core::sync::atomic::Ordering;
     let ns = crate::fw::kv::namespace("watch");
     alarm::load_settings_from_kv(&ns).await;
     clock::load_settings_from_kv(&ns).await;
+    let mut buf = [0u8; 1];
+    if let Ok(1) = ns.get("boot_chime", &mut buf).await {
+        crate::BOOT_CHIME_ENABLED.store(buf[0] != 0, Ordering::Relaxed);
+    }
 }
 
-/// Embassy task that persists watch settings (alarm + face) whenever a setter
-/// signals `SETTINGS_DIRTY_SIGNAL`.
+/// Embassy task that persists watch settings (alarm + face + boot chime)
+/// whenever a setter signals `SETTINGS_DIRTY_SIGNAL`.
 #[cfg(feature = "embassy-base")]
 #[embassy_executor::task]
 pub async fn settings_persister_task() {
+    use core::sync::atomic::Ordering;
     let ns = crate::fw::kv::namespace("watch");
     loop {
         SETTINGS_DIRTY_SIGNAL.wait().await;
         alarm::persist(&ns).await;
         clock::persist(&ns).await;
+        let chime = [crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed) as u8];
+        let _ = ns.set("boot_chime", &chime, true).await;
     }
 }
 

@@ -332,6 +332,18 @@ async fn main(spawner: Spawner) {
     #[cfg(feature = "usb-storage")]
     spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
 
+    // ── Boot-complete chime ───────────────────────────────────────────────
+    // Plays once on every boot (first boot included) when the user
+    // hasn't disabled it via Settings → Boot chime.  The audible
+    // signal that init has finished and the badge is ready.  Fires
+    // before the first-boot sponsor slideshow so the sound and the
+    // slideshow don't compete for attention, and so the chime always
+    // plays at the same wall-clock moment in the boot sequence
+    // regardless of whether the slideshow is going to run.
+    if bornhack_aegg::BOOT_CHIME_ENABLED.load(core::sync::atomic::Ordering::Relaxed) {
+        bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
+    }
+
     // ── First-boot sponsor slideshow ────────────────────────────────────
     if !bornhack_aegg::fw::sponsors::already_shown().await {
         defmt::info!("Running first-boot sponsor slideshow");
