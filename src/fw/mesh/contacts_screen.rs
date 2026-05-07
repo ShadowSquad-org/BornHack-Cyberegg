@@ -202,32 +202,6 @@ fn lookup_observation(pub_key: &[u8; 32]) -> Option<u64> {
     })
 }
 
-// ── Pending screen nav ─────────────────────────────────────────────────────
-//
-// `dispatch()` runs inside the menu layer's `DISPLAY_STATE.lock(...)`
-// borrow_mut, so it can't recursively call `set_active_screen` itself
-// (the RefCell is already exclusively borrowed — would panic).  Instead
-// we stash the target screen here and the menu layer drains it right
-// after `dispatch()` returns.  `u16::MAX` = nothing pending.
-use core::sync::atomic::{AtomicU16, Ordering};
-static PENDING_NAV: AtomicU16 = AtomicU16::new(u16::MAX);
-
-/// Take the pending navigation target, if any.  Called by the menu
-/// dispatch layer immediately after `dispatch()` returns.
-pub fn take_pending_nav() -> Option<u8> {
-    let v = PENDING_NAV.swap(u16::MAX, Ordering::Relaxed);
-    if v == u16::MAX { None } else { Some(v as u8) }
-}
-
-/// Set a deferred screen target.  Currently unused — kept around as a
-/// reusable hook for future popup actions that need to switch screens
-/// (e.g. Room Server → "Join room" → channel browser).  The PM action
-/// handles its own flow via `start_pm_compose`.
-#[allow(dead_code)]
-fn set_pending_nav(screen: u8) {
-    PENDING_NAV.store(screen as u16, Ordering::Relaxed);
-}
-
 // ── PM compose ─────────────────────────────────────────────────────────────
 //
 // `text_entry::begin` takes a `fn(&[u8])` (function pointer, not closure),
@@ -355,25 +329,20 @@ pub async fn mutation_persister_task() {
     }
 }
 
-/// Apply an in-place edit to `CACHED_CONTACTS` so the UI reflects the
-/// mutation instantly, before the persister task has finished writing
-/// to flash.  Cheap — small heapless Vec scan.
-fn cached_apply_favorite(pub_key: &[u8; 32], favorite: bool) {
+/// Apply an in-place edit to the cached row matching `pub_key` so the
+/// UI reflects the mutation instantly, before the persister task has
+/// finished writing to flash.  Cheap — small heapless Vec scan.  No-op
+/// when the key isn't present.
+fn cached_with<F: FnOnce(&mut ContactRow)>(pub_key: &[u8; 32], f: F) {
     CACHED_CONTACTS.lock(|c| {
-        for e in c.borrow_mut().iter_mut() {
-            if &e.pub_key == pub_key {
-                if favorite {
-                    e.flags |= FLAG_FAVORITE;
-                } else {
-                    e.flags &= !FLAG_FAVORITE;
-                }
-                break;
-            }
+        if let Some(e) = c.borrow_mut().iter_mut().find(|e| &e.pub_key == pub_key) {
+            f(e);
         }
     });
 }
 
-fn cached_apply_forget(pub_key: &[u8; 32]) {
+/// Remove the cached row for `pub_key` (used by the Forget action).
+fn cached_remove(pub_key: &[u8; 32]) {
     CACHED_CONTACTS.lock(|c| {
         let mut list = c.borrow_mut();
         if let Some(pos) = list.iter().position(|e| &e.pub_key == pub_key) {
@@ -382,18 +351,15 @@ fn cached_apply_forget(pub_key: &[u8; 32]) {
     });
 }
 
-/// Mark the cached row as saved so the popup item set switches from
-/// discovery (Add primary) to saved (Save/Forget) for any further
-/// interaction before the persister task confirms the write.
-fn cached_apply_add(pub_key: &[u8; 32]) {
+/// Look up a peer's display name from the cache.  `pm_inbox` calls
+/// this so it doesn't need to reach into `CACHED_CONTACTS` directly.
+pub fn lookup_peer_name(pub_key: &[u8; 32]) -> Option<heapless::String<32>> {
     CACHED_CONTACTS.lock(|c| {
-        for e in c.borrow_mut().iter_mut() {
-            if &e.pub_key == pub_key {
-                e.is_saved = true;
-                break;
-            }
-        }
-    });
+        c.borrow()
+            .iter()
+            .find(|e| &e.pub_key == pub_key)
+            .map(|e| e.name.clone())
+    })
 }
 
 // ── Filtering ───────────────────────────────────────────────────────────────
@@ -625,27 +591,11 @@ fn live_now(observed_at_secs: Option<u64>) -> bool {
 /// during the current boot — the list is sorted by recency so ordering
 /// already conveys "newer above older."
 fn fmt_relative(observed_at_secs: Option<u64>) -> heapless::String<8> {
-    let mut s: heapless::String<8> = heapless::String::new();
     let Some(seen) = observed_at_secs else {
-        return s;
+        return heapless::String::new();
     };
     let now = embassy_time::Instant::now().as_secs();
-    let delta = now.saturating_sub(seen);
-    if delta < 60 {
-        let _ = s.push_str("now");
-    } else if delta < 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}m", delta / 60));
-    } else if delta < 24 * 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}h", delta / 3600));
-    } else if delta < 2 * 24 * 60 * 60 {
-        let _ = s.push_str("ydy");
-    } else if delta < 14 * 24 * 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}d", delta / 86400));
-    } else {
-        let weeks = (delta / (7 * 86400)).min(99);
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}w", weeks));
-    }
-    s
+    super::time_fmt::fmt_relative_secs(now.saturating_sub(seen))
 }
 
 fn role_glyph(node_type: u8) -> Option<&'static str> {
@@ -659,40 +609,76 @@ fn role_glyph(node_type: u8) -> Option<&'static str> {
     }
 }
 
+/// Per-contact popup action.  Picked from a vec returned by
+/// [`popup_items`] and dispatched by the popup `Fire` arm.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PopupAction {
+    Pm,
+    Info,
+    Save,
+    Unsave,
+    Forget,
+    Add,
+    Cancel,
+}
+
+impl PopupAction {
+    fn label(self) -> &'static str {
+        match self {
+            PopupAction::Pm => "PM",
+            PopupAction::Info => "Info",
+            PopupAction::Save => "Save",
+            PopupAction::Unsave => "Unsave",
+            PopupAction::Forget => "Forget",
+            PopupAction::Add => "Add",
+            PopupAction::Cancel => "< Cancel",
+        }
+    }
+}
+
+/// Maximum popup item count — chat-node saved row has 5 (PM, Info,
+/// Save/Unsave, Forget, Cancel); reserve one slot of headroom.
+const MAX_POPUP_ITEMS: usize = 6;
+
 /// Role- and saved-state-aware popup item set.  Index 0 is the primary
 /// action and is preselected.  Discovery rows (`is_saved == false`)
 /// expose **Add** as the primary action; saved rows expose Save / Forget
 /// curation.
-fn popup_items(node_type: u8, is_saved: bool, is_favorite: bool) -> heapless::Vec<&'static str, 6> {
-    let mut v: heapless::Vec<&'static str, 6> = heapless::Vec::new();
+fn popup_items(
+    node_type: u8,
+    is_saved: bool,
+    is_favorite: bool,
+) -> heapless::Vec<PopupAction, MAX_POPUP_ITEMS> {
+    let mut v: heapless::Vec<PopupAction, MAX_POPUP_ITEMS> = heapless::Vec::new();
     if !is_saved {
         // Heard-but-not-saved.  Add is primary; PM still works (we
         // have the pub_key) for chat nodes even before Adding.
-        let _ = v.push("Add");
+        let _ = v.push(PopupAction::Add);
         if node_type == 1 {
-            let _ = v.push("PM");
+            let _ = v.push(PopupAction::Pm);
         }
-        let _ = v.push("Info");
-        let _ = v.push("< Cancel");
+        let _ = v.push(PopupAction::Info);
+        let _ = v.push(PopupAction::Cancel);
         return v;
     }
-    let fav_label: &'static str = if is_favorite { "Unsave" } else { "Save" };
-    match node_type {
-        1 => {
-            // Chat Node — PM is the most common action.
-            let _ = v.push("PM");
-            let _ = v.push("Info");
-            let _ = v.push(fav_label);
-            let _ = v.push("Forget");
-            let _ = v.push("< Cancel");
-        }
-        _ => {
-            // Repeater / Room Server / Sensor / Unknown — no DM action.
-            let _ = v.push("Info");
-            let _ = v.push(fav_label);
-            let _ = v.push("Forget");
-            let _ = v.push("< Cancel");
-        }
+    let fav = if is_favorite {
+        PopupAction::Unsave
+    } else {
+        PopupAction::Save
+    };
+    if node_type == 1 {
+        // Chat Node — PM is the most common action.
+        let _ = v.push(PopupAction::Pm);
+        let _ = v.push(PopupAction::Info);
+        let _ = v.push(fav);
+        let _ = v.push(PopupAction::Forget);
+        let _ = v.push(PopupAction::Cancel);
+    } else {
+        // Repeater / Room Server / Sensor / Unknown — no DM action.
+        let _ = v.push(PopupAction::Info);
+        let _ = v.push(fav);
+        let _ = v.push(PopupAction::Forget);
+        let _ = v.push(PopupAction::Cancel);
     }
     v
 }
@@ -799,32 +785,29 @@ pub fn dispatch(btn: ButtonId) -> bool {
                         false
                     }
                     ButtonId::Fire | ButtonId::Execute => {
-                        let label = items.get(pos as usize).copied().unwrap_or("");
-                        match (label, entry_meta) {
-                            ("PM", Some((pk, ..))) => {
-                                // Open the keyboard primed for compose.
+                        let action = items.get(pos as usize).copied();
+                        match (action, entry_meta) {
+                            (Some(PopupAction::Pm), Some((pk, ..))) => {
                                 defmt::info!("popup: PM → start compose to {=[u8]:02x}", &pk[..6]);
                                 b.mode = Mode::List;
                                 start_pm_compose(pk);
                             }
-                            ("Info", _) => {
+                            (Some(PopupAction::Info), _) => {
                                 b.mode = Mode::Detail { target };
                             }
-                            ("Save", Some((pk, ..))) => {
-                                cached_apply_favorite(&pk, true);
+                            (Some(PopupAction::Save), Some((pk, ..))) => {
+                                cached_with(&pk, |e| e.flags |= FLAG_FAVORITE);
                                 let _ = MUTATION_QUEUE.try_send(Mutation::SetFavorite(pk, true));
                                 b.mode = Mode::List;
                             }
-                            ("Unsave", Some((pk, ..))) => {
-                                cached_apply_favorite(&pk, false);
+                            (Some(PopupAction::Unsave), Some((pk, ..))) => {
+                                cached_with(&pk, |e| e.flags &= !FLAG_FAVORITE);
                                 let _ = MUTATION_QUEUE.try_send(Mutation::SetFavorite(pk, false));
                                 b.mode = Mode::List;
                             }
-                            ("Forget", Some((pk, ..))) => {
-                                cached_apply_forget(&pk);
+                            (Some(PopupAction::Forget), Some((pk, ..))) => {
+                                cached_remove(&pk);
                                 let _ = MUTATION_QUEUE.try_send(Mutation::Forget(pk));
-                                // Cursor may now point past the end of
-                                // the filtered list; clamp.
                                 let new_count = filtered_count(filter);
                                 if b.cursor >= new_count {
                                     b.cursor = new_count.saturating_sub(1);
@@ -834,18 +817,12 @@ pub fn dispatch(btn: ButtonId) -> bool {
                                 }
                                 b.mode = Mode::List;
                             }
-                            ("Add", Some((pk, ..))) => {
-                                // Promote a discovery row to a saved
-                                // contact.  Flip is_saved in the cache
-                                // immediately so the row's popup item
-                                // set updates next time, then queue the
-                                // persistent write.
-                                cached_apply_add(&pk);
+                            (Some(PopupAction::Add), Some((pk, ..))) => {
+                                cached_with(&pk, |e| e.is_saved = true);
                                 let _ = MUTATION_QUEUE.try_send(Mutation::Add(pk));
                                 b.mode = Mode::List;
                             }
                             _ => {
-                                // Cancel or unknown — close the popup.
                                 b.mode = Mode::List;
                             }
                         }
@@ -1038,12 +1015,7 @@ where
             //  (none)                       → just the name
             let name = entry.name.as_str();
             let display_name = if name.is_empty() { "(unknown)" } else { name };
-            let max_chars = 14usize;
-            let truncated = if display_name.len() > max_chars {
-                &display_name[..max_chars]
-            } else {
-                display_name
-            };
+            let truncated = crate::truncate_str(display_name, 14);
             let prefix: Option<&'static str> = if entry.is_favorite() {
                 Some("*")
             } else if !entry.is_saved {
@@ -1084,8 +1056,7 @@ where
     let (title, items_owned) = match filtered_get(filter, target) {
         Some(entry) => {
             let mut t: heapless::String<16> = heapless::String::new();
-            let n = entry.name.as_str();
-            let n = if n.len() > 14 { &n[..14] } else { n };
+            let n = crate::truncate_str(entry.name.as_str(), 14);
             let _ = t.push_str(if n.is_empty() { "(unknown)" } else { n });
             (
                 t,
@@ -1094,13 +1065,13 @@ where
         }
         None => (
             heapless::String::<16>::new(),
-            heapless::Vec::<&'static str, 6>::new(),
+            heapless::Vec::<PopupAction, MAX_POPUP_ITEMS>::new(),
         ),
     };
 
-    // `ui::draw_picker_menu` wants `&[&str]` — convert.
-    let items_ref: heapless::Vec<&str, 6> = items_owned.iter().copied().collect();
-    ui::draw_picker_menu(display, title.as_str(), items_ref.as_slice(), pos as usize)?;
+    let labels: heapless::Vec<&str, MAX_POPUP_ITEMS> =
+        items_owned.iter().map(|a| a.label()).collect();
+    ui::draw_picker_menu(display, title.as_str(), labels.as_slice(), pos as usize)?;
     Ok(())
 }
 
@@ -1174,20 +1145,7 @@ where
     // chars` = 21 chars × 7 px = 147 px, fits the 152-px display.
     let mut key_line: heapless::String<24> = heapless::String::new();
     let _ = key_line.push_str("Key: ");
-    for &byte in entry.pub_key.iter().take(8) {
-        let hi = byte >> 4;
-        let lo = byte & 0xF;
-        let _ = key_line.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        let _ = key_line.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
+    let _ = key_line.push_str(crate::hex_prefix(&entry.pub_key, 8).as_str());
     Text::with_text_style(key_line.as_str(), Point::new(4, 100), style_small, bottom)
         .draw(display)?;
 

@@ -26,8 +26,12 @@ use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 /// Maximum cached PMs (incoming + outgoing combined).  Each entry is
-/// ~256 B (text + name buffers), so 32 = ~8 KiB total.
+/// ~226 B (130 text + 32 name + bookkeeping), so 32 = ~7.2 KiB total.
 pub const MAX_ENTRIES: usize = 32;
+
+/// Width of the per-entry text buffer — matches MeshCore's
+/// `MAX_TXT_TEXT_SIZE`.
+const PM_TEXT_LEN: usize = 130;
 
 /// Per-PM direction.  Drives left/right alignment in the thread view
 /// and disambiguates "from me" vs "to me" when both are present.
@@ -43,8 +47,8 @@ pub struct PmEntry {
     /// The *peer* — sender for incoming, recipient for outgoing.
     pub pub_key: [u8; 32],
     pub direction: Direction,
-    /// Message text — sized to MeshCore's `MAX_TXT_TEXT_SIZE` (130 B).
-    pub text: heapless::String<160>,
+    /// Message text — sized to MeshCore's `MAX_TXT_TEXT_SIZE`.
+    pub text: heapless::String<PM_TEXT_LEN>,
     /// Display name resolved at insert time, cached so the thread view
     /// can render without re-looking up.  Falls back to a hex prefix
     /// when no name is known.
@@ -93,46 +97,22 @@ fn push_entry(entry: PmEntry) {
     });
 }
 
-/// Resolve a peer's name from the Contacts-screen cache + discovery
-/// cache.  Falls back to a 16-char hex prefix when no name is known.
+/// Resolve a peer's name from the Contacts-screen cache.  Falls back
+/// to a 16-char hex prefix when no name is known.
 fn resolve_peer_name(pub_key: &[u8; 32]) -> heapless::String<32> {
-    // Fast path: check the rendered Contacts cache (covers both saved
-    // and discovered entries).
-    let from_cache = super::contacts_screen::CACHED_CONTACTS.lock(|c| {
-        c.borrow()
-            .iter()
-            .find(|e| &e.pub_key == pub_key)
-            .map(|e| e.name.clone())
-    });
-    if let Some(n) = from_cache
+    if let Some(n) = super::contacts_screen::lookup_peer_name(pub_key)
         && !n.is_empty()
     {
         return n;
     }
-    // Last resort: hex prefix.
-    let mut s: heapless::String<32> = heapless::String::new();
-    for &b in pub_key.iter().take(8) {
-        let hi = b >> 4;
-        let lo = b & 0xF;
-        let _ = s.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        let _ = s.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
-    }
-    s
+    crate::hex_prefix(pub_key, 8)
 }
 
 /// Record an incoming PM.  Called from `meshcore::log_advert`'s sibling
 /// PM-handling path.
 pub fn note_incoming(pub_key: &[u8; 32], peer_name: &str, text: &str) {
-    let mut text_buf: heapless::String<160> = heapless::String::new();
-    let _ = text_buf.push_str(text);
+    let mut text_buf: heapless::String<PM_TEXT_LEN> = heapless::String::new();
+    let _ = text_buf.push_str(crate::truncate_str(text, PM_TEXT_LEN));
     let mut name_buf: heapless::String<32> = heapless::String::new();
     if peer_name.is_empty() {
         name_buf = resolve_peer_name(pub_key);
@@ -153,8 +133,8 @@ pub fn note_incoming(pub_key: &[u8; 32], peer_name: &str, text: &str) {
 /// SEND_TXT_MSG path so phone-originated PMs also show up in the
 /// on-device thread.
 pub fn note_outgoing(pub_key: &[u8; 32], text: &str) {
-    let mut text_buf: heapless::String<160> = heapless::String::new();
-    let _ = text_buf.push_str(text);
+    let mut text_buf: heapless::String<PM_TEXT_LEN> = heapless::String::new();
+    let _ = text_buf.push_str(crate::truncate_str(text, PM_TEXT_LEN));
     let name_buf = resolve_peer_name(pub_key);
     push_entry(PmEntry {
         pub_key: *pub_key,
@@ -167,13 +147,17 @@ pub fn note_outgoing(pub_key: &[u8; 32], text: &str) {
 
 // ── Read access for the screen ──────────────────────────────────────────────
 
+/// Width of the inbox-row preview — the renderer slices to this and
+/// it never appears in the thread view, so 32 chars is plenty.
+const PREVIEW_LEN: usize = 32;
+
 /// One peer's summary row for the inbox-list view.
 #[derive(Clone)]
 pub struct PeerSummary {
     pub pub_key: [u8; 32],
     pub peer_name: heapless::String<32>,
-    /// Newest entry's text, truncated by the renderer.
-    pub last_text: heapless::String<160>,
+    /// Newest entry's text, already truncated to `PREVIEW_LEN`.
+    pub last_text: heapless::String<PREVIEW_LEN>,
     /// Newest entry's direction — drives a small `→` / `←` glyph.
     pub last_direction: Direction,
     pub last_observed_at_secs: u64,
@@ -181,55 +165,64 @@ pub struct PeerSummary {
     pub unread: u8,
 }
 
+fn copy_preview(src: &str) -> heapless::String<PREVIEW_LEN> {
+    let mut out: heapless::String<PREVIEW_LEN> = heapless::String::new();
+    let _ = out.push_str(crate::truncate_str(src, PREVIEW_LEN));
+    out
+}
+
 /// Build the inbox peer list — one row per distinct `pub_key`, sorted
-/// by `last_observed_at_secs` descending.  Walks the inbox ring twice
-/// (once to enumerate distinct peers, once to compute unread); for a
-/// 32-entry ring with ≤ 8 active threads this is trivial.
+/// by `last_observed_at_secs` descending.  Snapshots `READ_CURSORS`
+/// upfront so the unread-count walk happens in a single `INBOX` scan
+/// without nested locking.
 pub fn peer_list() -> heapless::Vec<PeerSummary, MAX_ENTRIES> {
+    // Snapshot the per-peer read cursors once.  Capacity is small
+    // (≤ READ_CURSORS_CAP), so this stays well under 1 KiB on stack.
+    let cursors: heapless::Vec<([u8; 32], u64), READ_CURSORS_CAP> = READ_CURSORS.lock(|cell| {
+        cell.borrow()
+            .iter()
+            .map(|c| (c.pub_key, c.last_read_secs))
+            .collect()
+    });
+    let cursor_for = |pk: &[u8; 32]| -> u64 {
+        cursors
+            .iter()
+            .find(|(k, _)| k == pk)
+            .map(|(_, t)| *t)
+            .unwrap_or(0)
+    };
+
     let mut summary: heapless::Vec<PeerSummary, MAX_ENTRIES> = heapless::Vec::new();
     INBOX.lock(|cell| {
-        let list = cell.borrow();
-        for entry in list.iter() {
+        for entry in cell.borrow().iter() {
             if let Some(s) = summary.iter_mut().find(|s| s.pub_key == entry.pub_key) {
                 if entry.observed_at_secs > s.last_observed_at_secs {
-                    s.last_text = entry.text.clone();
+                    s.last_text = copy_preview(entry.text.as_str());
                     s.last_direction = entry.direction;
                     s.last_observed_at_secs = entry.observed_at_secs;
                 }
+                if entry.direction == Direction::Incoming
+                    && entry.observed_at_secs > cursor_for(&s.pub_key)
+                {
+                    s.unread = s.unread.saturating_add(1);
+                }
             } else {
+                let unread = if entry.direction == Direction::Incoming
+                    && entry.observed_at_secs > cursor_for(&entry.pub_key)
+                {
+                    1
+                } else {
+                    0
+                };
                 let _ = summary.push(PeerSummary {
                     pub_key: entry.pub_key,
                     peer_name: entry.peer_name.clone(),
-                    last_text: entry.text.clone(),
+                    last_text: copy_preview(entry.text.as_str()),
                     last_direction: entry.direction,
                     last_observed_at_secs: entry.observed_at_secs,
-                    unread: 0,
+                    unread,
                 });
             }
-        }
-    });
-    // Compute unread counts — incoming entries newer than the per-peer
-    // read cursor.
-    READ_CURSORS.lock(|cell| {
-        let cursors = cell.borrow();
-        for s in summary.iter_mut() {
-            let cursor = cursors
-                .iter()
-                .find(|c| c.pub_key == s.pub_key)
-                .map(|c| c.last_read_secs)
-                .unwrap_or(0);
-            INBOX.lock(|ic| {
-                s.unread = ic
-                    .borrow()
-                    .iter()
-                    .filter(|e| {
-                        e.pub_key == s.pub_key
-                            && e.direction == Direction::Incoming
-                            && e.observed_at_secs > cursor
-                    })
-                    .count()
-                    .min(255) as u8;
-            });
         }
     });
     summary.sort_unstable_by(|a, b| b.last_observed_at_secs.cmp(&a.last_observed_at_secs));
@@ -364,16 +357,15 @@ pub fn dispatch(btn: ButtonId) -> bool {
         let mut b = cell.borrow_mut();
         match b.mode {
             Mode::Inbox => {
-                let count = INBOX.lock(|c| {
-                    let list = c.borrow();
-                    let mut seen: heapless::Vec<[u8; 32], MAX_ENTRIES> = heapless::Vec::new();
-                    for e in list.iter() {
-                        if !seen.contains(&e.pub_key) {
-                            let _ = seen.push(e.pub_key);
-                        }
-                    }
-                    seen.len() as u8
-                });
+                let count = peer_list().len() as u8;
+                // Defensive clamp for the case where a forget elsewhere
+                // shrinks the list while the cursor was scrolled down.
+                if b.cursor > count.saturating_sub(1) {
+                    b.cursor = count.saturating_sub(1);
+                }
+                if b.scroll > b.cursor {
+                    b.scroll = b.cursor;
+                }
                 match btn {
                     ButtonId::Up => {
                         if b.cursor > 0 {
@@ -444,44 +436,30 @@ pub fn dispatch(btn: ButtonId) -> bool {
 fn total_thread_lines(pub_key: &[u8; 32]) -> usize {
     // Layout: each entry takes ceil(text_len / BODY_LINE_CHARS) lines
     // — the arrow + time prefix sits on the same row as the first
-    // body chunk, so the standalone-arrow row is gone.  Empty
-    // messages still occupy 1 line.
-    let entries = thread_for(pub_key);
-    let mut lines = 0usize;
-    for e in entries.iter() {
-        let bytes = e.text.len();
-        lines += if bytes == 0 {
-            1
-        } else {
-            bytes.div_ceil(BODY_LINE_CHARS)
-        };
-    }
-    lines
+    // body chunk, so the standalone-arrow row is gone.  Walks INBOX
+    // directly to avoid the ~8 KiB stack allocation `thread_for`
+    // would do (it clones every PmEntry).
+    INBOX.lock(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|e| &e.pub_key == pub_key)
+            .map(|e| {
+                let bytes = e.text.len();
+                if bytes == 0 {
+                    1
+                } else {
+                    bytes.div_ceil(BODY_LINE_CHARS)
+                }
+            })
+            .sum()
+    })
 }
 
-/// Format `observed_at_secs` (seconds-since-boot) as a 3-char
-/// right-padded relative-time string for the thread view.  Falls
-/// back to spaces when the entry is fresher than 1 s — keeps the
-/// column aligned regardless.
-fn fmt_thread_time(observed_at_secs: u64) -> heapless::String<4> {
-    let mut s: heapless::String<4> = heapless::String::new();
+/// Wrap the shared relative-time formatter in a thread-local helper —
+/// the thread renderer wants a `String<8>` to push into a header slot.
+fn fmt_thread_time(observed_at_secs: u64) -> heapless::String<8> {
     let now = embassy_time::Instant::now().as_secs();
-    let delta = now.saturating_sub(observed_at_secs);
-    if delta < 60 {
-        let _ = s.push_str("now");
-    } else if delta < 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}m", delta / 60));
-    } else if delta < 24 * 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}h", delta / 3600));
-    } else if delta < 2 * 24 * 60 * 60 {
-        let _ = s.push_str("ydy");
-    } else if delta < 14 * 24 * 60 * 60 {
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}d", delta / 86400));
-    } else {
-        let weeks = (delta / (7 * 86400)).min(99);
-        let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{}w", weeks));
-    }
-    s
+    super::time_fmt::fmt_relative_secs(now.saturating_sub(observed_at_secs))
 }
 
 pub fn draw<D>(display: &mut D, bat_prc: &u8) -> Result<(), D::Error>

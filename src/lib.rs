@@ -396,6 +396,31 @@ pub static NODE_NAME: Mutex<CriticalSectionRawMutex, RefCell<heapless::String<31
 pub static NODE_NAME: std::sync::Mutex<RefCell<heapless::String<31>>> =
     std::sync::Mutex::new(RefCell::new(heapless::String::new()));
 
+/// Lowercase hex of `bytes` (`n_bytes` of them) into a `String<32>`.
+/// Used to render pub_key prefixes (`pub_key[..8]` → 16-char hex) and
+/// to format short fingerprints for the Contacts/PM screens.  Caps
+/// internally so the output never exceeds 16 bytes' worth of hex (32
+/// chars); pass smaller `n_bytes` for shorter fingerprints.
+pub fn hex_prefix(bytes: &[u8], n_bytes: usize) -> heapless::String<32> {
+    let mut out: heapless::String<32> = heapless::String::new();
+    let take = n_bytes.min(bytes.len()).min(16);
+    for &b in bytes.iter().take(take) {
+        let hi = b >> 4;
+        let lo = b & 0xF;
+        let _ = out.push(if hi < 10 {
+            (b'0' + hi) as char
+        } else {
+            (b'a' + hi - 10) as char
+        });
+        let _ = out.push(if lo < 10 {
+            (b'0' + lo) as char
+        } else {
+            (b'a' + lo - 10) as char
+        });
+    }
+    out
+}
+
 /// Truncate a UTF-8 string to fit within `max_bytes` on a char boundary.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
