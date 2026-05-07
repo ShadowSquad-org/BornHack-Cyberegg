@@ -40,6 +40,16 @@ There are two ways the clock gets set:
 | **BLE companion** | `SET_DEVICE_TIME` (0x06) command over Nordic UART Service | Primary method; use the MeshCore app to set the time |
 | **On-air seeding** | `fw::mesh::repeater_time` module; receives time from MeshCore repeaters/servers over LoRa | Fallback for badges without BLE; refines the clock gradually |
 
+##### How on-air time sync works
+
+The `fw::mesh::repeater_time` module listens to signed/MAC-verified mesh traffic for Unix timestamps:
+
+1. **Year filter** — timestamps before `2026-01-01 00:00:00 UTC` are discarded as stale/unset clocks
+2. **Hop compensation** — each sample is corrected: `corrected = timestamp + hops * SECONDS_PER_HOP` (4 s/hop) to account for time spent in flight
+3. **First sample seeds** — when the clock is `None`, the first valid corrected sample becomes the wall clock (no averaging)
+4. **Rolling median** — subsequent samples compute a *signed delta* from the running clock; deltas outside ±1 h (`MAX_DELTA_SECS`) are rejected; once 5 samples are collected, the **median delta** is applied to the clock and the buffer resets
+5. **BLE is authoritative** — once `SET_DEVICE_TIME` (0x06) runs, `BLE_TIME_LOCKED` latches `true` and on-air refinement stops until next reboot
+
 Once the BLE companion has set the clock, `BLE_TIME_LOCKED` is latched `true` and **on-air time refinement stops** — BLE is considered authoritative. The lock survives until the next reboot (BLE disconnect does NOT clear it).
 
 #### Timezone
