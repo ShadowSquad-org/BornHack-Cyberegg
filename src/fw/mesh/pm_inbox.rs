@@ -348,7 +348,13 @@ const HEADER_CHARS_FIRST: usize = 7;
 /// for both the first line (after the header) and continuation lines.
 const BODY_LINE_CHARS: usize = 14;
 const BODY_X: i32 = 50; // 7 chars × 7 px = 49, +1 nudge
-const THREAD_VISIBLE_LINES: u8 = 7;
+
+/// Tighter row pitch for the thread view — `font_height (13) + 2 px
+/// gap` instead of the inbox's 18 px.  Reads denser on the e-paper,
+/// lets us fit one extra message line, and stops the last row from
+/// overlapping the footer hint (which the previous 18-px pitch did).
+const THREAD_ROW_H: i32 = 15;
+const THREAD_VISIBLE_LINES: u8 = 8;
 
 /// Handle a button press.  Returns `true` when Cancel should propagate
 /// to the menu layer (i.e., leave the PM screen).
@@ -446,45 +452,100 @@ fn total_thread_lines(pub_key: &[u8; 32]) -> usize {
 }
 
 /// Word-aware line breaker — walks `bytes` and produces a list of
-/// `(start, end)` byte ranges, each ≤ `max_chars` wide and broken on
-/// space boundaries when possible.  Words longer than `max_chars`
-/// hard-break.  Trailing spaces on each line are trimmed.  Output is
-/// bounded to 16 lines (PM_TEXT_LEN=130 ÷ 14 chars/line ≈ 10 max).
-fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 16> {
-    let mut lines: heapless::Vec<(u8, u8), 16> = heapless::Vec::new();
-    let mut start = 0usize;
-    while start < bytes.len() {
-        // Skip leading spaces from a fresh line.
-        while start < bytes.len() && bytes[start] == b' ' {
-            start += 1;
+/// `(start, end)` byte ranges, each ≤ `max_chars` wide.  Soft-wraps
+/// at space boundaries when possible; hard-breaks on `\n` / `\r` /
+/// `\r\n` (rendered as line breaks rather than junk glyphs); falls
+/// back to a hard cut for words longer than `max_chars`.
+///
+/// Leading whitespace is preserved on the first line and on lines
+/// that follow a hard break — important for indented code.  Only
+/// the space that caused a soft wrap is consumed, so word-wrap
+/// continuation lines start at the next word.
+///
+/// Cap of 32 lines is enough for a 130-byte message at 14 chars/line
+/// (≈ 10) plus several explicit newlines.
+fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 32> {
+    let mut lines: heapless::Vec<(u8, u8), 32> = heapless::Vec::new();
+    let is_break = |b: u8| b == b'\n' || b == b'\r';
+    let mut pos = 0usize;
+    let mut after_soft_wrap = false;
+    while pos < bytes.len() {
+        // Only swallow leading spaces when the previous iteration
+        // ended with a soft wrap — that space was the wrap point and
+        // shouldn't appear at the start of the continuation.  After a
+        // hard break (or on the first line, or after a hard cut),
+        // leading whitespace is intentional content.
+        if after_soft_wrap {
+            while pos < bytes.len() && bytes[pos] == b' ' {
+                pos += 1;
+            }
+            if pos >= bytes.len() {
+                break;
+            }
         }
-        if start >= bytes.len() {
-            break;
+        let line_start = pos;
+
+        // Scan up to max_chars or first hard-break char.
+        let limit_window = (line_start + max_chars).min(bytes.len());
+        let mut end = limit_window;
+        for i in line_start..limit_window {
+            if is_break(bytes[i]) {
+                end = i;
+                break;
+            }
         }
-        let hard_end = (start + max_chars).min(bytes.len());
-        let mut end = hard_end;
-        // If we're stopping mid-word, walk back to the last space.
-        if end < bytes.len() && bytes[end] != b' ' {
+        let stopped_at_break = end < bytes.len() && is_break(bytes[end]);
+        let mut soft_wrapped = false;
+
+        // Soft-wrap: try to back up to a space so the line ends at a
+        // word boundary.  If the only space within the line is part
+        // of the leading-whitespace cluster (visible content would be
+        // empty), fall through to a hard cut at the window edge — a
+        // mid-word break is uglier than indented content collapsing.
+        if !stopped_at_break && end < bytes.len() && bytes[end] != b' ' {
             let mut back = end;
-            while back > start && bytes[back - 1] != b' ' {
+            while back > line_start && bytes[back - 1] != b' ' {
                 back -= 1;
             }
-            // Only soft-break if it actually saves us — `back == start`
-            // means a single word is longer than max_chars, hard-break.
-            if back > start {
-                end = back;
+            if back > line_start {
+                let mut probe = back;
+                while probe > line_start && bytes[probe - 1] == b' ' {
+                    probe -= 1;
+                }
+                if probe > line_start {
+                    end = back;
+                    soft_wrapped = true;
+                }
             }
+        } else if !stopped_at_break && end < bytes.len() && bytes[end] == b' ' {
+            // Cleanly stopped at a space at the window edge.
+            soft_wrapped = true;
         }
-        // Trim trailing spaces from the visible slice.
+
+        // Trim trailing spaces from the visible slice (so a line
+        // ending in soft-wrap whitespace doesn't leave dangling
+        // glyphs at the right edge).
         let mut visible_end = end;
-        while visible_end > start && bytes[visible_end - 1] == b' ' {
+        while visible_end > line_start && bytes[visible_end - 1] == b' ' {
             visible_end -= 1;
         }
-        let _ = lines.push((start as u8, visible_end as u8));
+        let _ = lines.push((line_start as u8, visible_end as u8));
         if lines.is_full() {
             break;
         }
-        start = end;
+
+        pos = end;
+        if stopped_at_break {
+            if pos < bytes.len() && bytes[pos] == b'\r' {
+                pos += 1;
+            }
+            if pos < bytes.len() && bytes[pos] == b'\n' {
+                pos += 1;
+            }
+            after_soft_wrap = false;
+        } else {
+            after_soft_wrap = soft_wrapped;
+        }
     }
     lines
 }
@@ -540,16 +601,15 @@ where
                 .into_styled(PrimitiveStyle::with_fill(BLACK))
                 .draw(display)?;
         }
+        // Bold both states so the e-paper-blurry regular weight
+        // doesn't make the inbox unreadable.  Inverted = bold white,
+        // unselected = bold black.
         let txt = if selected {
             ui::TEXT_BOLD_WHITE
         } else {
-            ui::TEXT_BLACK
+            ui::TEXT_BOLD_BLACK
         };
-        let small = if selected {
-            ui::TEXT_BOLD_WHITE
-        } else {
-            ui::TEXT_BLACK
-        };
+        let small = txt;
 
         // Row 1: peer name (with `(N)` unread suffix).
         let name = s.peer_name.as_str();
@@ -582,14 +642,14 @@ where
         Text::with_text_style(
             "^",
             Point::new(146, list_top + ROW_H - 4),
-            ui::TEXT_BLACK,
+            ui::TEXT_BOLD_BLACK,
             bottom,
         )
         .draw(display)?;
     }
     if (scroll as usize) + (VISIBLE_ROWS as usize) < total as usize {
         let last_y = list_top + (VISIBLE_ROWS as i32 - 1) * ROW_H + ROW_H - 4;
-        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BLACK, bottom)
+        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BOLD_BLACK, bottom)
             .draw(display)?;
     }
     Ok(())
@@ -646,7 +706,10 @@ where
             if painted >= THREAD_VISIBLE_LINES {
                 break 'messages;
             }
-            let row_y = body_top + painted as i32 * ROW_H + ROW_H - 4;
+            // Place text bottom-baseline at row_top + 13 so the
+            // 13-px-tall glyphs sit flush against the top of each
+            // 15-px row, leaving the bottom 2 px as inter-row gap.
+            let row_y = body_top + painted as i32 * THREAD_ROW_H + 13;
 
             if chunk_i == 0 {
                 let mut hdr: heapless::String<{ HEADER_CHARS_FIRST }> = heapless::String::new();
@@ -669,8 +732,15 @@ where
                 && (s as usize) < bytes.len()
             {
                 let slice = core::str::from_utf8(&bytes[s as usize..e as usize]).unwrap_or("");
-                Text::with_text_style(slice, Point::new(BODY_X, row_y), ui::TEXT_BLACK, bottom)
-                    .draw(display)?;
+                // Bold body too — regular weight is hard to read on
+                // the smudgy e-paper at 7×13.
+                Text::with_text_style(
+                    slice,
+                    Point::new(BODY_X, row_y),
+                    ui::TEXT_BOLD_BLACK,
+                    bottom,
+                )
+                .draw(display)?;
             }
             painted += 1;
         }
@@ -681,15 +751,15 @@ where
     if scroll > 0 {
         Text::with_text_style(
             "^",
-            Point::new(146, body_top + ROW_H - 4),
-            ui::TEXT_BLACK,
+            Point::new(146, body_top + 13),
+            ui::TEXT_BOLD_BLACK,
             bottom,
         )
         .draw(display)?;
     }
     if (scroll as usize) + (THREAD_VISIBLE_LINES as usize) < total {
-        let last_y = body_top + (THREAD_VISIBLE_LINES as i32 - 1) * ROW_H + ROW_H - 4;
-        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BLACK, bottom)
+        let last_y = body_top + (THREAD_VISIBLE_LINES as i32 - 1) * THREAD_ROW_H + 13;
+        Text::with_text_style("v", Point::new(146, last_y), ui::TEXT_BOLD_BLACK, bottom)
             .draw(display)?;
     }
 
@@ -697,7 +767,7 @@ where
     // 152-px display.  Was previously "Fire: Reply  Cancel: back"
     // (25 chars, ~175 px) which ran off the right edge.
     let hint = "Fire reply  Esc back";
-    Text::with_text_style(hint, Point::new(2, 152), ui::TEXT_BLACK, bottom).draw(display)?;
+    Text::with_text_style(hint, Point::new(2, 152), ui::TEXT_BOLD_BLACK, bottom).draw(display)?;
     let _ = WHITE;
     Ok(())
 }
