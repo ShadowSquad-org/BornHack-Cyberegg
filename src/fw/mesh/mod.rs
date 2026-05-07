@@ -21,6 +21,7 @@ pub mod pm_inbox;
 pub mod repeater;
 pub mod repeater_time;
 pub mod settings;
+pub mod sounds;
 pub mod sx1262;
 pub mod text_wrap;
 pub mod time_fmt;

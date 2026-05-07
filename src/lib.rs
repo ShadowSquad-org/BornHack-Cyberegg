@@ -844,6 +844,16 @@ where
             }
             let _ = core::fmt::Write::write_fmt(&mut f, format_args!("{:02}:{:02}", h, m));
         }
+        // Unread-PM indicator — appears as ` +N` suffix when at
+        // least one peer has unread incoming messages.  Lets the
+        // user spot a new PM without entering the Messages screen.
+        #[cfg(feature = "mesh")]
+        {
+            let unread = fw::mesh::pm_inbox::unread_total();
+            if unread > 0 {
+                let _ = core::fmt::Write::write_fmt(&mut f, format_args!(" +{}", unread));
+            }
+        }
         f
     };
     #[cfg(not(feature = "embassy-base"))]

@@ -913,6 +913,51 @@ fn action_boot_chime_toggle() {
     crate::watch::SETTINGS_DIRTY_SIGNAL.signal(());
 }
 
+// ── Notification sound steppers (mesh only) ────────────────────────────────
+//
+// One row per `SoundEvent`, rendered as e.g. "PM: Nokia" with Up/Down
+// cycling through `SOUND_TONES`.  All thunks forward to the
+// `SoundEvent`-parameterised API in `fw::mesh::sounds`.
+#[cfg(feature = "mesh")]
+mod sound_menu {
+    use core::fmt::Write;
+
+    use crate::fw::mesh::sounds::{SoundEvent, tone_label, tone_step};
+
+    fn fmt(buf: &mut heapless::String<24>, prefix: &str, event: SoundEvent) {
+        let _ = write!(buf, "{}: {}", prefix, tone_label(event));
+    }
+
+    pub fn fmt_pm(buf: &mut heapless::String<24>) {
+        fmt(buf, "PM", SoundEvent::PmReceived);
+    }
+    pub fn fmt_channel(buf: &mut heapless::String<24>) {
+        fmt(buf, "Chan", SoundEvent::ChannelMsg);
+    }
+    pub fn fmt_contact(buf: &mut heapless::String<24>) {
+        fmt(buf, "Disc", SoundEvent::ContactDiscovered);
+    }
+
+    pub fn pm_inc() {
+        tone_step(SoundEvent::PmReceived, 1);
+    }
+    pub fn pm_dec() {
+        tone_step(SoundEvent::PmReceived, -1);
+    }
+    pub fn channel_inc() {
+        tone_step(SoundEvent::ChannelMsg, 1);
+    }
+    pub fn channel_dec() {
+        tone_step(SoundEvent::ChannelMsg, -1);
+    }
+    pub fn contact_inc() {
+        tone_step(SoundEvent::ContactDiscovered, 1);
+    }
+    pub fn contact_dec() {
+        tone_step(SoundEvent::ContactDiscovered, -1);
+    }
+}
+
 fn label_ignore_blink() -> &'static str {
     if crate::IGNORE_BLINK.load(Ordering::Relaxed) {
         "Ignore Blink: ON"
@@ -1093,8 +1138,8 @@ fn label_alarm_days() -> &'static str {
 }
 
 #[cfg(feature = "watch")]
-fn label_alarm_tone() -> &'static str {
-    crate::watch::alarm_tone_label()
+fn fmt_alarm_tone(buf: &mut heapless::String<24>) {
+    let _ = buf.push_str(&crate::watch::alarm_tone_label());
 }
 
 // Per-day toggle labels — one fn per day so the menu's `fn()`-typed action
@@ -1236,8 +1281,9 @@ static ALARM_ITEMS: [MenuItem; 6] = [
         kind: MenuItemKind::Submenu(&ALARM_DAYS_ITEMS),
     },
     MenuItem {
-        label: label_alarm_tone,
-        kind: MenuItemKind::Stepper {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_alarm_tone,
             inc: crate::watch::alarm_inc_melody,
             dec: crate::watch::alarm_dec_melody,
         },
@@ -1524,10 +1570,42 @@ static MESHCORE_MENU_ITEMS: [MenuItem; 11] = [
     },
 ];
 
-#[cfg(feature = "watch")]
-const SETTINGS_ITEMS_LEN: usize = 11;
-#[cfg(not(feature = "watch"))]
-const SETTINGS_ITEMS_LEN: usize = 9;
+// ── Sounds submenu (notification tones per event, mesh only) ────────────────
+
+#[cfg(feature = "mesh")]
+static SOUNDS_ITEMS: [MenuItem; 4] = [
+    MenuItem {
+        label: || "< Back",
+        kind: MenuItemKind::Back,
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: sound_menu::fmt_pm,
+            inc: sound_menu::pm_inc,
+            dec: sound_menu::pm_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: sound_menu::fmt_channel,
+            inc: sound_menu::channel_inc,
+            dec: sound_menu::channel_dec,
+        },
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: sound_menu::fmt_contact,
+            inc: sound_menu::contact_inc,
+            dec: sound_menu::contact_dec,
+        },
+    },
+];
+
+const SETTINGS_ITEMS_LEN: usize =
+    9 + if cfg!(feature = "watch") { 2 } else { 0 } + if cfg!(feature = "mesh") { 1 } else { 0 };
 
 static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
@@ -1549,6 +1627,11 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     MenuItem {
         label: || "MeshCore",
         kind: MenuItemKind::Submenu(&MESHCORE_MENU_ITEMS),
+    },
+    #[cfg(feature = "mesh")]
+    MenuItem {
+        label: || "Sounds",
+        kind: MenuItemKind::Submenu(&SOUNDS_ITEMS),
     },
     MenuItem {
         label: || "",

@@ -619,6 +619,7 @@ async fn push_grp_txt(
                         repeat_count: 0,
                     });
                 });
+                super::sounds::play(super::sounds::SoundEvent::ChannelMsg);
             }
 
             // Push to the flash queue and notify any connected BLE companion.
@@ -718,7 +719,7 @@ async fn log_advert(
     // discovery rows (heard but not yet in the persistent store) and
     // the popup's "Add" action can promote them later.  Always called
     // — the screen's cache rebuild dedupes against `ContactStore`.
-    super::discovery::note(
+    let is_new_discovery = super::discovery::note(
         &a.pub_key,
         name_str.as_str(),
         a.role.to_u8(),
@@ -726,6 +727,9 @@ async fn log_advert(
         lon,
         a.timestamp,
     );
+    if is_new_discovery {
+        super::sounds::play(super::sounds::SoundEvent::ContactDiscovered);
+    }
 
     // Wake the UI redraw loop (`ADVERT_SIGNAL`) and the Contacts
     // screen's cache-refresh task (`REBUILD_SIGNAL`).  Two distinct
@@ -1160,6 +1164,7 @@ async fn try_handle_txt_msg(
             });
         });
         super::pm_inbox::note_incoming(&sender.pub_key, display_name.as_str(), text_str.as_str());
+        super::sounds::play(super::sounds::SoundEvent::PmReceived);
         crate::PM_SIGNAL.signal(());
         crate::PM_UNREAD.store(true, core::sync::atomic::Ordering::Relaxed);
 
@@ -1506,6 +1511,11 @@ async fn send_txt_msg(
                             sent_at: embassy_time::Instant::now(),
                         }));
                     });
+                    // Stamp the matching outgoing PmEntry so the
+                    // thread view's delivery marker can flip from
+                    // "in-flight" to "delivered" when the ACK comes
+                    // back via `handle_ack_recv`.
+                    super::pm_inbox::stamp_outgoing_ack(&req.recipient_pub_key, expected_ack);
                 }
             }
         }
@@ -1793,6 +1803,11 @@ fn handle_ack_recv(payload: &[u8], rssi: i16) {
         }
         0u32
     });
+
+    // Flip any matching outgoing PmEntry's delivery state so the
+    // thread view's marker updates.  No-op if the ACK is for a
+    // BLE-companion-originated PM that we never tracked locally.
+    super::pm_inbox::handle_ack(ack_crc);
 
     let _ = crate::ACK_EVENT_CHANNEL.try_send(crate::AckEvent {
         ack_crc,
