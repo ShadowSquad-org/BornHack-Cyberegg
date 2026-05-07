@@ -32,11 +32,11 @@ mod ics;
 // them by their unqualified names.  The submodules are kept private so the
 // only entry points are the ones below.
 pub use alarm::{
-    N_ALARMS, alarm_day_enabled, alarm_day_n, alarm_days_label, alarm_dec_hour, alarm_dec_melody,
-    alarm_dec_minute, alarm_enabled_label, alarm_enabled_n, alarm_hour, alarm_hour_n,
-    alarm_inc_hour, alarm_inc_melody, alarm_inc_minute, alarm_is_one_shot_n, alarm_minute,
-    alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled, alarm_tone_label,
-    alarm_year_n, clear_imported_alarms, first_empty_event_slot,
+    N_ALARMS, TONES, alarm_day_enabled, alarm_day_n, alarm_days_label, alarm_dec_hour,
+    alarm_dec_melody, alarm_dec_minute, alarm_enabled_label, alarm_enabled_n, alarm_hour,
+    alarm_hour_n, alarm_inc_hour, alarm_inc_melody, alarm_inc_minute, alarm_is_one_shot_n,
+    alarm_minute, alarm_minute_n, alarm_month_n, alarm_toggle_day, alarm_toggle_enabled,
+    alarm_tone_label, alarm_year_n, clear_imported_alarms, first_empty_event_slot,
 };
 #[cfg(feature = "embassy-base")]
 pub use alarm::{
@@ -81,9 +81,10 @@ pub fn dispatch(btn: ButtonId) -> bool {
 
 // ── KV load / persist ───────────────────────────────────────────────────────
 
-/// Load persisted watch settings (alarm + face choice + boot chime) from
-/// the `"watch"` kv namespace. Call once at boot, after `kv::init()`.
-/// Silently leaves defaults in place if a key is missing or invalid.
+/// Load persisted watch settings (alarm + face choice + boot chime
+/// + per-event notification sound preferences) from the `"watch"`
+/// kv namespace.  Call once at boot, after `kv::init()`.  Silently
+/// leaves defaults in place if a key is missing or invalid.
 #[cfg(feature = "embassy-base")]
 pub async fn load_settings_from_kv() {
     use core::sync::atomic::Ordering;
@@ -94,10 +95,13 @@ pub async fn load_settings_from_kv() {
     if let Ok(1) = ns.get("boot_chime", &mut buf).await {
         crate::BOOT_CHIME_ENABLED.store(buf[0] != 0, Ordering::Relaxed);
     }
+    #[cfg(feature = "mesh")]
+    crate::fw::mesh::sounds::load_settings_from_kv(&ns).await;
 }
 
-/// Embassy task that persists watch settings (alarm + face + boot chime)
-/// whenever a setter signals `SETTINGS_DIRTY_SIGNAL`.
+/// Embassy task that persists watch settings (alarm + face + boot
+/// chime + per-event sound preferences) whenever a setter signals
+/// `SETTINGS_DIRTY_SIGNAL`.
 #[cfg(feature = "embassy-base")]
 #[embassy_executor::task]
 pub async fn settings_persister_task() {
@@ -109,6 +113,8 @@ pub async fn settings_persister_task() {
         clock::persist(&ns).await;
         let chime = [crate::BOOT_CHIME_ENABLED.load(Ordering::Relaxed) as u8];
         let _ = ns.set("boot_chime", &chime, true).await;
+        #[cfg(feature = "mesh")]
+        crate::fw::mesh::sounds::persist(&ns).await;
     }
 }
 

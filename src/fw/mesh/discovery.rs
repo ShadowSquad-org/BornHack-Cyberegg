@@ -57,6 +57,11 @@ static CACHE: Mutex<CriticalSectionRawMutex, RefCell<heapless::Vec<DiscoveryEntr
 /// `meshcore::log_advert` for every received advert — the Contacts
 /// screen handles deduplication against the persistent store at render
 /// time.
+///
+/// Returns `true` when the entry was newly inserted (first time we've
+/// heard this `pub_key` since boot), `false` when an existing row was
+/// just refreshed.  Lets the caller fire the "new contact" notification
+/// sound only on first sighting.
 pub fn note(
     pub_key: &[u8; 32],
     name: &str,
@@ -64,7 +69,7 @@ pub fn note(
     gps_lat: i32,
     gps_lon: i32,
     advert_ts: u32,
-) {
+) -> bool {
     let observed_at_secs = embassy_time::Instant::now().as_secs();
     CACHE.lock(|cell| {
         let mut list = cell.borrow_mut();
@@ -78,7 +83,7 @@ pub fn note(
             e.advert_ts = advert_ts;
             e.name.clear();
             let _ = e.name.push_str(name);
-            return;
+            return false;
         }
         // New key — append, evicting the oldest by observed time.
         if list.is_full() {
@@ -101,7 +106,8 @@ pub fn note(
             advert_ts,
             observed_at_secs,
         });
-    });
+        true
+    })
 }
 
 /// Look up a discovery entry by `pub_key`.  Returns a clone so the

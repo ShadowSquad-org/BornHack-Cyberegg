@@ -21,6 +21,7 @@
 //! first design semantics elsewhere in the firmware.
 
 use core::cell::RefCell;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -41,6 +42,33 @@ pub enum Direction {
     Outgoing,
 }
 
+/// Delivery state for an *outgoing* PM.  Drives the small marker
+/// rendered next to the time prefix in the thread view.
+///
+/// The state machine is one-way: `Sent` → `Delivered` (when a
+/// matching `PayloadType::Ack` arrives) or `Sent` → `Failed` (when
+/// `DELIVERY_TIMEOUT_SECS` elapse without an ack).  Incoming entries
+/// always carry `Delivered` since the sender's ack is upstream from
+/// our view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// Outgoing message queued / in-flight.  `ack_hash` is the
+    /// 4-byte CRC the recipient will echo in their `Ack` packet;
+    /// `0` until `stamp_outgoing_ack` fills it after `send_pm`
+    /// computes it.
+    Sent { ack_hash: u32 },
+    /// Matching `Ack` was received.
+    Delivered,
+    /// Timed out — `DELIVERY_TIMEOUT_SECS` elapsed without an ack.
+    Failed,
+}
+
+/// Outgoing-PM ack timeout.  30 s matches the BLE companion's
+/// `est_timeout_ms` for flood-routed sends; direct sends usually
+/// land in 1–5 s but flood through unreliable repeaters can tail
+/// well past 10 s.  Keep generous to avoid false-failure flicker.
+const DELIVERY_TIMEOUT_SECS: u64 = 30;
+
 /// One PM in the inbox ring.
 #[derive(Clone)]
 pub struct PmEntry {
@@ -57,6 +85,9 @@ pub struct PmEntry {
     /// Source of truth for sort + "Last:" rendering — same model as
     /// the Contacts screen's observation table.
     pub observed_at_secs: u64,
+    /// Delivery state.  Outgoing entries flow through `Sent → Delivered`
+    /// or `Sent → Failed`.  Incoming entries are always `Delivered`.
+    pub delivery: Delivery,
 }
 
 static INBOX: Mutex<CriticalSectionRawMutex, RefCell<heapless::Vec<PmEntry, MAX_ENTRIES>>> =
@@ -78,6 +109,33 @@ static READ_CURSORS: Mutex<
     RefCell<heapless::Vec<ReadCursor, READ_CURSORS_CAP>>,
 > = Mutex::new(RefCell::new(heapless::Vec::new()));
 
+/// Running count of incoming entries newer than their per-peer read
+/// cursor — i.e. the value `unread_total()` returns.  Maintained
+/// incrementally so the main-screen footer's `+N` indicator costs one
+/// relaxed atomic load per redraw instead of a locked walk over INBOX
+/// + READ_CURSORS.
+static UNREAD_COUNT: AtomicU8 = AtomicU8::new(0);
+
+fn read_cursor(pub_key: &[u8; 32]) -> u64 {
+    READ_CURSORS.lock(|cell| {
+        cell.borrow()
+            .iter()
+            .find(|c| &c.pub_key == pub_key)
+            .map(|c| c.last_read_secs)
+            .unwrap_or(0)
+    })
+}
+
+fn bump_unread() {
+    let cur = UNREAD_COUNT.load(Ordering::Relaxed);
+    UNREAD_COUNT.store(cur.saturating_add(1), Ordering::Relaxed);
+}
+
+fn drop_unread(by: u8) {
+    let cur = UNREAD_COUNT.load(Ordering::Relaxed);
+    UNREAD_COUNT.store(cur.saturating_sub(by), Ordering::Relaxed);
+}
+
 // ── Insertion helpers ──────────────────────────────────────────────────────
 
 fn push_entry(entry: PmEntry) {
@@ -91,7 +149,15 @@ fn push_entry(entry: PmEntry) {
                 .min_by_key(|(_, e)| e.observed_at_secs)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
-            let _ = list.swap_remove(oldest_idx);
+            // If the evicted entry was an unread incoming PM, the
+            // running counter must drop too — otherwise `unread_total`
+            // drifts upward.
+            let evicted = list.swap_remove(oldest_idx);
+            if evicted.direction == Direction::Incoming
+                && evicted.observed_at_secs > read_cursor(&evicted.pub_key)
+            {
+                drop_unread(1);
+            }
         }
         let _ = list.push(entry);
     });
@@ -125,13 +191,20 @@ pub fn note_incoming(pub_key: &[u8; 32], peer_name: &str, text: &str) {
         text: text_buf,
         peer_name: name_buf,
         observed_at_secs: embassy_time::Instant::now().as_secs(),
+        delivery: Delivery::Delivered,
     });
+    bump_unread();
 }
 
 /// Record an outgoing PM.  Called from the Contacts-screen popup when
 /// the user submits a compose, and from the BLE companion's
 /// SEND_TXT_MSG path so phone-originated PMs also show up in the
 /// on-device thread.
+///
+/// The entry starts in `Delivery::Sent { ack_hash: 0 }`.
+/// `meshcore::send_pm` calls [`stamp_outgoing_ack`] right after it
+/// computes the expected-ack CRC; matching `Ack` packets later flip
+/// it to `Delivered` via [`handle_ack`].
 pub fn note_outgoing(pub_key: &[u8; 32], text: &str) {
     let mut text_buf: heapless::String<PM_TEXT_LEN> = heapless::String::new();
     let _ = text_buf.push_str(crate::truncate_str(text, PM_TEXT_LEN));
@@ -142,6 +215,68 @@ pub fn note_outgoing(pub_key: &[u8; 32], text: &str) {
         text: text_buf,
         peer_name: name_buf,
         observed_at_secs: embassy_time::Instant::now().as_secs(),
+        delivery: Delivery::Sent { ack_hash: 0 },
+    });
+}
+
+// ── Delivery tracking ──────────────────────────────────────────────────────
+
+/// Stamp the most-recent `Sent { ack_hash: 0 }` outgoing entry for
+/// `pub_key` with the now-known `ack_hash`.  Called from
+/// `meshcore::send_pm` right after it computes `expected_ack`.  No-op
+/// if there's no matching entry (e.g. the BLE companion path mirrored
+/// the outgoing then `send_pm` ran, but the ring has churned).
+pub fn stamp_outgoing_ack(pub_key: &[u8; 32], ack_hash: u32) {
+    INBOX.lock(|cell| {
+        let mut list = cell.borrow_mut();
+        for entry in list.iter_mut().rev() {
+            if &entry.pub_key == pub_key
+                && entry.direction == Direction::Outgoing
+                && matches!(entry.delivery, Delivery::Sent { ack_hash: 0 })
+            {
+                entry.delivery = Delivery::Sent { ack_hash };
+                return;
+            }
+        }
+    });
+}
+
+/// Match an incoming `Ack` packet's CRC against any pending outgoing
+/// entry and flip it to [`Delivery::Delivered`].  Called from
+/// `meshcore::handle_ack_recv` alongside the existing `PENDING_ACK`
+/// drain.  No-op if no entry matches (the ack might be for a
+/// BLE-companion-originated PM that we never tracked locally).
+pub fn handle_ack(ack_crc: u32) {
+    if ack_crc == 0 {
+        return;
+    }
+    INBOX.lock(|cell| {
+        for entry in cell.borrow_mut().iter_mut() {
+            if entry.direction == Direction::Outgoing
+                && matches!(entry.delivery, Delivery::Sent { ack_hash } if ack_hash == ack_crc)
+            {
+                entry.delivery = Delivery::Delivered;
+                return;
+            }
+        }
+    });
+}
+
+/// Mark any `Sent` outgoing entry older than [`DELIVERY_TIMEOUT_SECS`]
+/// as `Failed`.  Cheap walk over the ≤ 32-entry inbox; called from the
+/// thread-render hot path (so the marker updates whenever the user is
+/// looking) — no dedicated timer task needed.
+fn sweep_delivery_timeouts() {
+    let now = embassy_time::Instant::now().as_secs();
+    INBOX.lock(|cell| {
+        for entry in cell.borrow_mut().iter_mut() {
+            if let Delivery::Sent { .. } = entry.delivery
+                && entry.direction == Direction::Outgoing
+                && now.saturating_sub(entry.observed_at_secs) > DELIVERY_TIMEOUT_SECS
+            {
+                entry.delivery = Delivery::Failed;
+            }
+        }
     });
 }
 
@@ -244,9 +379,22 @@ pub fn thread_for(pub_key: &[u8; 32]) -> heapless::Vec<PmEntry, MAX_ENTRIES> {
 }
 
 /// Mark the user as having seen everything for `pub_key` up to now.
-/// Resets the (N) unread badge for that peer.
+/// Resets the (N) unread badge for that peer and drops the global
+/// running counter by the same amount.
 pub fn mark_read(pub_key: &[u8; 32]) {
     let now = embassy_time::Instant::now().as_secs();
+    let old_cursor = read_cursor(pub_key);
+    let cleared = INBOX.lock(|cell| {
+        cell.borrow()
+            .iter()
+            .filter(|e| {
+                &e.pub_key == pub_key
+                    && e.direction == Direction::Incoming
+                    && e.observed_at_secs > old_cursor
+            })
+            .count()
+            .min(255) as u8
+    });
     READ_CURSORS.lock(|cell| {
         let mut list = cell.borrow_mut();
         if let Some(c) = list.iter_mut().find(|c| &c.pub_key == pub_key) {
@@ -254,7 +402,6 @@ pub fn mark_read(pub_key: &[u8; 32]) {
             return;
         }
         if list.is_full() {
-            // Evict the oldest cursor.
             let oldest_idx = list
                 .iter()
                 .enumerate()
@@ -268,12 +415,12 @@ pub fn mark_read(pub_key: &[u8; 32]) {
             last_read_secs: now,
         });
     });
+    drop_unread(cleared);
 }
 
 /// `true` when at least one incoming message exists newer than the
 /// `pub_key`'s read cursor.  Cheap version of `peer_list().unread > 0`
-/// for callers that only want a yes/no — currently unused but exposed
-/// for the future passive-screen indicator.
+/// for callers that only want a yes/no.
 #[allow(dead_code)]
 pub fn has_unread(pub_key: &[u8; 32]) -> bool {
     let cursor = READ_CURSORS.lock(|cell| {
@@ -290,6 +437,14 @@ pub fn has_unread(pub_key: &[u8; 32]) -> bool {
                 && e.observed_at_secs > cursor
         })
     })
+}
+
+/// Total count of incoming messages newer than each peer's read
+/// cursor — used by the main screen footer to show a `+N` indicator.
+/// Maintained incrementally in `note_incoming` / `mark_read` /
+/// `push_entry` so this is a cheap relaxed atomic load.
+pub fn unread_total() -> u8 {
+    UNREAD_COUNT.load(Ordering::Relaxed)
 }
 
 // ── UI state machine ───────────────────────────────────────────────────────
@@ -576,6 +731,11 @@ where
     let _ = title_buf.push_str(n_short);
     draw_header(display, title_buf.as_str(), bat_prc)?;
 
+    // Sweep delivery timeouts before rendering — any outgoing
+    // entry past the ack window flips to Failed so the marker
+    // updates without needing a dedicated timer task.
+    sweep_delivery_timeouts();
+
     let entries = thread_for(pub_key);
     if entries.is_empty() {
         ui::draw_centered_message(display, "(empty thread)", Point::new(76, 80))?;
@@ -592,9 +752,23 @@ where
     let body_top: i32 = ui::TITLE_BAR_H as i32 + 4;
 
     'messages: for entry in entries.iter() {
-        let arrow = match entry.direction {
-            Direction::Incoming => "<",
-            Direction::Outgoing => ">",
+        // Direction + delivery state collapsed into one marker:
+        //   <   incoming
+        //   > outgoing, ack pending (in flight)
+        //   =   outgoing, ACK received (delivered)
+        //   !   outgoing, ack window expired (failed)
+        // The "!" gets red text to draw the eye; everything else is
+        // bold-black.
+        let arrow = match (entry.direction, entry.delivery) {
+            (Direction::Incoming, _) => "<",
+            (Direction::Outgoing, Delivery::Sent { .. }) => ">",
+            (Direction::Outgoing, Delivery::Delivered) => "=",
+            (Direction::Outgoing, Delivery::Failed) => "!",
+        };
+        let arrow_style = if matches!(entry.delivery, Delivery::Failed) {
+            ui::TEXT_RED
+        } else {
+            ui::TEXT_BOLD_BLACK
         };
         let rel = fmt_thread_time(entry.observed_at_secs);
         let bytes = entry.text.as_bytes();
@@ -622,13 +796,8 @@ where
                 while hdr.len() < HEADER_CHARS_FIRST.saturating_sub(1) {
                     let _ = hdr.push(' ');
                 }
-                Text::with_text_style(
-                    hdr.as_str(),
-                    Point::new(2, row_y),
-                    ui::TEXT_BOLD_BLACK,
-                    bottom,
-                )
-                .draw(display)?;
+                Text::with_text_style(hdr.as_str(), Point::new(2, row_y), arrow_style, bottom)
+                    .draw(display)?;
             }
 
             if let Some(&(s, e)) = lines.get(chunk_i)

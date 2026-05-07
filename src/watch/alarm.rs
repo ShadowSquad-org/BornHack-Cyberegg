@@ -225,22 +225,27 @@ static ALARM_END_MINUTE: [AtomicU8; N_ALARMS] = [const { AtomicU8::new(0) }; N_A
 static ALARM_SUMMARY: [[AtomicU8; SUMMARY_LEN]; N_ALARMS] =
     [const { [const { AtomicU8::new(0) }; SUMMARY_LEN] }; N_ALARMS];
 
-/// Curated alarm-tone choices: (menu label, melody index).
-/// Order is the cycle order in the Settings → Alarm → Tone stepper.
-/// Indices reference [`crate::fw::buzzer::MELODIES`] via the named
-/// constants in `crate` (player-pickable songs) and
-/// `crate::fw::buzzer` (system-only sounds like `ALARM`).
-const ALARM_TONES: &[(&str, u8)] = &[
-    ("Tone: Beep", crate::ALARM_INDEX as u8),
-    ("Tone: Imp. March", crate::SONG_IMPERIAL_MARCH_INDEX),
-    ("Tone: Rickroll", crate::SONG_RICKROLL_INDEX),
-    ("Tone: Pink Pant.", crate::SONG_PINK_PANTHER_INDEX),
-    ("Tone: Sandstorm", crate::SONG_SANDSTORM_INDEX),
-    ("Tone: Startup", crate::SONG_STARTUP_INDEX),
-    ("Tone: Trololo", crate::SONG_TROLOLO_INDEX),
-    ("Tone: Daisy Bell", crate::SONG_DAISY_BELL_INDEX),
-    ("Tone: Nokia", crate::SONG_NOKIA_INDEX),
-    ("Tone: Samsung", crate::SONG_OVER_THE_HORIZON_INDEX),
+/// Curated tone choices: (display name, melody index).  Shared between
+/// the alarm-tone stepper (Settings → Alarm → Tone) and the per-event
+/// notification-sound steppers in `fw::mesh::sounds` — both modules use
+/// the same set of player-pickable songs.  Indices reference
+/// [`crate::fw::buzzer::MELODIES`] via the named constants in `crate`
+/// (player songs) and `crate::fw::buzzer` (system-only sounds like
+/// `ALARM`).
+///
+/// Bare names — callers that want a "Tone: " prefix prepend it
+/// themselves.
+pub const TONES: &[(&str, u8)] = &[
+    ("Beep", crate::ALARM_INDEX as u8),
+    ("Imp. March", crate::SONG_IMPERIAL_MARCH_INDEX),
+    ("Rickroll", crate::SONG_RICKROLL_INDEX),
+    ("Pink Pant.", crate::SONG_PINK_PANTHER_INDEX),
+    ("Sandstorm", crate::SONG_SANDSTORM_INDEX),
+    ("Startup", crate::SONG_STARTUP_INDEX),
+    ("Trololo", crate::SONG_TROLOLO_INDEX),
+    ("Daisy Bell", crate::SONG_DAISY_BELL_INDEX),
+    ("Nokia", crate::SONG_NOKIA_INDEX),
+    ("Samsung", crate::SONG_OVER_THE_HORIZON_INDEX),
 ];
 
 #[inline]
@@ -515,38 +520,36 @@ pub fn alarm_enabled_label() -> &'static str {
 
 fn alarm_tone_position() -> usize {
     let m = alarm_melody();
-    ALARM_TONES
-        .iter()
-        .position(|(_, idx)| *idx == m)
-        .unwrap_or(0)
+    TONES.iter().position(|(_, idx)| *idx == m).unwrap_or(0)
 }
 
-pub fn alarm_tone_label() -> &'static str {
-    ALARM_TONES[alarm_tone_position()].0
+/// "Tone: <name>" — built fresh on each call.  Used by both the
+/// alarm-edit screen's row renderer and the Settings menu's
+/// `ValueStepper` format callback.
+pub fn alarm_tone_label() -> heapless::String<24> {
+    let mut s = heapless::String::new();
+    use core::fmt::Write;
+    let _ = write!(s, "Tone: {}", TONES[alarm_tone_position()].0);
+    s
+}
+
+fn step_melody(delta: i32) {
+    let pos = alarm_tone_position() as i32;
+    let len = TONES.len() as i32;
+    let next = pos.rem_euclid(len).wrapping_add(delta).rem_euclid(len) as usize;
+    let idx = TONES[next].1;
+    ALARM_MELODY[0].store(idx, Ordering::Relaxed);
+    super::signal_settings_dirty();
+    #[cfg(feature = "embassy-base")]
+    crate::fw::buzzer::play(idx as usize);
 }
 
 pub fn alarm_inc_melody() {
-    let pos = alarm_tone_position();
-    let next = (pos + 1) % ALARM_TONES.len();
-    let idx = ALARM_TONES[next].1;
-    ALARM_MELODY[0].store(idx, Ordering::Relaxed);
-    super::signal_settings_dirty();
-    #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(idx as usize);
+    step_melody(1);
 }
 
 pub fn alarm_dec_melody() {
-    let pos = alarm_tone_position();
-    let prev = if pos == 0 {
-        ALARM_TONES.len() - 1
-    } else {
-        pos - 1
-    };
-    let idx = ALARM_TONES[prev].1;
-    ALARM_MELODY[0].store(idx, Ordering::Relaxed);
-    super::signal_settings_dirty();
-    #[cfg(feature = "embassy-base")]
-    crate::fw::buzzer::play(idx as usize);
+    step_melody(-1);
 }
 
 // ── KV load / persist (called by the watch coordinator) ─────────────────────
@@ -571,7 +574,7 @@ pub(super) async fn load_settings_from_kv(ns: &crate::fw::kv::KvNamespace) {
         ALARM_DAYS[0].store(b[0] & 0x7F, Ordering::Relaxed);
     }
     if let Ok(1) = ns.get("alarm_mel", &mut b).await
-        && ALARM_TONES.iter().any(|(_, idx)| *idx == b[0])
+        && TONES.iter().any(|(_, idx)| *idx == b[0])
     {
         ALARM_MELODY[0].store(b[0], Ordering::Relaxed);
     }
@@ -876,7 +879,7 @@ where
     };
 
     draw_row(alarm_days_label(), ROW_DAYS_Y, EditField::Days)?;
-    draw_row(alarm_tone_label(), ROW_TONE_Y, EditField::Tone)?;
+    draw_row(&alarm_tone_label(), ROW_TONE_Y, EditField::Tone)?;
     draw_row(alarm_enabled_label(), ROW_ENABLED_Y, EditField::Enabled)?;
 
     // Underline marks the selected row.  For text rows the inverted bar
