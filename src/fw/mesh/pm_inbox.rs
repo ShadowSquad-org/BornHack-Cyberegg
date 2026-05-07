@@ -433,25 +433,60 @@ pub fn dispatch(btn: ButtonId) -> bool {
 }
 
 fn total_thread_lines(pub_key: &[u8; 32]) -> usize {
-    // Layout: each entry takes ceil(text_len / BODY_LINE_CHARS) lines
-    // — the arrow + time prefix sits on the same row as the first
-    // body chunk, so the standalone-arrow row is gone.  Walks INBOX
+    // Layout: each entry occupies `word_wrap` line count.  Walks INBOX
     // directly to avoid the ~8 KiB stack allocation `thread_for`
     // would do (it clones every PmEntry).
     INBOX.lock(|cell| {
         cell.borrow()
             .iter()
             .filter(|e| &e.pub_key == pub_key)
-            .map(|e| {
-                let bytes = e.text.len();
-                if bytes == 0 {
-                    1
-                } else {
-                    bytes.div_ceil(BODY_LINE_CHARS)
-                }
-            })
+            .map(|e| word_wrap(e.text.as_bytes(), BODY_LINE_CHARS).len().max(1))
             .sum()
     })
+}
+
+/// Word-aware line breaker — walks `bytes` and produces a list of
+/// `(start, end)` byte ranges, each ≤ `max_chars` wide and broken on
+/// space boundaries when possible.  Words longer than `max_chars`
+/// hard-break.  Trailing spaces on each line are trimmed.  Output is
+/// bounded to 16 lines (PM_TEXT_LEN=130 ÷ 14 chars/line ≈ 10 max).
+fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 16> {
+    let mut lines: heapless::Vec<(u8, u8), 16> = heapless::Vec::new();
+    let mut start = 0usize;
+    while start < bytes.len() {
+        // Skip leading spaces from a fresh line.
+        while start < bytes.len() && bytes[start] == b' ' {
+            start += 1;
+        }
+        if start >= bytes.len() {
+            break;
+        }
+        let hard_end = (start + max_chars).min(bytes.len());
+        let mut end = hard_end;
+        // If we're stopping mid-word, walk back to the last space.
+        if end < bytes.len() && bytes[end] != b' ' {
+            let mut back = end;
+            while back > start && bytes[back - 1] != b' ' {
+                back -= 1;
+            }
+            // Only soft-break if it actually saves us — `back == start`
+            // means a single word is longer than max_chars, hard-break.
+            if back > start {
+                end = back;
+            }
+        }
+        // Trim trailing spaces from the visible slice.
+        let mut visible_end = end;
+        while visible_end > start && bytes[visible_end - 1] == b' ' {
+            visible_end -= 1;
+        }
+        let _ = lines.push((start as u8, visible_end as u8));
+        if lines.is_full() {
+            break;
+        }
+        start = end;
+    }
+    lines
 }
 
 /// Wrap the shared relative-time formatter in a thread-local helper —
@@ -600,13 +635,10 @@ where
         };
         let rel = fmt_thread_time(entry.observed_at_secs);
         let bytes = entry.text.as_bytes();
-        let total_chunks = if bytes.is_empty() {
-            1
-        } else {
-            bytes.len().div_ceil(BODY_LINE_CHARS)
-        };
+        let lines = word_wrap(bytes, BODY_LINE_CHARS);
+        let chunk_count = lines.len().max(1);
 
-        for chunk_i in 0..total_chunks {
+        for chunk_i in 0..chunk_count {
             if skipped < scroll as u32 {
                 skipped += 1;
                 continue;
@@ -633,10 +665,10 @@ where
                 .draw(display)?;
             }
 
-            let start = chunk_i * BODY_LINE_CHARS;
-            let end = (start + BODY_LINE_CHARS).min(bytes.len());
-            if start < bytes.len() {
-                let slice = core::str::from_utf8(&bytes[start..end]).unwrap_or("");
+            if let Some(&(s, e)) = lines.get(chunk_i)
+                && (s as usize) < bytes.len()
+            {
+                let slice = core::str::from_utf8(&bytes[s as usize..e as usize]).unwrap_or("");
                 Text::with_text_style(slice, Point::new(BODY_X, row_y), ui::TEXT_BLACK, bottom)
                     .draw(display)?;
             }
@@ -661,7 +693,10 @@ where
             .draw(display)?;
     }
 
-    let hint = "Fire: Reply  Cancel: back";
+    // Footer hint — kept ≤ 21 chars × 7 px ≈ 147 px to fit the
+    // 152-px display.  Was previously "Fire: Reply  Cancel: back"
+    // (25 chars, ~175 px) which ran off the right edge.
+    let hint = "Fire reply  Esc back";
     Text::with_text_style(hint, Point::new(2, 152), ui::TEXT_BLACK, bottom).draw(display)?;
     let _ = WHITE;
     Ok(())
