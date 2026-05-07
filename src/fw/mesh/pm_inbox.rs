@@ -520,12 +520,7 @@ where
         // Row 1: peer name (with `(N)` unread suffix).
         let name = s.peer_name.as_str();
         let name = if name.is_empty() { "(unknown)" } else { name };
-        let max_chars = 14usize;
-        let name_short = if name.len() > max_chars {
-            &name[..max_chars]
-        } else {
-            name
-        };
+        let name_short = crate::truncate_str(name, 14);
         Text::with_text_style(name_short, Point::new(2, row_mid - 1), txt, bottom).draw(display)?;
         if s.unread > 0 {
             let mut badge: heapless::String<8> = heapless::String::new();
@@ -539,13 +534,7 @@ where
             Direction::Incoming => "<",
             Direction::Outgoing => ">",
         };
-        let preview_max = 20usize;
-        let preview = s.last_text.as_str();
-        let preview_short = if preview.len() > preview_max {
-            &preview[..preview_max]
-        } else {
-            preview
-        };
+        let preview_short = crate::truncate_str(s.last_text.as_str(), 20);
         let mut combined: heapless::String<32> = heapless::String::new();
         let _ = combined.push_str(arrow);
         let _ = combined.push(' ');
@@ -586,7 +575,7 @@ where
     let _ = title_buf.push_str("PM: ");
     let name = resolve_peer_name(pub_key);
     let n = name.as_str();
-    let n_short = if n.len() > 16 { &n[..16] } else { n };
+    let n_short = crate::truncate_str(n, 16);
     let _ = title_buf.push_str(n_short);
     draw_header(display, title_buf.as_str(), bat_prc)?;
 
