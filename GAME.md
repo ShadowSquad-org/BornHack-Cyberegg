@@ -30,7 +30,7 @@ power, your pet will be right where you left it.
  │            [pet / egg]                │  pet area (animation)
  │                                       │
  ├───────────────────────────────────────┤
- │  [Feed]  [Heal]  [Play]  [Rest]      │  bottom icon row
+ │   [Feed]  [Heal]  [Play]  [Rest]      │  bottom icon row
  └───────────────────────────────────────┘
 ```
 
@@ -42,12 +42,12 @@ an icon. Press **Fire** to open the action menu for the selected icon.
 Your pet has five stats displayed as percentage bars (lower is better for
 you — 0% means the pet is perfectly content):
 
-| Stat          | What happens when it's high              | How to fix        |
-| ------------- | ---------------------------------------- | ----------------- |
-| **Hunger**    | Pet gets hungry, other stats worsen      | Feed              |
-| **Tired**     | Pet is exhausted                         | Put to sleep      |
-| **Drained**   | Pet lacks inspiration                    | Relax, mini-games |
-| **Sick**      | Pet's health deteriorates                | Give medicine     |
+| Stat          | What happens when it's high                                      | How to fix        |
+| ------------- | ---------------------------------------------------------------- | ----------------- |
+| **Hunger**    | Pet gets hungry, other stats worsen                              | Feed              |
+| **Tired**     | Pet is exhausted                                                 | Put to sleep      |
+| **Drained**   | Pet lacks inspiration                                            | Relax, mini-games |
+| **Sick**      | Pet's health deteriorates                                        | Give medicine     |
 | **Miserable** | Pet is unhappy; speeds up drained decay and sick-condition decay | Play              |
 
 Stats interact: if multiple stats are bad, the pet becomes miserable
@@ -189,13 +189,13 @@ floor drops to 0 again and Play's reset works as before.
 
 ### Action durations and cooldowns
 
-| Action    | Duration     | Cooldown | Effect                                        |
-| --------- | ------------ | -------- | --------------------------------------------- |
-| **Feed**  | 2 ticks      | 12 ticks | Reduces hunger and drained                    |
-| **Heal**  | 3 ticks      | 24 ticks | Reduces sick                                  |
-| **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                |
+| Action    | Duration     | Cooldown | Effect                                                                 |
+| --------- | ------------ | -------- | ---------------------------------------------------------------------- |
+| **Feed**  | 2 ticks      | 12 ticks | Reduces hunger and drained                                             |
+| **Heal**  | 3 ticks      | 24 ticks | Reduces sick                                                           |
+| **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                                         |
 | **Play**  | 4 ticks      | 48 ticks | Resets miserable down to the active floor (costs hunger/tired/drained) |
-| **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery       |
+| **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery                                |
 
 Actions are mutually exclusive. During an action and its cooldown, the
 corresponding stat's decay is suppressed.
