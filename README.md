@@ -11,6 +11,28 @@ Embassy-based async firmware for the BornHack CyberÆgg badge (nRF52840).
 | LoRa radio | SX1262            | SPI2           |
 | BLE        | nRF52840 built-in | nrf-sdc / MPSL |
 
+## Documentation
+
+All project documentation is in markdown files at the repository root and in `vendor/` subdirectories:
+
+| Document | Description |
+| -------- | ----------- |
+| **[README.md](README.md)** | This file — project overview, hardware, build instructions, known issues |
+| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
+| **[GAME.md](GAME.md)** | Player-facing game instructions, controls, stats, mini-games |
+| **[GAMES.md](GAMES.md)** | Developer reference for all seven mini-games, controls, scoring |
+| **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
+| **[HWTEST.md](HWTEST.md)** | Hardware test firmware — factory diagnostics, beep codes |
+| **[License.md](License.md)** | Apache 2.0 + Empty File License |
+
+Vendor library documentation:
+
+| Document | Description |
+| -------- | ----------- |
+| **[vendor/ssd1675/README.md](vendor/ssd1675/README.md)** | SSD1675/SSD1675B ePaper display driver |
+| **[vendor/meshcore/README.md](vendor/meshcore/README.md)** | MeshCore LoRa packet protocol — `no_std` Rust port |
+| **[vendor/meshcore-companion/README.md](vendor/meshcore-companion/README.md)** | MeshCore companion protocol — BLE NUS commands/responses |
+
 ## Architecture
 
 The firmware runs several concurrent Embassy tasks:
@@ -143,6 +165,8 @@ The badge has a 152x152 e-paper display and a 4-direction joystick with Fire, Ex
 | Cancel         | Go back / dismiss                                          |
 
 ### Watch
+
+> **Full documentation:** [CLOCK.md](CLOCK.md) — watch faces, alarm system, calendar browser, ICS parser.
 
 A standalone watch screen — accessible from the main icon grid via Left/Right — with two switchable faces:
 

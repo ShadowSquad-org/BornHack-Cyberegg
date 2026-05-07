@@ -1,5 +1,7 @@
 # Cyber Ægg Hardware Test Firmware
 
+> **See also:** [README.md](README.md) for project overview and build instructions.
+
 `hwtest` is a standalone firmware image for verifying a freshly assembled
 Cyber Ægg PCB before the production firmware is loaded. It runs without a
 bootloader, boots straight from reset, performs a fixed sequence of

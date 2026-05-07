@@ -216,6 +216,8 @@ Source: `src/signed_channel.rs::Csprng`.
 
 ## 4. Recognised commands
 
+> **See also:** [CLOCK.md](CLOCK.md) for the alarm/calendar system that these commands interact with.
+
 The signed-channel dispatcher routes the verified plaintext through
 `game::station::apply`. Currently recognised phrases (UTF-8, exact
 byte match after lowercasing and ASCII-whitespace trimming):
