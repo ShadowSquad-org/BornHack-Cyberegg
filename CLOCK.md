@@ -29,9 +29,32 @@ Circular dial with:
 
 ### Time Source
 
-The clock reads `unix_now()` (set via the MeshCore companion `SET_DEVICE_TIME` 0x06 command) and applies `TIMEZONE_OFFSET` (configured under **Settings → Timezone**).
+The clock reads `unix_now()` which returns the current Unix timestamp in seconds. The time **must be synced after every boot** — it is **not persisted** and resets to `None` on power loss or reboot.
 
-When the clock has not been synced, the screen shows **"Clock not set"**.
+#### Sync paths
+
+There are two ways the clock gets set:
+
+| Method | Mechanism | When |
+| ------ | ---------- | ---- |
+| **BLE companion** | `SET_DEVICE_TIME` (0x06) command over Nordic UART Service | Primary method; use the MeshCore app to set the time |
+| **On-air seeding** | `fw::mesh::repeater_time` module; receives time from MeshCore repeaters/servers over LoRa | Fallback for badges without BLE; refines the clock gradually |
+
+Once the BLE companion has set the clock, `BLE_TIME_LOCKED` is latched `true` and **on-air time refinement stops** — BLE is considered authoritative. The lock survives until the next reboot (BLE disconnect does NOT clear it).
+
+#### Timezone
+
+`TIMEZONE_OFFSET` (configured under **Settings → Timezone**) **is persisted** to flash and survives reboots. It is applied to the Unix timestamp to get local time:
+
+```
+local_time = unix_now() + (TIMEZONE_OFFSET as i32) * 3600
+```
+
+The offset range is -12…+14 hours. Default is `+2` (CEST) after first boot.
+
+#### Unsynced state
+
+When the clock has not been synced, the screen shows **"Clock not set"**. The watch face still renders but with no meaningful time.
 
 The watch redraws on every minute boundary via the shared `MINUTE_TICK` signal — no second hand, as the e-paper refresh is too slow.
 
