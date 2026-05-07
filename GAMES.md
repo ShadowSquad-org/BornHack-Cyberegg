@@ -1,5 +1,7 @@
 # BornPets mini-games
 
+> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing instructions, [CLOCK.md](CLOCK.md) for watch/alarm/calendar docs.
+
 The BornPets game screen ships with seven mini-games.  Each one is
 opened from the Play modal (`Game screen → Play → <name>`), runs as
 a full-screen takeover, and is exited with **Cancel**.

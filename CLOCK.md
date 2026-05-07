@@ -1,5 +1,7 @@
 # Clock, Alarm & Calendar — CyberÆgg Watch App
 
+> **See also:** [README.md](README.md) for project overview, [GAME.md](GAME.md) for player-facing game instructions, [GAMES.md](GAMES.md) for mini-game developer reference, [NFC_README.md](NFC_README.md) for NFC signed channel protocol.
+
 The badge includes a full-featured watch application with two switchable faces, a 32-slot alarm system, and a calendar browser — all accessible from the **Clock** icon in the main icon grid.
 
 ---

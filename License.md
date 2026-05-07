@@ -2,6 +2,8 @@
 
 ## Apache License 2.0
 
+> **See also:** [README.md](README.md) for project overview and Documentation section linking all markdown files.
+
 The original code in this repository — every file authored as part of the
 CyberÆgg badge firmware project that is not a vendored or third-party
 component — is licensed under the **Apache License, Version 2.0** (the
