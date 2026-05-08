@@ -105,6 +105,13 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(200).await;
     spawner.must_spawn(led::led_task(led_red, led_green, led_blue));
 
+    // Boot breadcrumb #1 — red 50% duty.  The initial GPIO blink above
+    // confirms the LEDs work; this then keeps a steady "alive, booting"
+    // pulse on while the rest of init runs (KV, watch, sprites, mesh,
+    // EPD).  Stays on until EPD init below; the ICS-import blue/green
+    // pulses overlay it harmlessly.
+    led::set_led(&led::LED_RED, led::LedState::Duty50);
+
     // ── Signed-channel CSPRNG seed ───────────────────────────────────────
     // Draw 32 bytes from the on-chip TRNG via direct register access
     // before BLE init takes ownership of `p.RNG`.  After this point the
@@ -276,6 +283,13 @@ async fn main(spawner: Spawner) {
     .unwrap();
     defmt::info!("EPD initialized");
 
+    // Boot breadcrumb #2 — switch from red to blue while the boot
+    // tri-color refresh + remaining task spawns finish.  This is the
+    // longest dark phase in the original boot, ~13s, so a colour change
+    // here gives users a "no, it's not stuck" signal partway through.
+    led::set_led(&led::LED_RED, led::LedState::Off);
+    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
+
     // Boot-time full blank: clear both planes to white and push with the
     // tri-color waveform so red ink particles get cycled too.  Wipes any
     // residual ghosting from the previous power-on session before the
@@ -354,6 +368,12 @@ async fn main(spawner: Spawner) {
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");
+
+    // Boot breadcrumb #3 — single green pulse, then idle.  Tells the
+    // user the badge is past init and the screen carousel is live.
+    // `Duty50Once` auto-resets to Off after one 500 ms pulse.
+    led::set_led(&led::LED_BLUE, led::LedState::Off);
+    led::set_led(&led::LED_GREEN, led::LedState::Duty50Once);
     let main_loop = display_loop(&mut display, &mut button_rcvr);
 
     // USB mass storage is a separately-spawned task (see above), so it's
