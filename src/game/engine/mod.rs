@@ -951,7 +951,7 @@ impl GameState {
 
     /// Add a variable-magnitude bonus to inspiration (reduces
     /// `drained` by `amount`).  No cooldown set, no hunger cost —
-    /// callers pair this with [`award_inspiration`] for those.
+    /// callers pair this with [`Self::award_inspiration`] for those.
     /// Used by Triple Born to scale the on-close bonus by score.
     pub fn add_drained_relief(&mut self, amount: u16) {
         if self.phase != Phase::Active {

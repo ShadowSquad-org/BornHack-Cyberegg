@@ -63,7 +63,7 @@ pub enum Toast {
     /// `STATION_COOLDOWN_SECS` and formatted at draw time.
     StationCooldown = 13,
     /// Triple Born close-out bonus.  The score earned is read from
-    /// [`TRIPLEBORN_BONUS_SCORE`] and formatted at draw time.
+    /// `TRIPLEBORN_BONUS_SCORE` and formatted at draw time.
     TripleBornBonus = 14,
 }
 

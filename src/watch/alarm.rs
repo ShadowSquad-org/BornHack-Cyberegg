@@ -523,7 +523,7 @@ fn alarm_tone_position() -> usize {
     TONES.iter().position(|(_, idx)| *idx == m).unwrap_or(0)
 }
 
-/// "Tone: <name>" — built fresh on each call.  Used by both the
+/// `"Tone: <name>"` — built fresh on each call.  Used by both the
 /// alarm-edit screen's row renderer and the Settings menu's
 /// `ValueStepper` format callback.
 pub fn alarm_tone_label() -> heapless::String<24> {
