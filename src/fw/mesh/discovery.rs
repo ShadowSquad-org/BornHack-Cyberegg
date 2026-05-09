@@ -2,15 +2,15 @@
 //!
 //! Holds adverts heard during this boot regardless of the auto-add policy.
 //! With auto-add off (the firmware default) advertisements would otherwise
-//! evaporate after [`meshcore::log_advert`] processes them — this cache
-//! keeps the metadata around so the user can see them on the Contacts
-//! screen and **Add** them to the persistent [`ContactStore`].
+//! evaporate after `meshcore::log_advert` processes them — this
+//! cache keeps the metadata around so the user can see them on the
+//! Contacts screen and **Add** them to the persistent [`ContactStore`].
 //!
-//! This complements the lighter [`OBSERVATIONS`] ring inside
-//! [`contacts_screen`] — that one is keyed by `pub_key` only and serves
-//! the "Last:" relative-time/live-dot rendering.  Here we keep the full
-//! advert metadata (name, role, GPS) needed to *promote* an entry into
-//! the contact store.
+//! This complements the lighter `OBSERVATIONS` ring inside
+//! [`super::contacts_screen`] — that one is keyed by `pub_key` only and
+//! serves the "Last:" relative-time/live-dot rendering.  Here we keep
+//! the full advert metadata (name, role, GPS) needed to *promote* an
+//! entry into the contact store.
 //!
 //! Bounded ring (`CAP`) of recent observations; oldest entry is evicted
 //! when full.  Per-boot — clears on reboot.  Entries that successfully
@@ -19,7 +19,6 @@
 //! duplication is harmless and avoids an extra "remove from discovery"
 //! round-trip.
 //!
-//! [`OBSERVATIONS`]: super::contacts_screen
 //! [`ContactStore`]: super::contacts::ContactStore
 
 use core::cell::RefCell;
@@ -31,7 +30,7 @@ const CAP: usize = 32;
 
 /// One advert's display-and-add metadata.  Sized for the Contacts-screen
 /// row + Add action — enough to build a `Contact` via
-/// [`Contact::from_advert`].
+/// [`super::contacts::Contact::from_advert`].
 #[derive(Clone)]
 pub struct DiscoveryEntry {
     pub pub_key: [u8; 32],

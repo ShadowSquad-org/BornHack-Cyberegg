@@ -13,8 +13,8 @@
 //!   scrolls; Fire opens the thread.
 //! - `Thread { pub_key }` — chronological history with that peer. Up/Down
 //!   scrolls within long threads; Fire opens the reply keyboard via the
-//!   existing [`contacts_screen::start_pm_compose`] flow.  Cancel returns to
-//!   the Inbox.
+//!   existing [`super::contacts_screen::start_pm_compose`] flow.  Cancel
+//!   returns to the Inbox.
 //!
 //! Per-peer "last read" tracking is intentionally not persisted —
 //! `(N)` unread badges reset on reboot, which matches the discovery-

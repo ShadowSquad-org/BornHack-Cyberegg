@@ -677,7 +677,7 @@ fn role_glyph(node_type: u8) -> Option<&'static str> {
 }
 
 /// Per-contact popup action.  Picked from a vec returned by
-/// [`popup_items`] and dispatched by the popup `Fire` arm.
+/// `popup_items` and dispatched by the popup `Fire` arm.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PopupAction {
     Pm,
