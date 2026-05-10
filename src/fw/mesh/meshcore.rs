@@ -394,6 +394,9 @@ pub async fn run_meshcore_listener<'a>(
                             PayloadType::Response => {
                                 handle_response_recv(&msg.payload, identity).await
                             }
+                            PayloadType::Req => {
+                                handle_req_recv(&mut lora, &msg.payload, identity).await
+                            }
                             PayloadType::Path => {
                                 handle_path_recv(&msg.payload, rssi, identity).await
                             }
@@ -3479,6 +3482,201 @@ fn handle_path_login_response(extra: &[u8], sender_pub_key: &[u8; meshcore::PUB_
         acl_perms: if success { acl_perms } else { 0 },
         fw_ver_level: if success { fw_ver_level } else { 0 },
     });
+}
+
+// ---------------------------------------------------------------------------
+// PAYLOAD_TYPE_REQ receive: on-air requests from peers
+// ---------------------------------------------------------------------------
+//
+// Incoming `Req` packets are AES-encrypted under a per-contact shared
+// secret (X25519 ECDH between this node's secret key and the sender's
+// public key).  After verify_mac + decrypt the plaintext is:
+//
+//     [timestamp:4 LE][req_type:1][req_data: variable]
+//
+// Currently only `REQ_TYPE_GET_TELEMETRY_DATA` is honoured; other
+// request types (get_status, neighbours, access_list, …) are repeater
+// / room-server features and not relevant to the badge.
+
+/// CayenneLPP voltage type discriminator: 2-byte big-endian, value × 100.
+const LPP_VOLTAGE: u8 = 116;
+/// CayenneLPP channel used for the badge's own telemetry (matches upstream
+/// `TELEM_CHANNEL_SELF`).
+const TELEM_CHANNEL_SELF: u8 = 1;
+/// Permission bit covering "base" telemetry (battery + uptime); upstream
+/// `TELEM_PERM_BASE`.
+const TELEM_PERM_BASE: u8 = 0x01;
+/// Bit in `Contact.flags` (after `>> 1`) that grants this contact the
+/// `TELEM_PERM_BASE` permission when `telemetry_mode_base == ALLOW_FLAGS`.
+const CONTACT_FLAG_TELEM_BASE: u8 = 0x02;
+
+async fn handle_req_recv(
+    lora: &mut SimpleLoRa<'_>,
+    payload: &[u8],
+    identity: &DeviceIdentity,
+) {
+    use meshcore::payload::req;
+
+    let msg = match req::deserialize(payload) {
+        Ok(m) => m,
+        Err(_) => {
+            defmt::debug!("Req recv: failed to parse envelope");
+            return;
+        }
+    };
+
+    if msg.dest_hash != identity.pub_key[0] {
+        // Not addressed to us — drop quietly (no MAC computation cost).
+        return;
+    }
+
+    let store = contacts::ContactStore::new();
+    let mut slots = [0u16; contacts::MAX_SLOTS_PER_BUCKET];
+    let n = store.hash_index_lookup(msg.src_hash, &mut slots).await;
+    for &slot in &slots[..n] {
+        let Some(c) = store.read_slot(slot as usize).await else { continue };
+        if c.pub_key[0] != msg.src_hash {
+            continue;
+        }
+        if req::verify_mac(&identity.sec_key, &c.pub_key, &msg).is_err() {
+            continue;
+        }
+        let dec = match req::decrypt(&identity.sec_key, &c.pub_key, &msg) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        match dec.req_type {
+            req::REQ_TYPE_GET_TELEMETRY_DATA => {
+                handle_telem_request_recv(
+                    lora, identity, &c, dec.timestamp, &dec.data,
+                )
+                .await;
+            }
+            other => {
+                defmt::debug!(
+                    "Req recv: unhandled type 0x{=u8:02x} from {=[u8]:02x}",
+                    other,
+                    &c.pub_key[..6],
+                );
+            }
+        }
+        return;
+    }
+
+    defmt::debug!(
+        "Req recv: no contact match for src_hash 0x{=u8:02x}",
+        msg.src_hash,
+    );
+}
+
+async fn handle_telem_request_recv(
+    lora: &mut SimpleLoRa<'_>,
+    identity: &DeviceIdentity,
+    sender: &contacts::Contact,
+    sender_timestamp: u32,
+    req_data: &[u8],
+) {
+    use meshcore::MAX_PAYLOAD_SIZE;
+    use meshcore::MAX_TRANS_UNIT;
+    use meshcore::packet::{Message, PayloadType, RouteType};
+    use meshcore::payload::response;
+
+    // Permission check — matches upstream `MyMesh::onContactRequest`.
+    let mode = crate::TELEMETRY_MODE_BASE.load(core::sync::atomic::Ordering::Relaxed);
+    let base_granted = match mode {
+        0 => false,                                        // TELEM_MODE_DENY
+        1 => (sender.flags & CONTACT_FLAG_TELEM_BASE) != 0, // ALLOW_FLAGS — bit 1
+        _ => true,                                         // ALLOW_ALL
+    };
+    let inverse_mask = req_data.first().copied().unwrap_or(0);
+    let permitted = base_granted && ((!inverse_mask) & TELEM_PERM_BASE) != 0;
+    if !permitted {
+        defmt::debug!(
+            "Telem req: denied for {=[u8]:02x} (mode={=u8} mask=0x{=u8:02x})",
+            &sender.pub_key[..6],
+            mode,
+            inverse_mask,
+        );
+        return;
+    }
+
+    // Build CayenneLPP voltage frame: [chan=1][type=0x74][value × 100 :u16 BE].
+    let battery_mv = crate::fw::battery::read_mv() as u32;
+    let v_x100 = ((battery_mv * 100) / 1000).min(u16::MAX as u32) as u16;
+    let lpp = [
+        TELEM_CHANNEL_SELF,
+        LPP_VOLTAGE,
+        (v_x100 >> 8) as u8,
+        (v_x100 & 0xFF) as u8,
+    ];
+
+    let resp = match response::encrypt(
+        &identity.sec_key,
+        &identity.pub_key,
+        &sender.pub_key,
+        sender_timestamp,
+        &lpp,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            defmt::warn!(
+                "Telem resp encrypt failed: {:?}",
+                defmt::Debug2Format(&e),
+            );
+            return;
+        }
+    };
+
+    let mut payload_buf = [0u8; MAX_PAYLOAD_SIZE];
+    let mut payload_len = 0usize;
+    if response::serialize(&resp, &mut payload_buf, &mut payload_len).is_err() {
+        return;
+    }
+
+    let mut msg_payload: heapless::Vec<u8, MAX_PAYLOAD_SIZE> = heapless::Vec::new();
+    let _ = msg_payload.extend_from_slice(&payload_buf[..payload_len]);
+
+    // Route: prefer Direct with the sender's stored out_path; else flood.
+    let (route, path_len_byte, path_bytes, transport_code) =
+        if sender.out_path_len != contacts::OUT_PATH_UNKNOWN {
+            let actual = sender.path_actual_bytes();
+            let mut pv: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> = heapless::Vec::new();
+            let _ = pv.extend_from_slice(&sender.out_path[..actual]);
+            (RouteType::Direct, sender.out_path_len, pv, 0u16)
+        } else {
+            let (r, code) = flood_route(PayloadType::Response.to_u8(), &msg_payload);
+            (r, flood_path_len_byte(), heapless::Vec::new(), code)
+        };
+
+    let msg = Message {
+        payload_type: PayloadType::Response,
+        route,
+        version: 0,
+        transport_code,
+        path_len_byte,
+        path: path_bytes,
+        payload: msg_payload,
+    };
+
+    let mut frame = [0u8; MAX_TRANS_UNIT];
+    match meshcore::packet::serialize(&msg, &mut frame) {
+        Ok(len) => {
+            if let Err(e) = lora.send_message(&frame[..len]).await {
+                defmt::warn!("Telem resp TX failed: {:?}", e);
+            } else {
+                defmt::info!(
+                    "Telem resp sent: {=u32}mV to {=[u8]:02x} via {=str}",
+                    battery_mv,
+                    &sender.pub_key[..6],
+                    if route == RouteType::Direct { "direct" } else { "flood" },
+                );
+            }
+        }
+        Err(e) => defmt::warn!(
+            "Telem resp serialize failed: {:?}",
+            defmt::Debug2Format(&e),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

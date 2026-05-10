@@ -3,6 +3,7 @@ pub mod board;
 pub mod button;
 pub mod buzzer;
 pub mod device_id;
+pub mod emoji;
 pub mod epd;
 pub mod fat12;
 pub mod flash;

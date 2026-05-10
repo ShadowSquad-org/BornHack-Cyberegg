@@ -547,14 +547,9 @@ async fn nus_peripheral_loop<C>(
             radio_params.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
             other_params.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
             other_params.multi_acks = crate::MULTI_ACKS.load(Relaxed);
-            let mode: u8 = if crate::TELEMETRY_SHARE.load(Relaxed) {
-                2
-            } else {
-                0
-            };
-            other_params.telemetry_mode_base = mode;
-            other_params.telemetry_mode_loc = mode;
-            other_params.telemetry_mode_env = mode;
+            other_params.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
+            other_params.telemetry_mode_loc = 0; // no GPS hardware
+            other_params.telemetry_mode_env = 0; // no environment sensors
         }
 
         // When BLE is disabled, stop advertising and wait until re-enabled.

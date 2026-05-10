@@ -215,11 +215,19 @@ pub static LORA_CLIENT_REPEAT: AtomicBool = AtomicBool::new(false);
 pub static ADVERT_LOC_POLICY: AtomicBool = AtomicBool::new(false);
 /// `OtherParams.multi_acks` — number of aggregated ACKs (1 or 2).
 pub static MULTI_ACKS: AtomicU8 = AtomicU8::new(1);
-/// Master telemetry-share toggle. Mirrors `OtherParams.telemetry_mode_*`:
-/// false ⇒ all three modes forced to 0 (deny mesh telemetry requests).
-/// true  ⇒ all three modes forced to 2 (allow all).
-/// BLE/companion telemetry reads are a separate path and are not affected.
-pub static TELEMETRY_SHARE: AtomicBool = AtomicBool::new(false);
+/// Telemetry-base permission for incoming on-air `REQ_TYPE_GET_TELEMETRY_DATA`
+/// requests, matching upstream MeshCore `_prefs.telemetry_mode_base`:
+///
+/// - `0` — `TELEM_MODE_DENY`: drop every request.
+/// - `1` — `TELEM_MODE_ALLOW_FLAGS`: respond only when the requester's stored
+///   `Contact.flags` has bit 1 set (per-contact opt-in).
+/// - `2` — `TELEM_MODE_ALLOW_ALL`: respond to every authenticated request.
+///
+/// Loc/env modes stay 0 — the badge has no GPS or environment sensors. The
+/// 6-bit packed wire value emitted via `OtherParams.telemetry_mode` is
+/// `(0 << 4) | (0 << 2) | base`. BLE/companion self-telemetry reads bypass
+/// this gate entirely.
+pub static TELEMETRY_MODE_BASE: AtomicU8 = AtomicU8::new(0);
 
 /// Periodic self-advert scheduling — driven by the `advert_ticker_task` in
 /// `bin/embassy.rs`.

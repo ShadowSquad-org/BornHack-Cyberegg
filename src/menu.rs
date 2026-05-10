@@ -914,12 +914,20 @@ fn action_advert_send_now() {
 fn action_advert_send_now() {}
 
 // ── Telemetry share ────────────────────────────────────────────────────────
+//
+// Three-state, mirrors the MeshCore companion-app "Allow Telemetry Requests"
+// setting (No / From Specific Contacts / Yes).  Encoded as 2 bits in
+// `OtherParams.telemetry_mode_base`:
+//   0 = TELEM_MODE_DENY        — never respond
+//   1 = TELEM_MODE_ALLOW_FLAGS — respond when the requester's contact.flags
+//                                bit 1 is set (per-contact opt-in)
+//   2 = TELEM_MODE_ALLOW_ALL   — respond to every authenticated request
 
 fn label_telemetry_share() -> &'static str {
-    if crate::TELEMETRY_SHARE.load(Ordering::Relaxed) {
-        "Telemetry: ON"
-    } else {
-        "Telemetry: OFF"
+    match crate::TELEMETRY_MODE_BASE.load(Ordering::Relaxed) {
+        0 => "Telemetry: No",
+        1 => "Telemetry: Contacts",
+        _ => "Telemetry: Yes",
     }
 }
 
@@ -1014,8 +1022,10 @@ fn action_ignore_blink() {
 }
 
 fn action_telemetry_toggle() {
-    let cur = crate::TELEMETRY_SHARE.load(Ordering::Relaxed);
-    crate::TELEMETRY_SHARE.store(!cur, Ordering::Relaxed);
+    // Cycle: No (0) → Contacts (1) → Yes (2) → No.
+    let cur = crate::TELEMETRY_MODE_BASE.load(Ordering::Relaxed);
+    let next = (cur + 1) % 3;
+    crate::TELEMETRY_MODE_BASE.store(next, Ordering::Relaxed);
     #[cfg(all(feature = "mesh", feature = "embassy-base"))]
     crate::OTHER_PARAMS_CHANGED_SIGNAL.signal(());
 }

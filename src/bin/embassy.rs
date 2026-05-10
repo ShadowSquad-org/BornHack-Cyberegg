@@ -194,11 +194,10 @@ async fn main(spawner: Spawner) {
                     op.multi_acks.min(2)
                 };
                 bornhack_aegg::MULTI_ACKS.store(ma, Relaxed);
-                // Derived master-telemetry flag — "on" iff any mode is non-zero.
-                let share = op.telemetry_mode_base != 0
-                    || op.telemetry_mode_loc != 0
-                    || op.telemetry_mode_env != 0;
-                bornhack_aegg::TELEMETRY_SHARE.store(share, Relaxed);
+                // Only telemetry_mode_base is exposed via the badge UI;
+                // loc/env stay 0 (no GPS, no env sensors).
+                bornhack_aegg::TELEMETRY_MODE_BASE
+                    .store(op.telemetry_mode_base.min(2), Relaxed);
             }
             bornhack_aegg::fw::mesh::PATH_HASH_MODE
                 .store(settings::get_path_hash_mode().await.min(2), Relaxed);
