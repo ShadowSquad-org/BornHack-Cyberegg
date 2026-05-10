@@ -112,11 +112,9 @@ async fn other_params_loop() -> ! {
             });
         op.advert_loc_policy = crate::ADVERT_LOC_POLICY.load(Relaxed) as u8;
         op.multi_acks = crate::MULTI_ACKS.load(Relaxed);
-        let share = crate::TELEMETRY_SHARE.load(Relaxed);
-        let mode: u8 = if share { 2 } else { 0 };
-        op.telemetry_mode_base = mode;
-        op.telemetry_mode_loc = mode;
-        op.telemetry_mode_env = mode;
+        op.telemetry_mode_base = crate::TELEMETRY_MODE_BASE.load(Relaxed);
+        op.telemetry_mode_loc = 0;
+        op.telemetry_mode_env = 0;
         match settings::set_other_params(op).await {
             Ok(()) => defmt::info!("settings: other_params persisted from menu"),
             Err(e) => defmt::warn!("settings: other_params persist failed: {:?}", e),

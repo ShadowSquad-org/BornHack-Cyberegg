@@ -32,51 +32,83 @@
 /// than that get truncated at the wrap level — the caller's storage
 /// limits already cap text length well below this.
 pub fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 32> {
+    // Validate UTF-8 once up front; we walk by `char_indices` below so
+    // every cut lands on a codepoint boundary.  Non-UTF-8 input produces
+    // an empty layout — callers already handle that via `unwrap_or("")`.
+    let Ok(s) = core::str::from_utf8(bytes) else {
+        return heapless::Vec::new();
+    };
+
+    /// Display columns occupied by a single codepoint in the badge's
+    /// monospaced text grid: emoji = 2 (renders as a 14-px tile, two
+    /// `FONT_7X13` cells), variation selectors = 0, everything else = 1.
+    fn columns_for(c: char) -> usize {
+        let cp = c as u32;
+        if cp == 0xFE0E || cp == 0xFE0F {
+            0
+        } else if crate::fw::emoji::atlas_index(cp).is_some() {
+            crate::fw::emoji::EMOJI_COLUMNS
+        } else {
+            1
+        }
+    }
+
     let mut lines: heapless::Vec<(u8, u8), 32> = heapless::Vec::new();
-    let is_break = |b: u8| b == b'\n' || b == b'\r';
     let mut pos = 0usize;
     let mut after_soft_wrap = false;
-    while pos < bytes.len() {
+
+    while pos < s.len() {
         // Only swallow leading spaces when the previous iteration
         // ended with a soft wrap — that space was the wrap point and
         // shouldn't appear at the start of the continuation.  After a
         // hard break (or on the first line, or after a hard cut),
         // leading whitespace is intentional content.
         if after_soft_wrap {
-            while pos < bytes.len() && bytes[pos] == b' ' {
+            while pos < s.len() && s.as_bytes()[pos] == b' ' {
                 pos += 1;
             }
-            if pos >= bytes.len() {
+            if pos >= s.len() {
                 break;
             }
         }
         let line_start = pos;
 
-        // Scan up to max_chars or first hard-break char.
-        let limit_window = (line_start + max_chars).min(bytes.len());
-        let mut end = limit_window;
-        for i in line_start..limit_window {
-            if is_break(bytes[i]) {
-                end = i;
+        // Walk codepoints, accumulating display columns, until we hit
+        // `max_chars` columns or a hard-break (`\n` / `\r`).  `end` is
+        // a byte index — char_indices guarantees codepoint boundaries.
+        let mut column = 0usize;
+        let mut end = s.len();
+        let mut stopped_at_break = false;
+        for (i, c) in s[line_start..].char_indices() {
+            let abs_i = line_start + i;
+            if c == '\n' || c == '\r' {
+                end = abs_i;
+                stopped_at_break = true;
                 break;
             }
+            let w = columns_for(c);
+            if column + w > max_chars {
+                end = abs_i;
+                break;
+            }
+            column += w;
         }
-        let stopped_at_break = end < bytes.len() && is_break(bytes[end]);
+
+        let bytes_slice = s.as_bytes();
         let mut soft_wrapped = false;
 
-        // Soft-wrap: try to back up to a space so the line ends at a
-        // word boundary.  If the only space within the line is part
-        // of the leading-whitespace cluster (visible content would be
-        // empty), fall through to a hard cut at the window edge — a
-        // mid-word break is uglier than indented content collapsing.
-        if !stopped_at_break && end < bytes.len() && bytes[end] != b' ' {
+        // Soft-wrap: back up to a space so the line ends at a word
+        // boundary.  If the only space in the line is part of the
+        // leading-whitespace cluster (visible content would be empty),
+        // fall through to a hard cut at the window edge.
+        if !stopped_at_break && end < bytes_slice.len() && bytes_slice[end] != b' ' {
             let mut back = end;
-            while back > line_start && bytes[back - 1] != b' ' {
+            while back > line_start && bytes_slice[back - 1] != b' ' {
                 back -= 1;
             }
             if back > line_start {
                 let mut probe = back;
-                while probe > line_start && bytes[probe - 1] == b' ' {
+                while probe > line_start && bytes_slice[probe - 1] == b' ' {
                     probe -= 1;
                 }
                 if probe > line_start {
@@ -84,16 +116,15 @@ pub fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 32> 
                     soft_wrapped = true;
                 }
             }
-        } else if !stopped_at_break && end < bytes.len() && bytes[end] == b' ' {
-            // Cleanly stopped at a space at the window edge.
+        } else if !stopped_at_break && end < bytes_slice.len() && bytes_slice[end] == b' ' {
             soft_wrapped = true;
         }
 
-        // Trim trailing spaces from the visible slice (so a line
-        // ending in soft-wrap whitespace doesn't leave dangling
-        // glyphs at the right edge).
+        // Trim trailing spaces from the visible slice.  Spaces are
+        // ASCII, never part of a multi-byte UTF-8 sequence, so this
+        // never violates codepoint boundaries.
         let mut visible_end = end;
-        while visible_end > line_start && bytes[visible_end - 1] == b' ' {
+        while visible_end > line_start && bytes_slice[visible_end - 1] == b' ' {
             visible_end -= 1;
         }
         let _ = lines.push((line_start as u8, visible_end as u8));
@@ -103,10 +134,10 @@ pub fn word_wrap(bytes: &[u8], max_chars: usize) -> heapless::Vec<(u8, u8), 32> 
 
         pos = end;
         if stopped_at_break {
-            if pos < bytes.len() && bytes[pos] == b'\r' {
+            if pos < bytes_slice.len() && bytes_slice[pos] == b'\r' {
                 pos += 1;
             }
-            if pos < bytes.len() && bytes[pos] == b'\n' {
+            if pos < bytes_slice.len() && bytes_slice[pos] == b'\n' {
                 pos += 1;
             }
             after_soft_wrap = false;

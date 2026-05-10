@@ -499,11 +499,16 @@ where
             Text::with_text_style(&nick, Point::new(4, y + 1), FONT_INV, left).draw(display)?;
             y += LH;
 
-            // Message text — word-aware wrap with newline support.
+            // Message text — word-aware wrap with newline support.  Renders
+            // via `emoji::draw_string` so emoji codepoints in messages
+            // come out as monochrome icons instead of the font's
+            // missing-glyph indicator.  `text_wrap::word_wrap` already
+            // counts emoji codepoints as 2 cells so line breaks land
+            // on the right column.
             let text_bytes = text.as_bytes();
             for (s, e) in super::text_wrap::word_wrap(text_bytes, chars_per_line) {
                 let slice = core::str::from_utf8(&text_bytes[s as usize..e as usize]).unwrap_or("");
-                Text::with_text_style(slice, Point::new(8, y), FONT, left).draw(display)?;
+                crate::fw::emoji::draw_string(display, slice, Point::new(8, y), FONT, left)?;
                 y += LH;
             }
         }

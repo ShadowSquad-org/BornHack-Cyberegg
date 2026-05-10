@@ -805,14 +805,17 @@ where
             {
                 let slice = core::str::from_utf8(&bytes[s as usize..e as usize]).unwrap_or("");
                 // Bold body too — regular weight is hard to read on
-                // the smudgy e-paper at 7×13.
-                Text::with_text_style(
+                // the smudgy e-paper at 7×13.  Routed through
+                // `emoji::draw_string` so emoji codepoints in the
+                // thread come out as monochrome icons instead of the
+                // font's missing-glyph indicator.
+                crate::fw::emoji::draw_string(
+                    display,
                     slice,
                     Point::new(BODY_X, row_y),
                     ui::TEXT_BOLD_BLACK,
                     bottom,
-                )
-                .draw(display)?;
+                )?;
             }
             painted += 1;
         }
