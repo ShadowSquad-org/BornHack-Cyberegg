@@ -211,8 +211,11 @@ Header shows `PM: <name>` (truncated to 16 chars).
 Per-message layout: arrow + 3-char relative time prefix on the same row
 as the first body chunk; continuation lines indent under the body.
 Word-aware wrapping breaks on space boundaries when possible (hard-break
-only for words longer than the line width).  Footer hint
-`Fire reply  Esc back`.
+only for words longer than the line width).  A curated set of common
+emoji (~65 codepoints, 48 visual archetypes) render as 13×13 monochrome
+bitmaps via `fw::emoji::draw_string`, occupying 2 character cells each —
+see the **Emoji rendering** section in the top-level README for the full
+codepoint list and aliasing rules.  Footer hint `Fire reply  Esc back`.
 
 ```
 < 3m  hello there how

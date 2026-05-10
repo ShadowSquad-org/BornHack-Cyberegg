@@ -312,13 +312,21 @@ The text entry system uses a hierarchical joystick-driven keyboard. The screen s
 
 When Shift is active, an inverted "S" indicator appears in the keyboard area. The next letter entered will be uppercase, then shift automatically deactivates.
 
+### Emoji rendering
+
+PM threads and the channel browser render a curated set of common MeshCore emoji as **13×13 monochrome bitmaps**. The badge's `FONT_7X13` / `FONT_7X13_BOLD` only cover ISO-8859-1, so without this codepoints like ❤, 👍 or 😂 would otherwise come out as the font's missing-glyph indicator.
+
+Hand-drawn 1-bit bitmaps live in [`src/fw/emoji.rs`](src/fw/emoji.rs) and map ~65 codepoints onto **48 visual archetypes** — close variants alias to the same glyph (e.g. ❤/♥ share one heart, 😂/🤣 share one laugh) since at 13×13 mono there's no perceptible difference. Each emoji claims **2 character cells (14 px advance)** in the monospaced grid, and `text_wrap::word_wrap` walks codepoints — counting emoji as 2 columns and variation selectors as 0 — so soft-wrap boundaries still line up. Unicode variation selectors `U+FE0E` (text style) / `U+FE0F` (emoji style) immediately following a known emoji are silently consumed.
+
+Adding a glyph is a single entry: a 13-row ASCII stencil (`#` = on) packed by the `pack_glyph` const-fn, plus a codepoint → atlas-index row in `EMOJI_LOOKUP`.
+
 ### Settings menu
 
 The main menu contains a **Settings** submenu with:
 
 - **Bluetooth** — view BLE device name, enable/disable BLE, clear stored pairings (with confirmation)
 - **LoRa** — enable/disable LoRa radio, boost RX gain, radio preset picker (community presets), TX power
-- **MeshCore** — set node name, client repeat (with confirmation), adverts (on/off, interval), telemetry sharing, multi-ACK, path hash length, reset channels, reset contacts
+- **MeshCore** — set node name, client repeat (with confirmation), adverts (on/off, interval), telemetry sharing (3-state: **No** / **Contacts** / **Yes** — mirrors the MeshCore companion app's "Allow Telemetry Requests" setting; `Contacts` only responds to peers with `Contact.flags` bit 1 set), multi-ACK, path hash length, reset channels, reset contacts
 - **Timezone** — UTC offset stepper
 - **Factory reset** — wipes all settings and reboots (with confirmation)
 
