@@ -840,7 +840,7 @@ const PIZZA: [u8; GLYPH_BYTES] = pack_glyph([
     "####.#.#.####",
     "#############",
     ".###########.",
-    ".###########.",
+    "...#######...",
 ]);
 
 // 🌭 — hot dog.  Horizontal sausage in a bun with a mustard zigzag
