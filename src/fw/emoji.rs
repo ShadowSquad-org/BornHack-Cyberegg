@@ -620,9 +620,343 @@ const EGG: [u8; GLYPH_BYTES] = pack_glyph([
     ".............",
 ]);
 
+// 🧥 — coat / jacket.  Small V-neck collar on top, a solid shoulder
+// line spans the full width, arms hang from the shoulder line at the
+// outer edges with a one-pixel gap separating them from the body
+// walls (so the sleeves read as distinct from the torso), single
+// button column down the middle, A-line taper to a narrower hem.
+const JACKET: [u8; GLYPH_BYTES] = pack_glyph([
+    ".....###.....",
+    "....##.##....",
+    ".###########.",
+    "##.#.....#.##",
+    "##.#.....#.##",
+    "##.#..#..#.##",
+    "##.#..#..#.##",
+    "##.#..#..#.##",
+    "##.#..#..#.##",
+    ".#.#.....#.#.",
+    "..##.....##..",
+    "...#.....#...",
+    "...#######...",
+]);
+
+// 🎒 — school backpack.  Carry-loop on top, straps fan out to the
+// shoulders of the main body, centred front pocket.
+const BACKPACK: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....###.....",
+    "....##.##....",
+    "...##...##...",
+    "..##.....##..",
+    "#############",
+    "#...........#",
+    "#...#####...#",
+    "#...#...#...#",
+    "#...#####...#",
+    "#...........#",
+    "#...........#",
+    "#############",
+]);
+
+// 🍓 — strawberry.  Stem on top, calyx leaves spreading with finger
+// gaps, body with checker-pattern seeds, body tapers to a point.
+const STRAWBERRY: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    "....#####....",
+    "...#######...",
+    "....##.##....",
+    ".###########.",
+    "##.#.#.#.#.##",
+    "#.#.#.#.#.#.#",
+    "##.#.#.#.#.##",
+    ".##.......##.",
+    "..##.....##..",
+    "...##...##...",
+    "....#####....",
+    "......#......",
+]);
+
+// 🦊 — fox face.  Pointy ears that taper to a single pixel at the top
+// and widen down to where they merge with the head, triangular head
+// with two eyes, snout/jaw tapering to a chin point.  Doubles as 👿
+// imp / angry face with horns — the pointy ears read as horns.
+const FOX: [u8; GLYPH_BYTES] = pack_glyph([
+    ".#.........#.",
+    "##.........##",
+    "###.......###",
+    "####.....####",
+    ".###########.",
+    ".#..#...#..#.",
+    ".#.........#.",
+    ".#....#....#.",
+    "..#.#####.#..",
+    "...#######...",
+    "....#####....",
+    ".....###.....",
+    "......#......",
+]);
+
+// 👀 — eyes.  Two eye outlines floating in the centre of the cell with
+// pupils as a single column of pixels.
+const EYES: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+    ".####...####.",
+    "##.##...##.##",
+    "#.#.#...#.#.#",
+    "##.##...##.##",
+    ".####...####.",
+    ".............",
+    ".............",
+    ".............",
+    ".............",
+]);
+
+// ⚠ — warning sign.  Outline of an equilateral triangle pointing up,
+// with a tall exclamation mark (body + dot) drawn down the middle.
+const WARNING: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....#.#.....",
+    "....#...#....",
+    "....#.#.#....",
+    "...#..#..#...",
+    "...#..#..#...",
+    "..#...#...#..",
+    "..#...#...#..",
+    ".#....#....#.",
+    ".#.........#.",
+    ".#....#....#.",
+    ".###########.",
+    ".............",
+]);
+
+// ⚡ — high-voltage lightning bolt.  Z-shape going from upper-right to
+// lower-left with a horizontal kink in the middle.
+const LIGHTNING: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".......##....",
+    "......##.....",
+    ".....##......",
+    "....##.......",
+    "...########..",
+    "......##.....",
+    ".....##......",
+    "....##.......",
+    "...##........",
+    "..##.........",
+    ".##..........",
+    "##...........",
+]);
+
+// 💀 — skull face.  Rounded dome at the top, eye sockets dug into the
+// cheekbones, small nose ridge, jaw with a row of teeth.
+const SKULL: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    "....#####....",
+    "...#######...",
+    "..#########..",
+    ".##.##.##.##.",
+    "##.#######.##",
+    "##.#######.##",
+    "##.........##",
+    "##....#....##",
+    "##....#....##",
+    ".###########.",
+    ".##.#.#.#.##.",
+    "...#######...",
+]);
+
+// 👻 — ghost.  Round head outline with two eye dots and a mouth dot,
+// scalloped wavy bottom.
+const GHOST: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".....###.....",
+    "....#...#....",
+    "...#.....#...",
+    "..#.......#..",
+    ".#.........#.",
+    ".#..#...#..#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".#....#....#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".##.##.##.##.",
+]);
+
+// 🤖 — robot face.  Antenna on top, rectangular head with two square
+// eyes and a speaker-grille mouth, neck + shoulder hint below.
+const ROBOT: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    "....#####....",
+    ".###########.",
+    ".#.##...##.#.",
+    ".#.##...##.#.",
+    ".#.........#.",
+    ".##.#.#.#.##.",
+    ".#.........#.",
+    ".###########.",
+    ".....###.....",
+    ".###########.",
+    "##.........##",
+    "##.........##",
+]);
+
+// ☕ — hot beverage.  Two wavy steam wisps rising over a mug with a
+// distinct handle loop (3×3 with a 1-pixel hole) protruding to the
+// right of the cup body.
+const COFFEE: [u8; GLYPH_BYTES] = pack_glyph([
+    ".....#.#.....",
+    ".....#.#.....",
+    "....##.##....",
+    ".....#.#.....",
+    ".............",
+    ".##########..",
+    ".#........#..",
+    ".#........###",
+    ".#........#.#",
+    ".#........###",
+    ".#........#..",
+    ".##########..",
+    ".............",
+]);
+
+// 🍕 — pizza slice.  Filled triangular wedge pointing up; pepperoni
+// rendered as round negative-space cut-outs inside the cheese; a
+// slightly narrower crust strip along the bottom edge.
+const PIZZA: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....###.....",
+    "....#####....",
+    "...##.#.##...",
+    "...#######...",
+    "..####.####..",
+    "..#########..",
+    ".####.#.####.",
+    ".###########.",
+    "####.#.#.####",
+    "#############",
+    ".###########.",
+    "...#######...",
+]);
+
+// 🌭 — hot dog.  Horizontal sausage in a bun with a mustard zigzag
+// down the centre.
+const HOTDOG: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".............",
+    ".............",
+    ".###########.",
+    ".#####.#####.",
+    ".#.........#.",
+    ".#.#######.#.",
+    ".#.#.#.#.#.#.",
+    ".#.#######.#.",
+    ".#.........#.",
+    ".#####.#####.",
+    ".###########.",
+    ".............",
+]);
+
+// 🦄 — unicorn face.  Tall pointy horn rising above the head, wide
+// ear flares on either side of the head, snout tapering downward.
+const UNICORN: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....###.....",
+    ".....#.#.....",
+    "....##.##....",
+    "....#####....",
+    "...#######...",
+    "####.....####",
+    "##.#######.##",
+    "##.#######.##",
+    "##..#####..##",
+    ".###########.",
+    "..#########..",
+    "....#####....",
+]);
+
+// 🐉 — dragon head.  Curved horns reaching out at the top, broad
+// snout with eyes + nostrils, tapering chin underneath.
+const DRAGON: [u8; GLYPH_BYTES] = pack_glyph([
+    "##.........##",
+    "##.........##",
+    "###.......###",
+    "####.....####",
+    ".###########.",
+    "##.#.###.#.##",
+    "#...#####...#",
+    "#...#.#.#...#",
+    "#.##.....##.#",
+    "##.#######.##",
+    ".###########.",
+    "..#########..",
+    "....#####....",
+]);
+
+// 🧙 — wizard.  Tall pointed wizard's hat with a wide brim, oval
+// face below the brim with two eye dots, long downward-pointing
+// beard with a split tip.
+const WIZARD: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....###.....",
+    "....#####....",
+    "...#######...",
+    ".###########.",
+    ".............",
+    "....#####....",
+    "...#.#.#.#...",
+    "...#######...",
+    "....#####....",
+    "...##.#.##...",
+    "..##.....##..",
+    ".##.......##.",
+]);
+
+// 🔔 — bell.  Hanging loop at the top, bell body widening from
+// narrow at the shoulder to a full-width rim, small triangular
+// clapper poking out below the rim.
+const BELL: [u8; GLYPH_BYTES] = pack_glyph([
+    "......#......",
+    ".....#.#.....",
+    "......#......",
+    ".....###.....",
+    "....#...#....",
+    "...#.....#...",
+    "...#.....#...",
+    "..#.......#..",
+    "..#.......#..",
+    ".#.........#.",
+    ".###########.",
+    ".....###.....",
+    "......#......",
+]);
+
+// ✉ — envelope.  Rectangle outline with the back flap drawn as a
+// V pointing down from the upper corners to a vertex in the middle,
+// blank body below.
+const ENVELOPE: [u8; GLYPH_BYTES] = pack_glyph([
+    ".............",
+    ".###########.",
+    ".#.........#.",
+    ".##.......##.",
+    ".#.##...##.#.",
+    ".#..##.##..#.",
+    ".#...###...#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".#.........#.",
+    ".###########.",
+    ".............",
+]);
+
 /// All atlas bitmaps in their fixed index order.  Indices are referenced
 /// by [`EMOJI_LOOKUP`].
-const ATLAS: [&[u8; GLYPH_BYTES]; 32] = [
+const ATLAS: [&[u8; GLYPH_BYTES]; 50] = [
     &HEART,       // 0
     &SMILE,       // 1
     &LAUGH,       // 2
@@ -655,6 +989,24 @@ const ATLAS: [&[u8; GLYPH_BYTES]; 32] = [
     &LLAMA,       // 29  🦙 / 🐫 / 🐪
     &CLIPPY,      // 30  📎
     &TRASH,       // 31  🗑
+    &JACKET,      // 32  🧥
+    &BACKPACK,    // 33  🎒
+    &STRAWBERRY,  // 34  🍓 / 💣 (bomb alias)
+    &FOX,         // 35  🦊 / 👿 (imp alias)
+    &EYES,        // 36  👀
+    &WARNING,     // 37  ⚠
+    &LIGHTNING,   // 38  ⚡
+    &SKULL,       // 39  💀
+    &GHOST,       // 40  👻
+    &ROBOT,       // 41  🤖
+    &COFFEE,      // 42  ☕
+    &PIZZA,       // 43  🍕
+    &HOTDOG,      // 44  🌭
+    &UNICORN,     // 45  🦄
+    &DRAGON,      // 46  🐉
+    &WIZARD,      // 47  🧙
+    &BELL,        // 48  🔔
+    &ENVELOPE,    // 49  ✉ / 📧 / 📨 / 📩 (email aliases)
 ];
 
 // ---------------------------------------------------------------------------
@@ -668,34 +1020,52 @@ const EMOJI_LOOKUP: &[(u32, u8)] = &[
     (0x0231B, 27), // ⌛ hourglass done (aliased to CLOCK)
     (0x023F1, 27), // ⏱ stopwatch (aliased to CLOCK)
     (0x02600, 15), // ☀ sun with rays (aliased to SUN)
+    (0x02615, 42), // ☕ hot beverage
     (0x0263A, 1),  // ☺ relaxed
     (0x02665, 0),  // ♥ heart suit
+    (0x026A0, 37), // ⚠ warning sign
+    (0x026A1, 38), // ⚡ high voltage
     (0x02705, 17), // ✅ white heavy check mark
+    (0x02709, 49), // ✉ envelope
     (0x02714, 17), // ✔ heavy check mark
     (0x0274C, 21), // ❌ cross mark
     (0x02764, 0),  // ❤ red heart
     (0x02B50, 20), // ⭐ star
+    (0x1F32D, 44), // 🌭 hot dog
+    (0x1F353, 34), // 🍓 strawberry
+    (0x1F355, 43), // 🍕 pizza
     (0x1F389, 10), // 🎉 party popper
     (0x1F38A, 10), // 🎊 confetti ball (aliased to PARTY)
+    (0x1F392, 33), // 🎒 backpack
     (0x1F3B5, 18), // 🎵 musical note
     (0x1F3B6, 18), // 🎶 multiple musical notes (aliased to NOTE)
     (0x1F3BC, 18), // 🎼 musical score (aliased to NOTE)
+    (0x1F409, 46), // 🐉 dragon
     (0x1F42A, 29), // 🐪 dromedary camel (aliased to LLAMA)
     (0x1F42B, 29), // 🐫 two-hump camel (aliased to LLAMA)
     (0x1F439, 28), // 🐹 hamster (cuy)
+    (0x1F440, 36), // 👀 eyes
     (0x1F44C, 5),  // 👌 OK hand
     (0x1F44D, 5), // 👍 thumbs up
     (0x1F44F, 5),  // 👏 clap
+    (0x1F47B, 40), // 👻 ghost
     (0x1F47E, 16), // 👾 alien monster
+    (0x1F47F, 35), // 👿 imp / angry face with horns (aliased to FOX)
+    (0x1F480, 39), // 💀 skull
     (0x1F494, 0),  // 💔 broken heart
     (0x1F495, 0), // 💕 two hearts
     (0x1F496, 0), // 💖 sparkling heart
     (0x1F499, 0),  // 💙 blue heart
+    (0x1F4A3, 34), // 💣 bomb (aliased to STRAWBERRY)
     (0x1F4A4, 24), // 💤 ZZZ (aliased to SLEEPING)
     (0x1F4AA, 5),  // 💪 muscle
     (0x1F4AF, 22), // 💯 hundred points
     (0x1F4CE, 30), // 📎 paperclip (clippy)
+    (0x1F4E7, 49), // 📧 e-mail (aliased to ENVELOPE)
+    (0x1F4E8, 49), // 📨 incoming envelope (aliased to ENVELOPE)
+    (0x1F4E9, 49), // 📩 envelope with downward arrow (aliased to ENVELOPE)
     (0x1F506, 15), // 🔆 high brightness (sun)
+    (0x1F514, 48), // 🔔 bell
     (0x1F525, 6),  // 🔥 fire
     (0x1F55C, 27), // 🕜 one-thirty (aliased to CLOCK)
     (0x1F55D, 27), // 🕝 two-thirty (aliased to CLOCK)
@@ -728,12 +1098,17 @@ const EMOJI_LOOKUP: &[(u32, u8)] = &[
     (0x1F64F, 8),  // 🙏 folded hands
     (0x1F680, 12), // 🚀 rocket
     (0x1F914, 7),  // 🤔 thinking
+    (0x1F916, 41), // 🤖 robot face
     (0x1F917, 4), // 🤗 hugging
     (0x1F923, 2), // 🤣 rolling on the floor laughing
     (0x1F95A, 9),  // 🥚 egg (Cyber Aegg mascot)
     (0x1F973, 10), // 🥳 partying face (aliased to PARTY)
     (0x1F97A, 13), // 🥺 pleading face
+    (0x1F984, 45), // 🦄 unicorn face
+    (0x1F98A, 35), // 🦊 fox
     (0x1F999, 29), // 🦙 llama
+    (0x1F9D9, 47), // 🧙 mage / wizard
+    (0x1F9E5, 32), // 🧥 coat / jacket
 ];
 
 /// Returns the atlas index for a given codepoint, if any.
