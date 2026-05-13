@@ -271,6 +271,17 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
     draw_test_row(display, font, header_style, "HFXO", Some(hw.hfxo_ok), 46);
     draw_test_row(display, font, header_style, "LFXO", Some(hw.lfxo_ok), 62);
 
+    // Footer prompt — block boot on a deliberate factory-worker
+    // acknowledgement rather than a 2 s timeout, so the test result
+    // screen stays up indefinitely if no one's there.
+    let _ = Text::with_text_style(
+        "Press FIRE to continue",
+        Point::new(4, 130),
+        font,
+        header_style,
+    )
+    .draw(display);
+
     // Single refresh paints the whole status block.  Phase 5 will
     // split this into per-test partial refreshes so a hang between
     // tests still leaves the prior status on screen.
@@ -278,12 +289,38 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
         .update_tc(crate::fw::epd::current_lut_speed())
         .await;
 
-    // Brief hold so a factory worker can read the screen before
-    // boot continues.
-    Timer::after_millis(2000).await;
+    wait_for_fire_press().await;
 
     mark_passed().await;
     defmt::info!("hwtest: first-boot Phase 4 complete");
+}
+
+/// Block until the joystick Fire button is pressed (P1_02 goes low).
+///
+/// Runs before `bin/embassy.rs::main` spawns the `run_buttons` task,
+/// so we can't use the `BTN_WATCH` channel yet.  Instead we briefly
+/// steal the `P1_02` peripheral, build a transient `Input` with
+/// pull-up, await the falling edge, then drop — the GPIO config is
+/// released so the later `Input::new(board!(p, joy_fire), ..)` in
+/// `main` re-initialises cleanly.
+///
+/// # Safety
+///
+/// `unsafe { P1_02::steal() }` is sound here because:
+///
+/// 1. This function only runs from `run_first_boot_interactive`, which
+///    main calls before any other code touches `joy_fire`.
+/// 2. The stolen `Peri` is consumed by `Input::new` and dropped at
+///    end-of-block, releasing the pin before `main` continues.
+async fn wait_for_fire_press() {
+    use embassy_nrf::gpio::{Input, Pull};
+    use embassy_nrf::peripherals;
+
+    defmt::info!("hwtest: waiting for Fire button to acknowledge results");
+    let pin = unsafe { peripherals::P1_02::steal() };
+    let mut fire = Input::new(pin, Pull::Up);
+    fire.wait_for_falling_edge().await;
+    defmt::info!("hwtest: Fire pressed");
 }
 
 /// Draw one test row: name on the left, status on the right.  Status
