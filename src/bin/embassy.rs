@@ -126,6 +126,18 @@ async fn main(spawner: Spawner) {
     // task reads or writes flash-backed state.
     kv::init().await;
 
+    // ── Factory test gate ────────────────────────────────────────────────
+    // On a virgin badge (no `hwtest:passed` flag in the KV store) run the
+    // factory test sequence before the rest of the firmware initialises.
+    // Currently a Phase 1 stub that auto-passes after a short splash; the
+    // intent is to grow the per-peripheral checks from `bin/hwtest.rs`
+    // into here so a factory-floor flash → power-on cycle exercises the
+    // hardware once, stamps the flag, and ships.  See
+    // [`bornhack_aegg::fw::factory_test`] for the phase plan.
+    if !bornhack_aegg::fw::factory_test::is_passed().await {
+        bornhack_aegg::fw::factory_test::run().await;
+    }
+
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
     {
