@@ -107,6 +107,44 @@ pub struct HardwareInfo {
     /// internal RC means timers drift by ~250 ppm.  `false` does
     /// **not** block boot — RTC keeps ticking on either source.
     pub lfxo_ok: bool,
+    /// Battery voltage in millivolts (SAADC sample of the 1/3
+    /// resistor-divider on AIN7).  `None` if the probe was skipped
+    /// or errored; outside the sane range (2.5 – 5.0 V) → factory
+    /// test fails this row.
+    pub battery_mv: Option<u16>,
+    /// Buzzer pin (P0_13) idles low through the 1 MΩ PCB
+    /// pull-down.  `false` → pull-down missing / pin shorted to
+    /// VCC; the audible buzzer will fail to drive predictably.
+    pub buzzer_pin_ok: bool,
+    /// QWIIC SDA (P1_10) reads high with no internal pull,
+    /// indicating the external I²C pull-up on the PCB is intact.
+    pub qwiic_sda_ok: bool,
+    /// QWIIC SCL (P1_11) reads high with no internal pull — same
+    /// check as [`Self::qwiic_sda_ok`].
+    pub qwiic_scl_ok: bool,
+}
+
+/// Inclusive lower bound for a "sane" battery reading, mirroring
+/// `bin/hwtest.rs::VBAT_MIN_MV`.
+const VBAT_MIN_MV: u16 = 2_500;
+/// Inclusive upper bound for a "sane" battery reading.
+const VBAT_MAX_MV: u16 = 5_000;
+
+impl HardwareInfo {
+    /// `true` when every populated probe passed.  `battery_mv: None`
+    /// counts as a fail (the probe ran but couldn't get a sample).
+    pub fn all_pass(&self) -> bool {
+        let bat_ok = self
+            .battery_mv
+            .map(|mv| (VBAT_MIN_MV..=VBAT_MAX_MV).contains(&mv))
+            .unwrap_or(false);
+        self.hfxo_ok
+            && self.lfxo_ok
+            && bat_ok
+            && self.buzzer_pin_ok
+            && self.qwiic_sda_ok
+            && self.qwiic_scl_ok
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,9 +164,108 @@ pub async fn probe() -> HardwareInfo {
     defmt::info!("hwtest: probe start");
     let hfxo_ok = probe_hfxo().await;
     let lfxo_ok = probe_lfxo();
-    let info = HardwareInfo { hfxo_ok, lfxo_ok };
+    let buzzer_pin_ok = probe_buzzer_pin();
+    let qwiic_sda_ok = probe_qwiic_pin_high("SDA", unsafe {
+        embassy_nrf::peripherals::P1_10::steal()
+    });
+    let qwiic_scl_ok = probe_qwiic_pin_high("SCL", unsafe {
+        embassy_nrf::peripherals::P1_11::steal()
+    });
+    let battery_mv = probe_battery().await;
+    let info = HardwareInfo {
+        hfxo_ok,
+        lfxo_ok,
+        battery_mv,
+        buzzer_pin_ok,
+        qwiic_sda_ok,
+        qwiic_scl_ok,
+    };
     defmt::info!("hwtest: probe done — {:?}", info);
     info
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5a silent peripheral probes
+// ---------------------------------------------------------------------------
+
+/// Buzzer pin (P0_13) idles low through the 1 MΩ PCB pull-down.
+/// Reading high here means the pull-down is missing or the pin is
+/// shorted to VCC — the buzzer task would drive unpredictably.
+///
+/// # Safety
+///
+/// `unsafe P0_13::steal()` is sound because the buzzer pin is not
+/// owned by any other code at this point in boot: `bin/embassy.rs`
+/// builds its `Buzzer` only after `factory_test::probe()` returns.
+fn probe_buzzer_pin() -> bool {
+    use embassy_nrf::gpio::{Input, Pull};
+    let pin = unsafe { embassy_nrf::peripherals::P0_13::steal() };
+    let input = Input::new(pin, Pull::None);
+    let high = input.is_high();
+    if high {
+        defmt::warn!("hwtest: BUZZER pin FAIL (high — expected low via 1MΩ pull-down)");
+    } else {
+        defmt::info!("hwtest: BUZZER pin OK (low at rest)");
+    }
+    !high
+}
+
+/// QWIIC bus pin probe — generic over the steal site so the same
+/// helper covers both SDA and SCL.  With internal pulls disabled
+/// (Pull::None) a healthy bus reads high via the external I²C
+/// pull-ups on the PCB.
+fn probe_qwiic_pin_high<P>(label: &'static str, peri: embassy_nrf::Peri<'static, P>) -> bool
+where
+    P: embassy_nrf::gpio::Pin,
+{
+    use embassy_nrf::gpio::{Input, Pull};
+    let input = Input::new(peri, Pull::None);
+    let ok = input.is_high();
+    if !ok {
+        defmt::warn!("hwtest: QWIIC {} FAIL (reads low — missing external pull-up?)", label);
+    } else {
+        defmt::info!("hwtest: QWIIC {} OK", label);
+    }
+    ok
+}
+
+/// Battery voltage sample via SAADC (P0_31 / AIN7 through the
+/// 1/3 resistor divider gated by P0_07 = `vbat_rd`).  Returns the
+/// reading in millivolts, or `None` on error.
+///
+/// # Safety
+///
+/// `unsafe steal()` of SAADC, P0_31, and P0_07 is sound because
+/// `bin/embassy.rs::main` does not call `battery::init` (which
+/// claims those peripherals) until well after `factory_test::probe`
+/// returns.  All three handles drop at end of this function.
+async fn probe_battery() -> Option<u16> {
+    use embassy_nrf::gpio::{Level, Output, OutputDrive};
+    use embassy_nrf::peripherals;
+    use embassy_nrf::saadc::{ChannelConfig, Config, Saadc};
+
+    let saadc = unsafe { peripherals::SAADC::steal() };
+    let vbat = unsafe { peripherals::P0_31::steal() };
+    let vbat_rd_pin = unsafe { peripherals::P0_07::steal() };
+
+    // Enable the divider (vbat_rd low) and let the RC settle.
+    let mut vbat_rd = Output::new(vbat_rd_pin, Level::Low, OutputDrive::Standard);
+    Timer::after_millis(5).await;
+
+    let ch_cfg = ChannelConfig::single_ended(vbat);
+    let mut s = Saadc::new(saadc, crate::fw::battery::BatteryIrqs, Config::default(), [ch_cfg]);
+    let mut buf = [0i16; 1];
+    s.sample(&mut buf).await;
+    let raw = buf[0].max(0) as u32;
+
+    // Disable the divider so it doesn't bleed current after we drop.
+    vbat_rd.set_high();
+
+    // Same formula as `fw::battery::BatteryMonitor::read_mv`:
+    //   3.6 V reference × gain factor × 3 (divider) ÷ 4096 (12-bit ADC).
+    let mv = ((raw * 10_800) / 4_096) as u16;
+    defmt::info!("hwtest: battery {} mV (raw={})", mv, raw);
+    Some(mv)
 }
 
 /// Actively start HFXO with a short timeout.  Mirrors
@@ -237,62 +374,123 @@ pub async fn mark_passed() {
 /// power: if the firmware locks up mid-test, the last visible line
 /// *without* a `PASS` next to it is the broken step.
 ///
-/// Phase 4 currently renders the early clock probe results (already
-/// completed by [`probe`] before EPD init) plus an implicit `EPD PASS`
-/// row whose mere visibility proves the e-paper works.  Phase 5 adds
-/// peripheral tests that actually exercise the write-then-test pattern
-/// with partial refreshes between steps.
+/// Strict factory mode: any test failure halts the badge in factory-test
+/// state forever.  KV flag is NOT stamped, so a power-cycle re-enters
+/// this same screen.  Factory worker pulls the badge for rework; after
+/// re-flow the next power-on re-probes and (hopefully) passes.
+///
+/// ## Sequence
+///
+/// 1. Full clean (`update_tc` Mode 2, tri-color full waveform) — wipes
+///    residual ghosting AND constitutes the first real EPD test.
+/// 2. Header → partial refresh (`update_bw` Mode 1, fast LUT) — second
+///    real EPD test.
+/// 3. `EPD            PASS` row stamped: implicit because we wouldn't
+///    have reached this point if the SPI handshake, RESET pulse, OTP
+///    LUT readback, full refresh, or fast refresh had failed.
+/// 4. For each clock probed earlier (HFXO, LFXO): draw name → partial
+///    refresh, then draw PASS/FAIL → partial refresh.  (The clock
+///    results are pre-known from [`probe`], so the screen reveals
+///    them in two-step fashion to demonstrate the pattern Phase 5
+///    will use for tests that genuinely could hang mid-run.)
+/// 5. Footer + final refresh.  All-pass → wait for Fire → stamp KV.
+///    Any fail → halt forever.
 pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::fw::epd::EpdGfx<'_>) {
-    use embedded_graphics::Drawable;
     use embedded_graphics::geometry::Point;
     use embedded_graphics::mono_font::MonoTextStyle;
     use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
-    use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
+    use embedded_graphics::text::{Baseline, TextStyleBuilder};
+    use ssd1675::UpdateMode;
     use ssd1675::graphics::Color;
 
     defmt::info!("hwtest: first-boot interactive entered (Phase 4)");
     defmt::info!("hwtest:   hardware seen at first boot: {:?}", hw);
 
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
-    let header_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    let style = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    let lut_speed = crate::fw::epd::current_lut_speed();
 
+    // ── Step 1: full clean (tri-color Mode 2) ─────────────────────────
+    // First real EPD test: if `update_tc` hangs or errors here, the
+    // EPD line below never gets drawn — failure pin-pointed.
     display.clear(Color::White);
+    let _ = display.update_tc(lut_speed).await;
 
-    // Header.
-    let _ = Text::with_text_style("FACTORY TEST", Point::new(20, 4), font, header_style)
-        .draw(display);
+    // ── Step 2: header + partial refresh (Mode 1) ─────────────────────
+    // Second real EPD test: validates the fast LUT path.
+    draw_text(display, "FACTORY TEST", Point::new(20, 4), font, style);
+    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
 
-    // EPD self-test: if you can read this line, the e-paper works.
-    // Drawn first so it appears at the top of the test list.
-    draw_test_row(display, font, header_style, "EPD", Some(true), 30);
+    // ── Step 3: EPD row ───────────────────────────────────────────────
+    // Implicit pass: reaching this point means init_epd returned (SPI +
+    // RESET + BUSY + OTP LUT all worked), tri-color Mode 2 worked, and
+    // fast Mode 1 worked.  Anything else would have hung above.
+    draw_test_row(display, font, style, "EPD", Some(true), 30);
+    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
 
-    // HFXO / LFXO results from the earlier `probe()` call (which ran
-    // before EPD was initialised, hence no per-step refresh option).
-    draw_test_row(display, font, header_style, "HFXO", Some(hw.hfxo_ok), 46);
-    draw_test_row(display, font, header_style, "LFXO", Some(hw.lfxo_ok), 62);
+    // ── Step 4 onwards: per-test rows.  Each test draws its name
+    //    first (partial refresh), then its result (partial refresh).
+    //    Compact 14-px row pitch fits the 6 probed tests + EPD +
+    //    header + footer on the 152-px-tall screen.
+    let battery_ok = hw
+        .battery_mv
+        .map(|mv| (VBAT_MIN_MV..=VBAT_MAX_MV).contains(&mv))
+        .unwrap_or(false);
 
-    // Footer prompt — block boot on a deliberate factory-worker
-    // acknowledgement rather than a 2 s timeout, so the test result
-    // screen stays up indefinitely if no one's there.
-    let _ = Text::with_text_style(
-        "Press FIRE to continue",
-        Point::new(4, 130),
-        font,
-        header_style,
-    )
-    .draw(display);
+    for (label, result, y) in [
+        ("HFXO", hw.hfxo_ok, 44),
+        ("LFXO", hw.lfxo_ok, 58),
+        ("VBAT", battery_ok, 72),
+        ("BUZZ", hw.buzzer_pin_ok, 86),
+        ("SDA",  hw.qwiic_sda_ok, 100),
+        ("SCL",  hw.qwiic_scl_ok, 114),
+    ] {
+        draw_test_row(display, font, style, label, None, y);
+        let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+        draw_test_row(display, font, style, label, Some(result), y);
+        let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+    }
 
-    // Single refresh paints the whole status block.  Phase 5 will
-    // split this into per-test partial refreshes so a hang between
-    // tests still leaves the prior status on screen.
-    let _ = display
-        .update_tc(crate::fw::epd::current_lut_speed())
-        .await;
+    // ── Footer ───────────────────────────────────────────────────────
+    let all_pass = hw.all_pass();
+    let footer = if all_pass {
+        "Press FIRE to ship"
+    } else {
+        "NEEDS REWORK"
+    };
+    draw_text(display, footer, Point::new(4, 130), font, style);
+    let _ = display.update_bw(UpdateMode::Mode1, lut_speed).await;
+
+    if !all_pass {
+        defmt::error!(
+            "hwtest: FAILURE on first boot — halting in factory-test mode forever \
+             (HardwareInfo: {:?})",
+            hw,
+        );
+        loop {
+            // Long sleep — the watchdog task is feeding the WDT so
+            // the chip won't reset out of this state.  Screen retains
+            // the FAIL row indefinitely; that's the point.
+            Timer::after_secs(60).await;
+        }
+    }
 
     wait_for_fire_press().await;
-
     mark_passed().await;
     defmt::info!("hwtest: first-boot Phase 4 complete");
+}
+
+/// Convenience: draw a single text string at the given position.
+fn draw_text(
+    display: &mut crate::fw::epd::EpdGfx<'_>,
+    text: &str,
+    pos: embedded_graphics::geometry::Point,
+    font: embedded_graphics::mono_font::MonoTextStyle<'_, ssd1675::graphics::Color>,
+    style: embedded_graphics::text::TextStyle,
+) {
+    use embedded_graphics::Drawable;
+    use embedded_graphics::text::Text;
+    let _ = Text::with_text_style(text, pos, font, style).draw(display);
 }
 
 /// Block until the joystick Fire button is pressed (P1_02 goes low).
