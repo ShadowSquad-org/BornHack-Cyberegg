@@ -141,12 +141,59 @@ async fn main(spawner: Spawner) {
     // below (BLE + USB MSC need HFXO; everything else tolerates HFINT).
     let hw = bornhack_aegg::fw::factory_test::probe().await;
 
+    // ── EPD display ──────────────────────────────────────────────────────
+    // Hoisted up here (Phase 4) so the first-boot interactive test path
+    // can paint per-test status on the e-paper.  E-ink retains its last
+    // state without power: the test-name-before-test / PASS-after-test
+    // pattern means a hang on any peripheral leaves the screen showing
+    // every passed test plus the broken-step name *without* its PASS,
+    // pinpointing the failure for factory-floor triage with zero error
+    // handling.
+    static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    let mut display: EpdGfx<'_> = init_epd(
+        board!(p, epd_spi),
+        board!(p, epd_sck).into(),
+        board!(p, epd_mosi).into(),
+        board!(p, epd_busy).into(),
+        board!(p, epd_reset).into(),
+        board!(p, epd_dc).into(),
+        board!(p, epd_csn).into(),
+        EpdConfig::to_dimensions(),
+        BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
+        RED_BUF.init([0; EpdConfig::BUF_SIZE]),
+        WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
+        LutMode::NoInvert,
+    )
+    .await
+    .unwrap();
+    defmt::info!("EPD initialized");
+    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
+
+    // Boot breadcrumb #2 — switch from red to blue while the boot
+    // tri-color refresh + remaining task spawns finish.  This is the
+    // longest dark phase in the original boot, ~13s, so a colour change
+    // here gives users a "no, it's not stuck" signal partway through.
+    led::set_led(&led::LED_RED, led::LedState::Off);
+    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
+
+    // Boot-time full blank: clear both planes to white and push with the
+    // tri-color waveform so red ink particles get cycled too.  Wipes any
+    // residual ghosting from the previous power-on session before the
+    // first fast-LUT refresh paints over it.
+    display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
+
     // First-boot interactive sign-off path — only on a virgin badge.
-    // Currently a stub that auto-marks pass; Phase 5 will plug in
-    // button / display / sound interactive prompts.
+    // Paints test status on `display` via the write-name-then-test
+    // pattern so a hang leaves a forensic record on the e-paper.
     if !bornhack_aegg::fw::factory_test::is_passed().await {
-        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw).await;
+        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw, &mut display).await;
     }
+
+    let _ = display.deep_sleep().await;
 
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
@@ -309,45 +356,9 @@ async fn main(spawner: Spawner) {
     let temp_celsius = bornhack_aegg::fw::temperature::read_and_cache().await;
     defmt::info!("Die temperature: {} °C", temp_celsius);
 
-    // ── EPD display ──────────────────────────────────────────────────────
-    static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    let mut display: EpdGfx<'_> = init_epd(
-        board!(p, epd_spi),
-        board!(p, epd_sck).into(),
-        board!(p, epd_mosi).into(),
-        board!(p, epd_busy).into(),
-        board!(p, epd_reset).into(),
-        board!(p, epd_dc).into(),
-        board!(p, epd_csn).into(),
-        EpdConfig::to_dimensions(),
-        BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        RED_BUF.init([0; EpdConfig::BUF_SIZE]),
-        WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        LutMode::NoInvert,
-    )
-    .await
-    .unwrap();
-    defmt::info!("EPD initialized");
-
-    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
-
-    // Boot breadcrumb #2 — switch from red to blue while the boot
-    // tri-color refresh + remaining task spawns finish.  This is the
-    // longest dark phase in the original boot, ~13s, so a colour change
-    // here gives users a "no, it's not stuck" signal partway through.
-    led::set_led(&led::LED_RED, led::LedState::Off);
-    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
-
-    // Boot-time full blank: clear both planes to white and push with the
-    // tri-color waveform so red ink particles get cycled too.  Wipes any
-    // residual ghosting from the previous power-on session before the
-    // first fast-LUT refresh paints over it.
-    display.clear(Color::White);
-    let _ = display.reset().await;
-    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
-    let _ = display.deep_sleep().await;
+    // (EPD display was initialised earlier — see the "Hardware probe"
+    // section.  The display is already past its boot-time blank and
+    // is in deep_sleep until the display task takes over.)
 
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
     // already running when the contact store needs to blink the green LED

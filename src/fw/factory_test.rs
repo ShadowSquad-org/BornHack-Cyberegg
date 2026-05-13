@@ -230,16 +230,83 @@ pub async fn mark_passed() {
     }
 }
 
-/// Phase-3 placeholder for the first-boot interactive test path.
-/// Currently auto-stamps after a 500 ms splash so the rest of the
-/// integration (boot supervisor, conditional spawns) can be
-/// exercised end-to-end.  Phase 5 will replace the body with real
-/// joystick / display / buzzer prompts and only call [`mark_passed`]
-/// after the human confirms.
-pub async fn run_first_boot_interactive(hw: &HardwareInfo) {
-    defmt::info!("hwtest: first-boot interactive entered (Phase 3 stub)");
+/// First-boot interactive test path.  Paints the test status to the
+/// e-paper using the write-test-name-*before*-test, write-`PASS`-*after*
+/// pattern so that a hang on any peripheral leaves a forensic record on
+/// the screen for factory-floor triage.  The e-ink retains state without
+/// power: if the firmware locks up mid-test, the last visible line
+/// *without* a `PASS` next to it is the broken step.
+///
+/// Phase 4 currently renders the early clock probe results (already
+/// completed by [`probe`] before EPD init) plus an implicit `EPD PASS`
+/// row whose mere visibility proves the e-paper works.  Phase 5 adds
+/// peripheral tests that actually exercise the write-then-test pattern
+/// with partial refreshes between steps.
+pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::fw::epd::EpdGfx<'_>) {
+    use embedded_graphics::Drawable;
+    use embedded_graphics::geometry::Point;
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
+    use embedded_graphics::text::{Baseline, Text, TextStyleBuilder};
+    use ssd1675::graphics::Color;
+
+    defmt::info!("hwtest: first-boot interactive entered (Phase 4)");
     defmt::info!("hwtest:   hardware seen at first boot: {:?}", hw);
-    Timer::after_millis(500).await;
+
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+    let header_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
+
+    display.clear(Color::White);
+
+    // Header.
+    let _ = Text::with_text_style("FACTORY TEST", Point::new(20, 4), font, header_style)
+        .draw(display);
+
+    // EPD self-test: if you can read this line, the e-paper works.
+    // Drawn first so it appears at the top of the test list.
+    draw_test_row(display, font, header_style, "EPD", Some(true), 30);
+
+    // HFXO / LFXO results from the earlier `probe()` call (which ran
+    // before EPD was initialised, hence no per-step refresh option).
+    draw_test_row(display, font, header_style, "HFXO", Some(hw.hfxo_ok), 46);
+    draw_test_row(display, font, header_style, "LFXO", Some(hw.lfxo_ok), 62);
+
+    // Single refresh paints the whole status block.  Phase 5 will
+    // split this into per-test partial refreshes so a hang between
+    // tests still leaves the prior status on screen.
+    let _ = display
+        .update_tc(crate::fw::epd::current_lut_speed())
+        .await;
+
+    // Brief hold so a factory worker can read the screen before
+    // boot continues.
+    Timer::after_millis(2000).await;
+
     mark_passed().await;
-    defmt::info!("hwtest: first-boot stub complete");
+    defmt::info!("hwtest: first-boot Phase 4 complete");
+}
+
+/// Draw one test row: name on the left, status on the right.  Status
+/// is `None` (blank — used when the test hasn't run yet), `Some(true)`
+/// (`"PASS"`), or `Some(false)` (`"FAIL"`).  The blank-status form is
+/// what the hang-detection pattern relies on: draw the row with
+/// `status = None`, refresh, run the test, then redraw with the
+/// actual result and refresh again.
+fn draw_test_row(
+    display: &mut crate::fw::epd::EpdGfx<'_>,
+    font: embedded_graphics::mono_font::MonoTextStyle<'_, ssd1675::graphics::Color>,
+    style: embedded_graphics::text::TextStyle,
+    name: &str,
+    status: Option<bool>,
+    y: i32,
+) {
+    use embedded_graphics::Drawable;
+    use embedded_graphics::geometry::Point;
+    use embedded_graphics::text::Text;
+
+    let _ = Text::with_text_style(name, Point::new(4, y), font, style).draw(display);
+    if let Some(ok) = status {
+        let label = if ok { "PASS" } else { "FAIL" };
+        let _ = Text::with_text_style(label, Point::new(110, y), font, style).draw(display);
+    }
 }
