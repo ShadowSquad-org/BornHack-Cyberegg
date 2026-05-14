@@ -88,11 +88,13 @@ async fn lora_radio_loop() -> ! {
         rp.tx_power = crate::LORA_TX_POWER.load(Relaxed);
         rp.client_repeat = crate::LORA_CLIENT_REPEAT.load(Relaxed);
         match settings::set_radio_params(rp).await {
-            Ok(()) => {
-                defmt::info!("settings: radio params persisted from menu (takes effect on reboot)")
-            }
+            Ok(()) => defmt::info!("settings: radio params persisted from menu"),
             Err(e) => defmt::warn!("settings: radio params persist failed: {:?}", e),
         }
+        // Fan out to the listener so the SX1262 is reprogrammed live.
+        // Done after the flash write so a power-loss between signal and
+        // apply still leaves the persisted params authoritative.
+        crate::LORA_RADIO_APPLY_SIGNAL.signal(());
     }
 }
 

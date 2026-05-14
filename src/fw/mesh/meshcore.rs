@@ -234,21 +234,63 @@ pub async fn run_meshcore_listener<'a>(
             );
         }
 
+        // Apply radio-param changes (freq, BW, SF, CR, TX power) from the
+        // menu or BLE companion without rebooting.  Fired by the
+        // persister AFTER the flash write succeeds, so the live radio
+        // never disagrees with what's persisted.
+        if crate::LORA_RADIO_APPLY_SIGNAL.signaled() {
+            crate::LORA_RADIO_APPLY_SIGNAL.reset();
+            use core::sync::atomic::Ordering::Relaxed;
+            let rp = settings::RadioParams {
+                freq_hz: crate::LORA_FREQ_HZ.load(Relaxed),
+                bw_hz: crate::LORA_BW_HZ.load(Relaxed),
+                sf: crate::LORA_SF.load(Relaxed),
+                cr: crate::LORA_CR.load(Relaxed),
+                tx_power: crate::LORA_TX_POWER.load(Relaxed),
+                client_repeat: crate::LORA_CLIENT_REPEAT.load(Relaxed),
+            };
+            let cfg = MeshCoreConfig::from_radio_params(&rp);
+            lora.reconfigure_radio(&cfg);
+            defmt::info!(
+                "MeshCore: radio reprogrammed live — freq={=u32}Hz bw={=u32}Hz SF={=u8} CR={=u8} TX={=i8}dBm",
+                rp.freq_hz,
+                rp.bw_hz,
+                rp.sf,
+                rp.cr,
+                rp.tx_power,
+            );
+        }
+
         // Drain all queued TX requests before entering RX.
         while let Ok(req) = crate::TX_CHANNEL.try_receive() {
             dispatch_tx(&mut lora, &loaded_channels, identity, req).await;
         }
 
-        // Race: receive the next LoRa packet OR a TX request arrives.
-        // TX_WAKEUP breaks the receive_packet wait so the drain above
-        // picks up the new request immediately.
-        use embassy_futures::select::{Either, select};
-        let rx_result = match select(lora.receive_packet(&mut raw), crate::TX_WAKEUP.wait()).await {
-            Either::Second(()) => {
+        // Race: receive the next LoRa packet, OR a TX request arrives,
+        // OR a radio-param change comes in.  TX_WAKEUP breaks the
+        // receive_packet wait so the drain above picks up the new
+        // request immediately; LORA_RADIO_APPLY_SIGNAL breaks it so
+        // the reprogramming check at the top of the next iter runs
+        // without waiting for the next inbound packet.
+        use embassy_futures::select::{Either3, select3};
+        let rx_result = match select3(
+            lora.receive_packet(&mut raw),
+            crate::TX_WAKEUP.wait(),
+            crate::LORA_RADIO_APPLY_SIGNAL.wait(),
+        )
+        .await
+        {
+            Either3::Second(()) => {
                 crate::TX_WAKEUP.reset();
                 continue;
             }
-            Either::First(result) => result,
+            Either3::Third(()) => {
+                // Re-arm so the top-of-loop handler sees it; `wait()`
+                // consumed the pending state.
+                crate::LORA_RADIO_APPLY_SIGNAL.signal(());
+                continue;
+            }
+            Either3::First(result) => result,
         };
 
         match rx_result {
