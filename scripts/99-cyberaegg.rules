@@ -1,0 +1,24 @@
+# udev rules for the CyberÆgg badge.
+#
+# Install once on each factory / dev laptop:
+#
+#   sudo cp scripts/99-cyberaegg.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# After that, neither dfu-util nor udisksctl needs sudo for badge ops.
+#
+# `TAG+="uaccess"` is the modern (systemd-logind) way to grant the
+# currently-logged-in user session access without managing groups.
+# Falls back to MODE="0666" for non-systemd / older systems.
+
+# Custom bootloader in USB-DFU mode (Nordic VID + our DFU PID).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1915", ATTRS{idProduct}=="521f", MODE="0666", TAG+="uaccess"
+
+# Custom bootloader in CDC / MSC bridge mode (Adafruit-compatible VID/PID).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="239a", ATTRS{idProduct}=="8029", MODE="0666", TAG+="uaccess"
+
+# App's USB-MSC mass-storage interface — same VID/PID family.  Optional;
+# udisks2 normally grants the active session access already, but this
+# keeps `lsblk` + raw `/dev/sdX` opens working without root.
+SUBSYSTEM=="block", ATTRS{idVendor}=="239a", ATTRS{idProduct}=="8029", MODE="0666", TAG+="uaccess"

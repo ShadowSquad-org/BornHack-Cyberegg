@@ -44,8 +44,16 @@ use static_cell::StaticCell;
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // ── Core hardware init ───────────────────────────────────────────────
+    // Phase 3 boot-supervisor pattern: always-boots architecture.
+    //
+    // We init on HFINT (internal 64 MHz RC) so this call can never hang
+    // waiting for the 32 MHz crystal — a dead or intermittent HFXO won't
+    // brick the badge.  `factory_test::probe()` below will actively
+    // request HFXO with a short timeout; if it starts the chip switches
+    // over (giving USB + BLE their precise clock), and if it doesn't we
+    // stay on HFINT and gate the HFXO-dependent task spawns accordingly.
     let mut config = embassy_nrf::config::Config::default();
-    config.hfclk_source = HfclkSource::ExternalXtal;
+    config.hfclk_source = HfclkSource::Internal;
     let p = embassy_nrf::init(config);
 
     embassy_nrf::pac::POWER.tasks_constlat().write_value(1);
@@ -125,6 +133,87 @@ async fn main(spawner: Spawner) {
     // slideshow flag, and the mesh stack.  Must be initialised before any
     // task reads or writes flash-backed state.
     kv::init().await;
+
+    // ── Hardware probe (boot supervisor) ─────────────────────────────────
+    // Always runs.  Active probe of HFXO + LFXO — see
+    // `bornhack_aegg::fw::factory_test` module docs for the design.
+    // The returned `HardwareInfo` drives conditional task spawning
+    // below (BLE + USB MSC need HFXO; everything else tolerates HFINT).
+    let hw = bornhack_aegg::fw::factory_test::probe().await;
+
+    // ── EPD display ──────────────────────────────────────────────────────
+    // Hoisted up here (Phase 4) so the first-boot interactive test path
+    // can paint per-test status on the e-paper.  E-ink retains its last
+    // state without power: the test-name-before-test / PASS-after-test
+    // pattern means a hang on any peripheral leaves the screen showing
+    // every passed test plus the broken-step name *without* its PASS,
+    // pinpointing the failure for factory-floor triage with zero error
+    // handling.
+    static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
+    let mut display: EpdGfx<'_> = init_epd(
+        board!(p, epd_spi),
+        board!(p, epd_sck).into(),
+        board!(p, epd_mosi).into(),
+        board!(p, epd_busy).into(),
+        board!(p, epd_reset).into(),
+        board!(p, epd_dc).into(),
+        board!(p, epd_csn).into(),
+        EpdConfig::to_dimensions(),
+        BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
+        RED_BUF.init([0; EpdConfig::BUF_SIZE]),
+        WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
+        LutMode::NoInvert,
+    )
+    .await
+    .unwrap();
+    defmt::info!("EPD initialized");
+    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
+
+    // Boot breadcrumb #2 — switch from red to blue while the boot
+    // tri-color refresh + remaining task spawns finish.  This is the
+    // longest dark phase in the original boot, ~13s, so a colour change
+    // here gives users a "no, it's not stuck" signal partway through.
+    led::set_led(&led::LED_RED, led::LedState::Off);
+    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
+
+    // Boot-time full blank: clear both planes to white and push with the
+    // tri-color waveform so red ink particles get cycled too.  Wipes any
+    // residual ghosting from the previous power-on session before the
+    // first fast-LUT refresh paints over it.
+    display.clear(Color::White);
+    let _ = display.reset().await;
+    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
+
+    // USB mass storage — spawn BEFORE the first-boot interactive
+    // gate so the factory-floor "one plug-cycle per badge" workflow
+    // works.  The factory test halts (NEEDS REWORK on fail, ship
+    // image on pass) using `Timer::after_secs(..).await`, which
+    // yields back to the executor — so this MSC task keeps running
+    // through the halt and the host can mount the FAT12 partition
+    // while the badge is still on the test screen.  Host-side
+    // `scripts/copy_assets.py` then copies the asset bundle and
+    // unmounts in-place; ship image stays on the e-ink for packing.
+    //
+    // USB peripheral derives its 48 MHz clock from HFXO via the PLL
+    // — skip the spawn cleanly on a degraded boot rather than
+    // letting the USB stack hang.
+    #[cfg(feature = "usb-storage")]
+    if hw.hfxo_ok {
+        spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
+    } else {
+        defmt::warn!("USB mass storage disabled this boot — HFXO unavailable");
+    }
+
+    // First-boot interactive sign-off path — only on a virgin badge.
+    // Paints test status on `display` via the write-name-then-test
+    // pattern so a hang leaves a forensic record on the e-paper.
+    if !bornhack_aegg::fw::factory_test::is_passed().await {
+        bornhack_aegg::fw::factory_test::run_first_boot_interactive(&hw, &mut display).await;
+    }
+
+    let _ = display.deep_sleep().await;
 
     // ── Watch app — load persisted alarm state and start the persister ───
     #[cfg(feature = "watch")]
@@ -228,40 +317,51 @@ async fn main(spawner: Spawner) {
         }
 
         let identity = settings::load_or_create_identity().await;
-        let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
 
-        static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
-            StaticCell::new();
-        let sdc = init_ble(
-            &spawner,
-            p.RTC0,
-            p.TIMER0,
-            p.TEMP,
-            p.PPI_CH19,
-            p.PPI_CH30,
-            p.PPI_CH31,
-            p.PPI_CH17,
-            p.PPI_CH18,
-            p.PPI_CH20,
-            p.PPI_CH21,
-            p.PPI_CH22,
-            p.PPI_CH23,
-            p.PPI_CH24,
-            p.PPI_CH25,
-            p.PPI_CH26,
-            p.PPI_CH27,
-            p.PPI_CH28,
-            p.PPI_CH29,
-            p.RNG,
-            SDC_MEM.init(nrf_sdc::Mem::new()),
-        );
-        spawner.must_spawn(run_ble_peripheral(
-            sdc,
-            CompanionContext {
-                pub_key: identity.pub_key,
-            },
-            ble_prng_seed,
-        ));
+        // BLE companion needs HFXO (the SoftDevice Controller's radio
+        // demands 32 MHz crystal accuracy).  Spawn it only when our
+        // probe found a working crystal; otherwise log + skip and the
+        // rest of the firmware (LoRa, watch, game, display) carries on.
+        if hw.hfxo_ok {
+            let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
+            static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
+                StaticCell::new();
+            let sdc = init_ble(
+                &spawner,
+                p.RTC0,
+                p.TIMER0,
+                p.TEMP,
+                p.PPI_CH19,
+                p.PPI_CH30,
+                p.PPI_CH31,
+                p.PPI_CH17,
+                p.PPI_CH18,
+                p.PPI_CH20,
+                p.PPI_CH21,
+                p.PPI_CH22,
+                p.PPI_CH23,
+                p.PPI_CH24,
+                p.PPI_CH25,
+                p.PPI_CH26,
+                p.PPI_CH27,
+                p.PPI_CH28,
+                p.PPI_CH29,
+                p.RNG,
+                SDC_MEM.init(nrf_sdc::Mem::new()),
+            );
+            spawner.must_spawn(run_ble_peripheral(
+                sdc,
+                CompanionContext {
+                    pub_key: identity.pub_key,
+                },
+                ble_prng_seed,
+            ));
+        } else {
+            defmt::warn!(
+                "BLE companion disabled this boot — HFXO unavailable, \
+                 LoRa mesh continues on HFINT"
+            );
+        }
         identity
     };
 
@@ -276,45 +376,9 @@ async fn main(spawner: Spawner) {
     let temp_celsius = bornhack_aegg::fw::temperature::read_and_cache().await;
     defmt::info!("Die temperature: {} °C", temp_celsius);
 
-    // ── EPD display ──────────────────────────────────────────────────────
-    static BLACK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    static RED_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    static WORK_BUF: StaticCell<[u8; EpdConfig::BUF_SIZE]> = StaticCell::new();
-    let mut display: EpdGfx<'_> = init_epd(
-        board!(p, epd_spi),
-        board!(p, epd_sck).into(),
-        board!(p, epd_mosi).into(),
-        board!(p, epd_busy).into(),
-        board!(p, epd_reset).into(),
-        board!(p, epd_dc).into(),
-        board!(p, epd_csn).into(),
-        EpdConfig::to_dimensions(),
-        BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        RED_BUF.init([0; EpdConfig::BUF_SIZE]),
-        WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        LutMode::NoInvert,
-    )
-    .await
-    .unwrap();
-    defmt::info!("EPD initialized");
-
-    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
-
-    // Boot breadcrumb #2 — switch from red to blue while the boot
-    // tri-color refresh + remaining task spawns finish.  This is the
-    // longest dark phase in the original boot, ~13s, so a colour change
-    // here gives users a "no, it's not stuck" signal partway through.
-    led::set_led(&led::LED_RED, led::LedState::Off);
-    led::set_led(&led::LED_BLUE, led::LedState::Duty50);
-
-    // Boot-time full blank: clear both planes to white and push with the
-    // tri-color waveform so red ink particles get cycled too.  Wipes any
-    // residual ghosting from the previous power-on session before the
-    // first fast-LUT refresh paints over it.
-    display.clear(Color::White);
-    let _ = display.reset().await;
-    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
-    let _ = display.deep_sleep().await;
+    // (EPD display was initialised earlier — see the "Hardware probe"
+    // section.  The display is already past its boot-time blank and
+    // is in deep_sleep until the display task takes over.)
 
     // LEDs are initialised earlier (above the mesh stack) so the led_task is
     // already running when the contact store needs to blink the green LED
@@ -359,11 +423,9 @@ async fn main(spawner: Spawner) {
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
-    // partition and drop in sponsor PCX files on a fresh badge without
-    // waiting for the main display loop to come up.  VBUS detection is
-    // automatic — the USB PHY powers up when a cable is connected.
-    #[cfg(feature = "usb-storage")]
-    spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
+    // (USB mass storage is now spawned much earlier — see the block
+    // right after EPD init so the factory-test halt can co-exist
+    // with host-side asset copy in a single plug-cycle.)
 
     // ── Boot-complete chime ───────────────────────────────────────────────
     // Plays once on every boot (first boot included) when the user

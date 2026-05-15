@@ -5,6 +5,7 @@ pub mod buzzer;
 pub mod device_id;
 pub mod emoji;
 pub mod epd;
+pub mod factory_test;
 pub mod fat12;
 pub mod flash;
 pub mod health;
