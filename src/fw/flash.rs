@@ -76,6 +76,11 @@ pub async fn init(
     cfg.capacity = FLASH_TOTAL_BYTES as u32;
     cfg.read_opcode = qspi::ReadOpcode::FASTREAD;
     cfg.write_opcode = qspi::WriteOpcode::PP;
+    // Run the bus at the nRF52840 ceiling.  ZD25WQ16C's FAST READ supports
+    // up to 80 MHz; nRF QSPI caps at 32 MHz.  4× over the M8 default with
+    // no change to read/write opcodes — FASTREAD already includes a dummy
+    // cycle, so timing margin at 32 MHz is comfortable.
+    cfg.frequency = qspi::Frequency::M32;
 
     let mut qspi = qspi::Qspi::new(qspi_periph, QspiIrqs, sck, csn, io0, io1, io2, io3, cfg);
 
