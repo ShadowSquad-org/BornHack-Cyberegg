@@ -186,6 +186,26 @@ async fn main(spawner: Spawner) {
     let _ = display.reset().await;
     let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
 
+    // USB mass storage — spawn BEFORE the first-boot interactive
+    // gate so the factory-floor "one plug-cycle per badge" workflow
+    // works.  The factory test halts (NEEDS REWORK on fail, ship
+    // image on pass) using `Timer::after_secs(..).await`, which
+    // yields back to the executor — so this MSC task keeps running
+    // through the halt and the host can mount the FAT12 partition
+    // while the badge is still on the test screen.  Host-side
+    // `scripts/copy_assets.py` then copies the asset bundle and
+    // unmounts in-place; ship image stays on the e-ink for packing.
+    //
+    // USB peripheral derives its 48 MHz clock from HFXO via the PLL
+    // — skip the spawn cleanly on a degraded boot rather than
+    // letting the USB stack hang.
+    #[cfg(feature = "usb-storage")]
+    if hw.hfxo_ok {
+        spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
+    } else {
+        defmt::warn!("USB mass storage disabled this boot — HFXO unavailable");
+    }
+
     // First-boot interactive sign-off path — only on a virgin badge.
     // Paints test status on `display` via the write-name-then-test
     // pattern so a hang leaves a forensic record on the e-paper.
@@ -403,18 +423,9 @@ async fn main(spawner: Spawner) {
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
-    // partition and drop in sponsor PCX files on a fresh badge without
-    // waiting for the main display loop to come up.  VBUS detection is
-    // automatic — the USB PHY powers up when a cable is connected.
-    // USB peripheral derives its 48 MHz clock from HFXO via the PLL —
-    // no crystal, no enumeration.  Skip the spawn cleanly on a
-    // degraded boot rather than letting the USB stack hang.
-    #[cfg(feature = "usb-storage")]
-    if hw.hfxo_ok {
-        spawner.must_spawn(bornhack_aegg::fw::usb_storage::usb_storage_task(p.USBD));
-    } else {
-        defmt::warn!("USB mass storage disabled this boot — HFXO unavailable");
-    }
+    // (USB mass storage is now spawned much earlier — see the block
+    // right after EPD init so the factory-test halt can co-exist
+    // with host-side asset copy in a single plug-cycle.)
 
     // ── Boot-complete chime ───────────────────────────────────────────────
     // Plays once on every boot (first boot included) when the user
