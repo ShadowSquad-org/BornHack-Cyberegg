@@ -630,7 +630,79 @@ pub async fn run_first_boot_interactive(hw: &HardwareInfo, display: &mut crate::
 
     wait_for_fire_press().await;
     mark_passed().await;
-    defmt::info!("hwtest: first-boot Phase 4 complete");
+    defmt::info!("hwtest: first-boot complete — drawing ship image");
+
+    // Replace the test status with a clean "ready to ship" screen.
+    // Full tri-color refresh so the persisted image is sharp and
+    // ghost-free; e-ink will hold this state for the badge's entire
+    // shipping life (factory pack → distributor → end-user).  The
+    // next time the badge powers up `is_passed()` returns true,
+    // factory_test is skipped, and normal boot overwrites this
+    // image with the regular app UI.
+    draw_ship_image(display, full_lut).await;
+
+    // Halt forever — factory worker powers off / unplugs to pack.
+    // Watchdog task keeps the WDT fed.  Should the worker forget
+    // to power off, the chip just sits in WFE until USB power is
+    // pulled; the image on the e-paper persists either way.
+    defmt::info!("hwtest: halted, ready to ship");
+    loop {
+        Timer::after_secs(60).await;
+    }
+}
+
+/// Render the post-pass "ready to ship" screen.  Persistent: the
+/// e-ink retains this image with no power, so the badge ships in
+/// its box with the test confirmation already visible — no separate
+/// sticker / label needed.
+async fn draw_ship_image(display: &mut crate::fw::epd::EpdGfx<'_>, lut_speed: u8) {
+    use embedded_graphics::Drawable;
+    use embedded_graphics::geometry::Point;
+    use embedded_graphics::mono_font::MonoTextStyle;
+    use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
+    // Use the ASCII variant of FONT_10X20 — same one `name_screen.rs`
+    // already pulls in — so we share the glyph table instead of
+    // dragging in a separate iso_8859_1 copy (saves ~3 KB).
+    use embedded_graphics::mono_font::ascii::FONT_10X20;
+    use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
+    use embedded_graphics::primitives::StyledDrawable;
+    use embedded_graphics::geometry::Size;
+    use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
+    use ssd1675::graphics::Color;
+
+    display.clear(Color::White);
+
+    let centered = TextStyleBuilder::new()
+        .alignment(Alignment::Center)
+        .baseline(Baseline::Top)
+        .build();
+    let big = MonoTextStyle::new(&FONT_10X20, Color::Black);
+    let small = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+
+    // Decorative border so it reads like a stamped passed-QC label.
+    let border = Rectangle::new(Point::new(4, 4), Size::new(144, 144));
+    let _ = border.draw_styled(
+        &PrimitiveStyle::with_stroke(Color::Black, 2),
+        display,
+    );
+
+    // Title block (top half).
+    let _ = Text::with_text_style("BORNHACK", Point::new(76, 24), big, centered).draw(display);
+    let _ = Text::with_text_style("2026", Point::new(76, 48), big, centered).draw(display);
+
+    // Separator line.
+    let sep = Rectangle::new(Point::new(20, 76), Size::new(112, 1));
+    let _ = sep.draw_styled(
+        &PrimitiveStyle::with_stroke(Color::Black, 1),
+        display,
+    );
+
+    // Stamp text (bottom half).
+    let _ = Text::with_text_style("CyberAegg", Point::new(76, 86), small, centered).draw(display);
+    let _ = Text::with_text_style("FACTORY TESTED", Point::new(76, 106), small, centered).draw(display);
+    let _ = Text::with_text_style("Ready to ship", Point::new(76, 126), small, centered).draw(display);
+
+    let _ = display.update_tc(lut_speed).await;
 }
 
 /// Convenience: draw a single text string at the given position.
