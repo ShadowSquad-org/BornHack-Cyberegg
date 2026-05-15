@@ -77,6 +77,10 @@ DFU_VID = "1915"
 DFU_PID = "521f"
 DEDUPE_WINDOW_SEC = 5.0
 POLL_INTERVAL_SEC = 1.0
+# Time to let the kernel finish enumerating the DFU interface after a
+# udev ADD event before we call dfu-util.  Without this, dfu-util races
+# the kernel and gets LIBUSB_ERROR_BUSY trying to claim the interface.
+USB_SETTLE_SEC = 1.0
 
 
 def run(cmd, **kw):
@@ -126,9 +130,15 @@ def dfu_flash(bin_path, *, serial=None):
         return True
     # Common failure: badge already exited DFU between detection and run.
     print(f"  → DFU FAILED (exit {r.returncode}) after {elapsed:.1f}s")
-    if r.stderr.strip():
-        # Indent stderr block so the dfu-util messages are readable.
-        for line in r.stderr.strip().splitlines()[:8]:
+    # dfu-util writes progress + most error context to stdout; only the
+    # generic suffix warning goes to stderr.  Print both, stdout first,
+    # so the real cause is visible.
+    for stream_name, stream in (("stdout", r.stdout), ("stderr", r.stderr)):
+        text = stream.strip()
+        if not text:
+            continue
+        print(f"    -- {stream_name} --")
+        for line in text.splitlines()[-12:]:
             print(f"    {line}")
     return False
 
@@ -170,6 +180,10 @@ def watch_udev(bin_path, *, once):
                         continue
                     last_serial[serial] = now
                     print(f"FRESH  DFU device  serial={serial or '(none)'}")
+                    # Let the kernel finish claiming/releasing the
+                    # interface; dfu-util otherwise races and gets
+                    # LIBUSB_ERROR_BUSY.
+                    time.sleep(USB_SETTLE_SEC)
                     if dfu_flash(bin_path, serial=serial):
                         if once:
                             proc.terminate()
@@ -190,6 +204,9 @@ def initial_sweep(bin_path, once):
     if f"[{DFU_VID}:{DFU_PID}]" not in r.stdout:
         return False
     print("DFU device already in DFU at startup — flashing immediately.")
+    # Same settle window as the udev path: covers the case where the
+    # worker plugged the badge then immediately started the script.
+    time.sleep(USB_SETTLE_SEC)
     # We don't easily extract the serial from --list parsing in older
     # dfu-util versions; pass None and dfu-util picks the first match.
     if dfu_flash(bin_path, serial=None) and once:
