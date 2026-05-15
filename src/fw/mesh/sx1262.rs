@@ -339,7 +339,10 @@ impl<'a> SimpleLoRa<'a> {
         config: &MeshCoreConfig,
     ) -> Result<SimpleLoRa<'a>, LoraError> {
         let mut spi_cfg = spim::Config::default();
-        spi_cfg.frequency = Frequency::M1;
+        // SX1262 datasheet rates SCK up to 16 MHz; SPIM2 (this peripheral)
+        // caps at 8 MHz, so M8 is the ceiling here.  8× the previous M1,
+        // which drops radio-command latency on every mesh hop.
+        spi_cfg.frequency = Frequency::M8;
         let spim = Spim::new(spi, Irqs, sck_pin, mosi_pin, miso_pin, spi_cfg);
 
         let nss = Output::new(nss_pin, Level::High, OutputDrive::Standard);
