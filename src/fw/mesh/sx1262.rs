@@ -422,6 +422,48 @@ impl<'a> SimpleLoRa<'a> {
         self.lora.rf_switch_rx();
     }
 
+    /// Reprogram the radio in-place with new frequency / modulation / TX
+    /// parameters.  Used by the listener loop to apply changes from the
+    /// menu or BLE companion without rebooting.
+    ///
+    /// Every command is followed by `wait_on_busy()` because the chip's
+    /// BUSY pin stays high between SPI ops and a back-to-back command
+    /// is silently dropped while BUSY=1.  Image calibration is mandatory
+    /// when changing band (Semtech §13.1.3).  `set_pa_config` is required
+    /// alongside `set_tx_params` — TX power straddles both registers.
+    pub fn reconfigure_radio(&mut self, config: &MeshCoreConfig) {
+        self.standby();
+        self.lora.wait_on_busy().ok();
+
+        let conf = build_lora_config(config);
+
+        self.lora.set_rf_frequency(conf.rf_freq).ok();
+        self.lora.wait_on_busy().ok();
+
+        self.lora
+            .calibrate_image(sx126x::op::CalibImageFreq::from_rf_frequency(
+                conf.rf_frequency,
+            ))
+            .ok();
+        self.lora.wait_on_busy().ok();
+
+        self.lora.set_pa_config(conf.pa_config).ok();
+        self.lora.wait_on_busy().ok();
+
+        self.lora.set_tx_params(conf.tx_params).ok();
+        self.lora.wait_on_busy().ok();
+
+        self.lora.set_mod_params(conf.mod_params).ok();
+        self.lora.wait_on_busy().ok();
+
+        // Update internal state used by airtime / path-len accounting.
+        self.sf = config.sf_num;
+        self.bw_hz = config.bw_hz_num;
+        self.cr_proto = config.cr_num;
+
+        self.resume_rx();
+    }
+
     /// Wait for the chip to enter RX mode, polling every 50 ms for up to 500
     /// ms. Returns true if RX mode is confirmed.
     pub async fn ensure_rx(&mut self) -> bool {

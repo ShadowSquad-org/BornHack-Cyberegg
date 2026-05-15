@@ -2078,15 +2078,15 @@ async fn nus_peripheral_loop<C>(
                                 crate::LORA_TX_POWER.store(radio_params.tx_power, Relaxed);
                                 crate::LORA_CLIENT_REPEAT
                                     .store(radio_params.client_repeat, Relaxed);
-                                match settings::set_radio_params(radio_params).await {
-                                    Ok(()) => defmt::info!(
-                                        "companion: radio params persisted (takes effect on reboot)"
-                                    ),
-                                    Err(e) => defmt::warn!(
-                                        "companion: radio params persist failed: {:?}",
-                                        e
-                                    ),
-                                }
+                                // Fire CHANGED so the persister writes the
+                                // new atomics to flash and then signals
+                                // APPLY → listener reprograms the SX1262
+                                // live.  Persister owns the flash write
+                                // so this handler doesn't write directly.
+                                crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
+                                defmt::info!(
+                                    "companion: SET_RADIO_PARAMS queued for persist+apply"
+                                );
                             }
                             if let Some(new_pos) = pending_position {
                                 position = new_pos;

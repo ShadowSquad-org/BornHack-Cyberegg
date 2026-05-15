@@ -240,10 +240,23 @@ pub static ADVERT_INTERVAL_HOURS: AtomicU8 = AtomicU8::new(16);
 #[cfg(feature = "embassy-base")]
 pub static ADVERT_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-/// Fired when the menu changes the LoRa radio params so the BLE task can
-/// persist them to flash (takes effect on reboot).
+/// Fired when the menu or BLE companion changes the LoRa radio params so
+/// the persister task can write them to flash.  Single-consumer: only
+/// `persister::lora_radio_loop` waits on this.  After the persister
+/// finishes the flash write it fans out to `LORA_RADIO_APPLY_SIGNAL` so
+/// the listener task can reprogram the SX1262 live (no reboot needed).
 #[cfg(feature = "embassy-base")]
 pub static LORA_RADIO_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Fired by `persister::lora_radio_loop` after a successful flash write
+/// of the new radio params.  Consumed by `meshcore::run_meshcore_listener`,
+/// which puts the SX1262 into standby, calls `reconfigure_radio`, and
+/// resumes RX.  Decoupling this from `LORA_RADIO_CHANGED_SIGNAL` is
+/// required because `embassy_sync::signal::Signal` only wakes a single
+/// waiter per signal — having two consumers race for the same signal
+/// is how the persister kept winning and the listener never reprogrammed.
+#[cfg(feature = "embassy-base")]
+pub static LORA_RADIO_APPLY_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Fired when the menu changes `OtherParams` fields (advert_loc / multi_acks)
 /// so the BLE task can persist them.
