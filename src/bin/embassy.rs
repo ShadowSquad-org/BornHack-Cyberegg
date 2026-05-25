@@ -4,7 +4,7 @@
 use bornhack_aegg::fw::battery::{self, battery_task, init as init_battery};
 use bornhack_aegg::fw::button::{BTN_WATCH, run_buttons};
 use bornhack_aegg::fw::buzzer::{Buzzer, buzzer_task};
-use bornhack_aegg::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, LutMode, init_epd};
+use bornhack_aegg::fw::epd::{EpdConfig152x152 as EpdConfig, EpdGfx, init_epd};
 #[cfg(feature = "mesh")]
 use bornhack_aegg::fw::mesh::{
     ble::{CompanionContext, init_ble, run_ble_peripheral},
@@ -164,7 +164,6 @@ async fn main(spawner: Spawner) {
         BLACK_BUF.init([0; EpdConfig::BUF_SIZE]),
         RED_BUF.init([0; EpdConfig::BUF_SIZE]),
         WORK_BUF.init([0; EpdConfig::BUF_SIZE]),
-        LutMode::NoInvert,
     )
     .await
     .unwrap();
@@ -565,6 +564,15 @@ async fn display_loop(
         let do_full = bornhack_aegg::FULL_REFRESH_PENDING
             .swap(false, core::sync::atomic::Ordering::Relaxed)
             || active_screen == SCREEN_NAME;
+
+        // Feed the SSD1675's per-temperature LUT lookup from the nRF52840
+        // die sensor (the chip itself has no on-die sensor — datasheet pg 6).
+        // Bias is variant-aware — SSD1675A blooms without warm-band offset.
+        bornhack_aegg::fw::temperature::refresh_if_stale();
+        let panel_c10 = bornhack_aegg::fw::epd::panel_temp_c10(display.variant());
+        if panel_c10 != i16::MIN {
+            display.set_active_temperature(panel_c10);
+        }
 
         let sprite_advance = match select(
             async {

@@ -8,7 +8,7 @@
 //! Persisted in the `"settings"` KV namespace under `"epd_lut"`.
 
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 #[cfg(feature = "embassy-base")]
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -22,8 +22,10 @@ use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_time::Timer;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use panic_probe as _;
-pub use ssd1675::LutMode;
-use ssd1675::{Builder, Dimensions, Display, GraphicDisplay, Interface, Rotation};
+use ssd1675::{
+    Builder, Dimensions, Display, GraphicDisplay, Interface, LUT_TABLE_MIN_C, LUT_TABLE_SIZE,
+    LUT_TABLE_STEP_C10, Rotation, detect_variant_from_otp, patch_no_invert,
+};
 use static_cell::StaticCell;
 
 // EPD display configuration - compile-time constants with generics
@@ -60,12 +62,13 @@ pub type EpdGfx<'a> = GraphicDisplay<
     &'a mut [u8],
 >;
 
-static OTP_LUT: StaticCell<[u8; 107]> = StaticCell::new();
-/// Un-patched copy of the probed OTP LUT, registered with the driver via
-/// `set_full_lut` so `update_bw(Mode2)` can run the real full waveform
-/// (with inversion / erase phases intact) instead of the patched fast LUT.
-static OTP_LUT_FULL: StaticCell<[u8; 107]> = StaticCell::new();
-static OTP_LUT_PTR: AtomicPtr<[u8; 107]> = AtomicPtr::new(core::ptr::null_mut());
+/// Boot-probed per-temperature LUT table — full OTP waveform with inversion
+/// phases.  16 × 107 = 1.7 KB.  Used by `update_tc` for tri-color full
+/// refreshes where the inversion phases reset ghosting.
+static LUT_TABLE_CELL: StaticCell<[[u8; 107]; LUT_TABLE_SIZE]> = StaticCell::new();
+/// Same as `LUT_TABLE_CELL` but with inversion phases zeroed per
+/// `patch_no_invert`.  Used by `update_bw` for flicker-free fast refreshes.
+static LUT_TABLE_NO_INVERT_CELL: StaticCell<[[u8; 107]; LUT_TABLE_SIZE]> = StaticCell::new();
 
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
     let port = match p.port() {
@@ -100,6 +103,7 @@ async fn probe_lut(
     dc: &Peri<'_, AnyPin>,
     rst: &Peri<'_, AnyPin>,
     busy: &Peri<'_, AnyPin>,
+    temp_raw: u16,
 ) -> [u8; 107] {
     let sck_nr = pin_nr(sck);
     let data_nr = pin_nr(data);
@@ -145,15 +149,31 @@ async fn probe_lut(
             unsafe { AnyPin::steal(data_nr) },
             cfg.clone(),
         );
-        // 0x18: Temperature Sensor Selection = Internal.  The SSD1675's
-        // own die sensor will be sampled by the LoadTemp step below;
-        // we deliberately do NOT write a manual value via 0x1A — that
-        // would override the on-chip sensor with the (unrelated) MCU
-        // die temperature.
+        // 0x18 = 0x80: temperature sensor source select (B-variant
+        // documented; A-variant accepts as no-op per the gap on pg 23).
+        // Tells the chip to use whatever's in the temperature register
+        // verbatim — no I²C external-sensor poll on the LoadTemp step.
         dc_out.set_low();
         spi_tx.write(&[0x18]).await.ok();
         dc_out.set_high();
         spi_tx.write(&[0x80]).await.ok();
+        // 0x1A: write current MCU die temperature into the chip's
+        // temperature register, 12-bit signed (pg 23 + pg 18 §6.10).
+        // Critical for the §6.9 TR-search: the upcoming LoadTemp+LoadLut
+        // sequence walks TR0..TR24 against THIS value and loads the
+        // matching WS into the LUT register — which we then read back
+        // via 0x33 and cache.  Without this write the register sits at
+        // POR (`0x7FF` = 127.9 °C) and we'd cache the warmest-WS for
+        // the entire session, regardless of actual ambient.
+        // SSD1675 has no on-die sensor (pg 6 block diagram), and the
+        // badge has no external sensor wired, so the MCU die value (rough
+        // proxy, warmer than panel under load) is the best we have.
+        let byte1 = ((temp_raw >> 4) & 0xFF) as u8;
+        let byte2 = ((temp_raw & 0x0F) << 4) as u8;
+        dc_out.set_low();
+        spi_tx.write(&[0x1A]).await.ok();
+        dc_out.set_high();
+        spi_tx.write(&[byte1, byte2]).await.ok();
         // 0x22 / 0xB1: EnableClock | LoadTemp | LoadLUT-OTP-Mode1 | DisableClock
         dc_out.set_low();
         spi_tx.write(&[0x22]).await.ok();
@@ -243,10 +263,18 @@ async fn probe_lut(
 
 /// Initialize the EPD display (SSD1675/SSD1675B, SPIM3 interface).
 ///
-/// Reads the factory OTP LUT from the display controller before consuming
-/// the peripheral tokens.  The SSD1675's on-chip temperature sensor is
-/// selected and used for waveform compensation — no external temperature
-/// is supplied or required.
+/// Boot-probes the chip's OTP at 16 temperatures (−10..+54 °C in 4 °C steps,
+/// matching the deployed panels' OTP TR-band granularity) and caches the
+/// resulting 16 × 107-byte WS images into [`LUT_TABLE_CELL`].  Driver later
+/// indexes the table by `Display::active_temp_c10` and pushes the matching
+/// LUT every refresh — bypasses the chip's own TR-search and the entire
+/// temperature-register / `LoadTemp` dance.  See `Display::update_tc` /
+/// `Display::update_bw`.
+///
+/// Probe takes ~16 × ~150 ms ≈ 2-3 s at boot.  Caller's read of the MCU die
+/// temperature isn't required here — `probe_lut` writes a different
+/// temperature register value on every iteration so the chip's TR-search
+/// lands in a different band each time.
 pub async fn init_epd<'a>(
     spi: Peri<'a, peripherals::SPI3>,
     sck_pin: Peri<'a, AnyPin>,
@@ -259,25 +287,32 @@ pub async fn init_epd<'a>(
     black_buffer: &'a mut [u8],
     red_buffer: &'a mut [u8],
     work_buffer: &'a mut [u8],
-    lut_mode: LutMode,
 ) -> Result<EpdGfx<'a>, Infallible> {
-    // Read OTP LUT via stolen peripherals before consuming the real tokens.
-    // Move raw bytes into static storage immediately — keeps the 107-byte buffer
-    // off the stack.  Two copies: `otp_lut` will be patched in-place by
-    // `set_otp_lut` (per `lut_mode`) for fast Mode 1 refreshes; `otp_full`
-    // stays raw for Mode 2 full refreshes.
-    let raw = probe_lut(
-        &sck_pin,
-        &mosi_pin,
-        &csn_pin,
-        &dc_pin,
-        &resetn_pin,
-        &busy_pin,
-    )
-    .await;
-    let otp_full: &'static [u8; 107] = OTP_LUT_FULL.init(raw);
-    let otp_lut: &'static mut [u8; 107] = OTP_LUT.init(raw);
-    OTP_LUT_PTR.store(otp_lut as *mut _, Ordering::Relaxed);
+    // Allocate the table in static storage first, then fill in-place — keeps
+    // the 1.7 KB array off the stack.
+    let lut_table: &'static mut [[u8; 107]; LUT_TABLE_SIZE] =
+        LUT_TABLE_CELL.init([[0u8; 107]; LUT_TABLE_SIZE]);
+
+    for i in 0..LUT_TABLE_SIZE {
+        let temp_c10 = (LUT_TABLE_MIN_C as i32 * 10)
+            + (i as i32) * (LUT_TABLE_STEP_C10 as i32);
+        let temp_raw = temp_c10_to_ssd1675(temp_c10 as i16);
+        lut_table[i] = probe_lut(
+            &sck_pin,
+            &mosi_pin,
+            &csn_pin,
+            &dc_pin,
+            &resetn_pin,
+            &busy_pin,
+            temp_raw,
+        )
+        .await;
+        defmt::debug!(
+            "LUT[{=usize:02}] @ {=i32} m°C: probed",
+            i,
+            temp_c10
+        );
+    }
 
     // Build the SPI bus.
     let mut cfg = Config::default();
@@ -300,10 +335,19 @@ pub async fn init_epd<'a>(
         .unwrap();
     let display = Display::new(controller, config);
     let mut gfx = GraphicDisplay::new(display, black_buffer, red_buffer, work_buffer);
-    // Register the un-patched OTP first; `set_otp_lut` may then mutate
-    // its buffer in place when `lut_mode == NoInvert`.
-    gfx.set_full_lut(otp_full);
-    gfx.set_otp_lut(otp_lut, lut_mode);
+    // Detect variant from a probed entry — needed before `register_lut_tables`
+    // because `patch_no_invert` is variant-aware.
+    let variant = detect_variant_from_otp(&lut_table[LUT_TABLE_SIZE / 2]);
+    gfx.set_variant(variant);
+
+    // Derive the no-invert table from the full one + register both.
+    let lut_table_no_invert: &'static mut [[u8; 107]; LUT_TABLE_SIZE] =
+        LUT_TABLE_NO_INVERT_CELL.init([[0u8; 107]; LUT_TABLE_SIZE]);
+    for i in 0..LUT_TABLE_SIZE {
+        lut_table_no_invert[i] = lut_table[i];
+        patch_no_invert(&mut lut_table_no_invert[i], variant);
+    }
+    gfx.register_lut_tables(lut_table, lut_table_no_invert);
     defmt::info!(
         "Display controller: {}",
         match gfx.variant() {
@@ -353,8 +397,44 @@ pub async fn load_persisted_lut_speed() {
     EPD_LUT_SPEED.store(scale, Ordering::Relaxed);
 }
 
-/// Read the current effective LUT-speed scale. Pass this to
-/// [`ssd1675::GraphicDisplay::update_bw`] / `update_tc`.
+/// Variant-aware self-heating bias for the SSD1675 LUT-table lookup,
+/// °C × 10.  The SSD1675**A** variant runs hot waveforms aggressively and
+/// blooms badly with the band-centre WS at face-value MCU die temp — bias
+/// 15 °C warmer than measured so the lookup picks a milder WS.  The
+/// SSD1675**B** variant doesn't show the same bloom and uses the raw
+/// reading.
+fn self_heating_bias_c10(variant: ssd1675::DisplayVariant) -> i16 {
+    match variant {
+        ssd1675::DisplayVariant::Ssd1675 => 250,
+        ssd1675::DisplayVariant::Ssd1675B => 0,
+    }
+}
+
+/// PCB temperature estimate (°C × 10) for SSD1675 LUT-table indexing.
+/// Returns `last_c10() - self_heating_bias_c10(variant)`, or `i16::MIN`
+/// if no MCU die reading has been taken yet.
+pub fn panel_temp_c10(variant: ssd1675::DisplayVariant) -> i16 {
+    let c10 = crate::fw::temperature::last_c10();
+    if c10 == i16::MIN {
+        i16::MIN
+    } else {
+        c10 - self_heating_bias_c10(variant)
+    }
+}
+
+/// Convert nRF52840 die temperature (°C × 10) into the SSD1675 12-bit
+/// temperature-register format (1 LSB = 1/16 °C, two's complement, 12 bits
+/// per datasheet §6.10 pg 18).
+///
+/// Example: 25.0 °C → c10=250 → raw = 250 × 16 / 10 = 400 = `0x190`
+/// (matches datasheet pg 18 table).  Negative values use 12-bit
+/// two's complement.
+fn temp_c10_to_ssd1675(c10: i16) -> u16 {
+    let raw = (c10 as i32 * 16) / 10;
+    let clamped = raw.clamp(-2048, 2047);
+    (clamped as u16) & 0x0FFF
+}
+
 pub fn current_lut_speed() -> u8 {
     EPD_LUT_SPEED.load(Ordering::Relaxed)
 }
