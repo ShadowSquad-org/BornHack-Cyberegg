@@ -521,17 +521,17 @@ pub async fn load_persisted_lut_speed() {
     EPD_LUT_SPEED.store(scale, Ordering::Relaxed);
 }
 
-/// Variant-aware self-heating bias for the SSD1675 LUT-table lookup,
-/// °C × 10.  The SSD1675**A** variant runs hot waveforms aggressively and
-/// blooms badly with the band-centre WS at face-value MCU die temp — bias
-/// 15 °C warmer than measured so the lookup picks a milder WS.  The
-/// SSD1675**B** variant doesn't show the same bloom and uses the raw
-/// reading.
-fn self_heating_bias_c10(variant: ssd1675::DisplayVariant) -> i16 {
-    match variant {
-        ssd1675::DisplayVariant::Ssd1675 => 250,
-        ssd1675::DisplayVariant::Ssd1675B => 0,
-    }
+/// Self-heating bias for the SSD1675 temperature feed, °C × 10 — subtracted
+/// from the MCU die reading to estimate the panel temperature.
+///
+/// Now 0 for both variants: the driver's SSD1675A voltage gradient
+/// (`DisplayVariant::voltages`) and the OTP waveform band-selection both need
+/// the *real* panel temperature.  The old −25 °C bias on A drove the lookup
+/// far too cold (e.g. 34 °C die → 9 °C lookup), which over-drove the panel and
+/// picked the slow cold-band waveform.  Re-introduce a small offset here only
+/// if the die is measured to run materially hotter than the panel.
+fn self_heating_bias_c10(_variant: ssd1675::DisplayVariant) -> i16 {
+    0
 }
 
 /// User-tunable extra bias on top of [`self_heating_bias_c10`], in

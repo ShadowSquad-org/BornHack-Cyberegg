@@ -613,18 +613,27 @@ impl<const M: usize> DisplayState<M> {
                     let s = &mut self.screens[self.active_screen as usize];
                     if s.about_page > 0 {
                         s.about_page -= 1;
+                        // Full-frame redraw so the new page's text is clean
+                        // (delta over text leaves fragments of the old page).
+                        crate::FULL_REFRESH_PENDING
+                            .store(true, core::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 ButtonId::Right => {
                     let s = &mut self.screens[self.active_screen as usize];
                     if s.about_page < ABOUT_PAGES - 1 {
                         s.about_page += 1;
+                        crate::FULL_REFRESH_PENDING
+                            .store(true, core::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 ButtonId::Cancel | ButtonId::Execute | ButtonId::Fire => {
                     let s = &mut self.screens[self.active_screen as usize];
                     s.about_page = 0;
                     s.sub_items = None;
+                    // Leaving / resetting the About view also redraws fully.
+                    crate::FULL_REFRESH_PENDING
+                        .store(true, core::sync::atomic::Ordering::Relaxed);
                 }
                 _ => {}
             }

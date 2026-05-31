@@ -22,7 +22,7 @@ use embedded_graphics::primitives::{PrimitiveStyle, Rectangle, Triangle};
 use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 
 use super::nav::Row;
-use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_WHITE};
+use crate::ui::{self, TEXT_BOLD_BLACK, TEXT_BOLD_WHITE};
 use crate::{BLACK, TriColor};
 
 // ── Modal kind
@@ -568,7 +568,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                TEXT_WHITE,
+                TEXT_BOLD_WHITE,
                 left_style,
             )
             .draw(display)?;
@@ -585,7 +585,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                TEXT_BLACK,
+                TEXT_BOLD_BLACK,
                 left_style,
             )
             .draw(display)?;
@@ -594,7 +594,7 @@ where
             Text::with_text_style(
                 display_label.as_str(),
                 Point::new(list_x + 4, row_mid),
-                TEXT_BLACK,
+                TEXT_BOLD_BLACK,
                 left_style,
             )
             .draw(display)?;
