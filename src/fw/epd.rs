@@ -131,9 +131,8 @@ async fn probe_lut(
     let busy_in = Input::new(unsafe { AnyPin::steal(busy_nr) }, Pull::Down);
 
     let mut cfg = Config::default();
-    // SSD1675 datasheet allows up to 20 MHz SCLK; 8 MHz gives ~8x
-    // faster SPI prep vs M1 (~46ms → ~6ms per plane upload) without
-    // signal-integrity risk on the badge's short SPI3 traces.
+    // SSD1675 datasheet rates SCK up to ~20 MHz; SPIM3 caps at 32 MHz.
+    // 16 MHz is comfortably below both and 16× the previous M1 setting.
     cfg.frequency = Frequency::M16;
 
     // Hardware reset — flat 100 ms settle (BUSY does not reliably pulse during
@@ -392,7 +391,10 @@ pub async fn init_epd<'a>(
 
     // Build the SPI bus.
     let mut cfg = Config::default();
-    // 8 MHz SCLK — see note in the OTP-probe SPI config above.
+    // Same as the OTP-load path above: M16 for runtime EPD writes.
+    // Refresh time is waveform-bound (LUT timings, not SCK), but a
+    // faster bus frees the executor sooner during the ~80 KiB framebuffer
+    // push so concurrent tasks (LoRa, USB) get more cycles.
     cfg.frequency = Frequency::M16;
     let bus = Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg);
 
