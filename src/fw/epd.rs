@@ -127,7 +127,9 @@ async fn probe_lut(
     let busy_in = Input::new(unsafe { AnyPin::steal(busy_nr) }, Pull::Down);
 
     let mut cfg = Config::default();
-    cfg.frequency = Frequency::M1;
+    // SSD1675 datasheet rates SCK up to ~20 MHz; SPIM3 caps at 32 MHz.
+    // 16 MHz is comfortably below both and 16× the previous M1 setting.
+    cfg.frequency = Frequency::M16;
 
     // Hardware reset — flat 100 ms settle (BUSY does not reliably pulse during
     // reset/OTP boot).
@@ -281,7 +283,11 @@ pub async fn init_epd<'a>(
 
     // Build the SPI bus.
     let mut cfg = Config::default();
-    cfg.frequency = Frequency::M1;
+    // Same as the OTP-load path above: M16 for runtime EPD writes.
+    // Refresh time is waveform-bound (LUT timings, not SCK), but a
+    // faster bus frees the executor sooner during the ~80 KiB framebuffer
+    // push so concurrent tasks (LoRa, USB) get more cycles.
+    cfg.frequency = Frequency::M16;
     let bus = Spim::new_txonly(spi, Irqs, sck_pin, mosi_pin, cfg);
 
     // Initialize GPIO pins.
