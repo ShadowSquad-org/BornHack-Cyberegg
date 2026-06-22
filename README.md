@@ -372,6 +372,28 @@ rustup target add thumbv7em-none-eabihf
 cargo install probe-rs-tools
 ```
 
+### macOS
+
+```bash
+# Xcode Command Line Tools — provides make, clang, and the libclang that bindgen needs
+xcode-select --install
+
+# System packages (Homebrew); sdl2 is only needed for the simulator
+brew install arm-none-eabi-binutils sdl2 dfu-util
+
+# Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add thumbv7em-none-eabihf
+
+# probe-rs
+cargo install probe-rs-tools
+```
+
+> If you already have Rust via Homebrew (`brew install rust`), uninstall it first
+> (`brew uninstall rust`). It ships only the host standard library and can't add the
+> `thumbv7em-none-eabihf` target, and it conflicts with rustup on PATH — the build fails
+> with `error[E0463]: can't find crate for 'core'` if the wrong `cargo` wins.
+
 ### Windows
 
 Install the following:
