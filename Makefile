@@ -17,7 +17,7 @@ FW_OUT = firmware
 BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
 .PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
-        fw-hwtest flash-hwtest run-hwtest monitor-hwtest \
+        fw-hwtest flash-hwtest run-hwtest monitor-hwtest fw-hwtest-bin \
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
@@ -133,6 +133,18 @@ run-hwtest: fw-hwtest
 # flash-and-watch use `make run-hwtest`.
 monitor-hwtest:
 	probe-rs attach --chip nRF52840_xxAA $(ELF_HWTEST)
+
+# Bundle hwtest artifacts (elf/bin/hex) for factory programmers (J-Link, etc.)
+# Hwtest is standalone — flashes at 0x0, no bootloader needed.
+fw-hwtest-bin: fw-hwtest
+	@mkdir -p $(FW_OUT)
+	cp $(ELF_HWTEST) $(FW_OUT)/cyber-aegg-hwtest.elf
+	arm-none-eabi-objcopy -O binary $(ELF_HWTEST) $(FW_OUT)/cyber-aegg-hwtest.bin
+	arm-none-eabi-objcopy -O ihex   $(ELF_HWTEST) $(FW_OUT)/cyber-aegg-hwtest.hex
+	@arm-none-eabi-size $(ELF_HWTEST) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
+	@echo "hwtest ELF: $(abspath $(FW_OUT)/cyber-aegg-hwtest.elf)"
+	@echo "hwtest BIN: $(abspath $(FW_OUT)/cyber-aegg-hwtest.bin) (load @ 0x00000000)"
+	@echo "hwtest HEX: $(abspath $(FW_OUT)/cyber-aegg-hwtest.hex)"
 
 # ---------- Simulator ----------
 
