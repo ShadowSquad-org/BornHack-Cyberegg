@@ -324,18 +324,18 @@ fn current_severity(state: &GameState) -> Severity {
     // animation) so that active-action animations — Feeding/Healing/etc
     // — don't "mask" an existing warning and suppress the alert when
     // the action ends.
-    let severe = state.sick > SICK_TRIGGER_TIRED
-        || state.tired > SICK_TRIGGER_TIRED
-        || state.hunger > SICK_TRIGGER_HUNGER
-        || state.drained > SICK_TRIGGER_DRAINED;
+    let severe = state.sick > SICK_TRIGGER_TIRED()
+        || state.tired > SICK_TRIGGER_TIRED()
+        || state.hunger > SICK_TRIGGER_HUNGER()
+        || state.drained > SICK_TRIGGER_DRAINED();
     if severe {
         return Severity::Severe;
     }
-    let warning = state.sick > WARNING_SICK
-        || state.tired > WARNING_TIRED
-        || state.hunger > WARNING_HUNGER
-        || state.drained > WARNING_DRAINED
-        || state.miserable > WARNING_MISERABLE;
+    let warning = state.sick > WARNING_SICK()
+        || state.tired > WARNING_TIRED()
+        || state.hunger > WARNING_HUNGER()
+        || state.drained > WARNING_DRAINED()
+        || state.miserable > WARNING_MISERABLE();
     if warning {
         return Severity::Warning;
     }

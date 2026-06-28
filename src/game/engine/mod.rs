@@ -5,7 +5,7 @@
 //! 1. Computes elapsed ticks since the last update.
 //! 2. Applies all stat changes for that delta in one step.
 //! 3. Computes the next boundary crossing time across all stats.
-//! 4. Schedules a wake-up at the earliest boundary (or MAX_SLEEP_TICKS).
+//! 4. Schedules a wake-up at the earliest boundary (or MAX_SLEEP_TICKS()).
 //!
 //! This lets the CPU sleep for minutes or hours when nothing interesting
 //! is about to happen, saving significant battery on the badge.
@@ -104,7 +104,7 @@ pub struct GameState {
     // Pet kind.
     pub pet_kind: PetKind,
 
-    // Primary stats (0 = best, STAT_MAX = worst).
+    // Primary stats (0 = best, STAT_MAX() = worst).
     pub hunger: u16,
     pub tired: u16,
     pub drained: u16,
@@ -190,8 +190,8 @@ impl GameState {
             rng ^= rng << 13;
             rng ^= rng >> 7;
             rng ^= rng << 17;
-            let range = (MAX_TRAIT - MIN_TRAIT) as u64;
-            MIN_TRAIT + ((rng % range) as u16)
+            let range = (MAX_TRAIT() - MIN_TRAIT()) as u64;
+            MIN_TRAIT() + ((rng % range) as u16)
         };
 
         let vitality = next();
@@ -204,7 +204,7 @@ impl GameState {
             hunger: 0,
             tired: 0,
             drained: 0,
-            sick: (STAT_MAX - vitality) / 4,
+            sick: (STAT_MAX() - vitality) / 4,
             miserable: 0,
 
             vitality,
@@ -215,7 +215,7 @@ impl GameState {
             age_ticks: 0,
 
             phase: Phase::Hatching,
-            hatching_countdown: HATCHING_TICKS,
+            hatching_countdown: HATCHING_TICKS(),
             leaving_countdown: 0,
             generation: 0,
 
@@ -259,7 +259,7 @@ impl GameState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Saturating add for u16 stats (capped at STAT_MAX).
+/// Saturating add for u16 stats (capped at STAT_MAX()).
 fn sat_add(val: u16, delta: u16) -> u16 {
     val.saturating_add(delta)
 }
@@ -273,7 +273,7 @@ fn sat_sub(val: u16, delta: u16) -> u16 {
 /// This is the `y += m * dt` step — safe for large deltas.
 /// Takes dt as u32 to avoid truncation on large piecewise segments.
 fn mul_dt(rate: u16, dt: u32) -> u16 {
-    (rate as u32 * dt).min(STAT_MAX as u32) as u16
+    (rate as u32 * dt).min(STAT_MAX() as u32) as u16
 }
 
 /// How many times an interval fires in `delta` ticks, given a counter
@@ -288,7 +288,7 @@ fn interval_fires(delta: u32, counter: u32, interval: u32) -> (u32, u32) {
 
 /// Count how many of the four primary stats exceed the 60% threshold.
 fn count_above_60(state: &GameState) -> u32 {
-    let t = MISERABLE_STAT_THRESHOLD;
+    let t = MISERABLE_STAT_THRESHOLD();
     (state.hunger > t) as u32
         + (state.tired > t) as u32
         + (state.drained > t) as u32
@@ -297,22 +297,22 @@ fn count_above_60(state: &GameState) -> u32 {
 
 /// Check if any stat triggers sick condition decay.
 fn sick_condition_active(state: &GameState) -> bool {
-    state.hunger > SICK_TRIGGER_HUNGER
-        || state.tired > SICK_TRIGGER_TIRED
-        || state.drained > SICK_TRIGGER_DRAINED
+    state.hunger > SICK_TRIGGER_HUNGER()
+        || state.tired > SICK_TRIGGER_TIRED()
+        || state.drained > SICK_TRIGGER_DRAINED()
 }
 
 /// Curiosity modifier for play costs: 0–10 range, higher = cheaper.
 fn curiosity_modifier(curiosity: u16) -> u16 {
-    (curiosity as u32 * 10 / STAT_MAX as u32) as u16
+    (curiosity as u32 * 10 / STAT_MAX() as u32) as u16
 }
 
-/// Count of maxed stats (= STAT_MAX).
+/// Count of maxed stats (= STAT_MAX()).
 fn count_maxed(state: &GameState) -> usize {
-    (state.hunger == STAT_MAX) as usize
-        + (state.tired == STAT_MAX) as usize
-        + (state.drained == STAT_MAX) as usize
-        + (state.sick == STAT_MAX) as usize
+    (state.hunger == STAT_MAX()) as usize
+        + (state.tired == STAT_MAX()) as usize
+        + (state.drained == STAT_MAX()) as usize
+        + (state.sick == STAT_MAX()) as usize
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ impl GameState {
     /// Enforce the minimum-`miserable` floor required by the severe and
     /// leaving caps:
     ///
-    /// * `Phase::Leaving` → miserable ≥ 50 % of `STAT_MAX` (≡ displayed Happy ≤
+    /// * `Phase::Leaving` → miserable ≥ 50 % of `STAT_MAX()` (≡ displayed Happy ≤
     ///   50 %).  This is a flat cap and does *not* add to the per-stat severe
     ///   penalties.
     /// * Each primary stat above its critical threshold → an additional −20 %
@@ -412,13 +412,13 @@ impl GameState {
     /// drop below critical AND phase returns to Active), the floor is
     /// 0 again and Play's reset works normally.
     fn apply_miserable_floor(&mut self) {
-        let critical = (self.hunger > SICK_TRIGGER_HUNGER) as u32
-            + (self.tired > SICK_TRIGGER_TIRED) as u32
-            + (self.drained > SICK_TRIGGER_DRAINED) as u32
-            + (self.sick > SICK_TRIGGER_TIRED) as u32;
-        let floor_severe = (critical * (STAT_MAX as u32 / 5)).min(STAT_MAX as u32) as u16;
+        let critical = (self.hunger > SICK_TRIGGER_HUNGER()) as u32
+            + (self.tired > SICK_TRIGGER_TIRED()) as u32
+            + (self.drained > SICK_TRIGGER_DRAINED()) as u32
+            + (self.sick > SICK_TRIGGER_TIRED()) as u32;
+        let floor_severe = (critical * (STAT_MAX() as u32 / 5)).min(STAT_MAX() as u32) as u16;
         let floor_leaving = if self.phase == Phase::Leaving {
-            STAT_MAX / 2
+            STAT_MAX() / 2
         } else {
             0
         };
@@ -434,7 +434,7 @@ impl GameState {
     /// depends on it) changes is checked.  Returns the minimum across all.
     fn ticks_to_next_rate_change(&self) -> u32 {
         let mut m = u32::MAX;
-        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD;
+        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD();
 
         // Helper: ticks for a linearly-increasing stat to reach `target`.
         let ticks_up = |val: u16, target: u16, rate: u16| -> u32 {
@@ -465,18 +465,18 @@ impl GameState {
         let hunger_rate = if self.cooldown_feed > 0 {
             0
         } else {
-            HUNGER_RATE
+            HUNGER_RATE()
                 + if miserable_high {
-                    HUNGER_MISERABLE_BOOST
+                    HUNGER_MISERABLE_BOOST()
                 } else {
                     0
                 }
         };
 
         // Current tired rate (never suppressed).
-        let tired_rate = TIRED_RATE
+        let tired_rate = TIRED_RATE()
             + if miserable_high {
-                TIRED_MISERABLE_BOOST
+                TIRED_MISERABLE_BOOST()
             } else {
                 0
             };
@@ -484,10 +484,10 @@ impl GameState {
         // Current drained interval.
         let drained_interval = if self.cooldown_relax > 0 {
             u32::MAX
-        } else if self.miserable >= MISERABLE_DRAIN_THRESHOLD {
-            DRAINED_INTERVAL_MISERABLE
+        } else if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
+            DRAINED_INTERVAL_MISERABLE()
         } else {
-            DRAINED_INTERVAL
+            DRAINED_INTERVAL()
         };
 
         // Current miserable interval.
@@ -495,30 +495,30 @@ impl GameState {
             u32::MAX
         } else {
             let above = count_above_60(self);
-            MISERABLE_INTERVAL_BASE
-                .saturating_sub(MISERABLE_INTERVAL_PER_STAT * above)
-                .max(MISERABLE_INTERVAL_MIN)
+            MISERABLE_INTERVAL_BASE()
+                .saturating_sub(MISERABLE_INTERVAL_PER_STAT() * above)
+                .max(MISERABLE_INTERVAL_MIN())
         };
 
         // ── Boundaries that change the miserable interval (count_above_60) ──
 
         // Each primary stat crossing 60% changes the miserable decay rate.
-        let t60 = MISERABLE_STAT_THRESHOLD;
+        let t60 = MISERABLE_STAT_THRESHOLD();
         m = m.min(ticks_up(self.hunger, t60, hunger_rate));
         m = m.min(ticks_up(self.tired, t60, tired_rate));
         m = m.min(ticks_interval(
             self.drained,
             t60,
-            DRAINED_AMOUNT,
+            DRAINED_AMOUNT(),
             drained_interval,
         ));
         // sick rate is complex (base + condition); use base rate as lower bound.
-        let sick_rate_approx = SICK_RATE
+        let sick_rate_approx = SICK_RATE()
             + if sick_condition_active(self) {
                 if miserable_high {
-                    SICK_CONDITION_MISERABLE_RATE
+                    SICK_CONDITION_MISERABLE_RATE()
                 } else {
-                    SICK_CONDITION_RATE
+                    SICK_CONDITION_RATE()
                 }
             } else {
                 0
@@ -527,12 +527,12 @@ impl GameState {
 
         // ── Boundaries that change sick condition decay ──
 
-        m = m.min(ticks_up(self.hunger, SICK_TRIGGER_HUNGER, hunger_rate));
-        m = m.min(ticks_up(self.tired, SICK_TRIGGER_TIRED, tired_rate));
+        m = m.min(ticks_up(self.hunger, SICK_TRIGGER_HUNGER(), hunger_rate));
+        m = m.min(ticks_up(self.tired, SICK_TRIGGER_TIRED(), tired_rate));
         m = m.min(ticks_interval(
             self.drained,
-            SICK_TRIGGER_DRAINED,
-            DRAINED_AMOUNT,
+            SICK_TRIGGER_DRAINED(),
+            DRAINED_AMOUNT(),
             drained_interval,
         ));
 
@@ -540,26 +540,26 @@ impl GameState {
 
         m = m.min(ticks_interval(
             self.miserable,
-            MISERABLE_BOOST_THRESHOLD,
-            MISERABLE_AMOUNT,
+            MISERABLE_BOOST_THRESHOLD(),
+            MISERABLE_AMOUNT(),
             mis_interval,
         ));
         m = m.min(ticks_interval(
             self.miserable,
-            MISERABLE_DRAIN_THRESHOLD,
-            MISERABLE_AMOUNT,
+            MISERABLE_DRAIN_THRESHOLD(),
+            MISERABLE_AMOUNT(),
             mis_interval,
         ));
 
         // ── Stats reaching STAT_MAX (changes leaving behavior) ──
 
-        m = m.min(ticks_up(self.hunger, STAT_MAX, hunger_rate));
-        m = m.min(ticks_up(self.tired, STAT_MAX, tired_rate));
-        m = m.min(ticks_up(self.sick, STAT_MAX, sick_rate_approx));
+        m = m.min(ticks_up(self.hunger, STAT_MAX(), hunger_rate));
+        m = m.min(ticks_up(self.tired, STAT_MAX(), tired_rate));
+        m = m.min(ticks_up(self.sick, STAT_MAX(), sick_rate_approx));
         m = m.min(ticks_interval(
             self.drained,
-            STAT_MAX,
-            DRAINED_AMOUNT,
+            STAT_MAX(),
+            DRAINED_AMOUNT(),
             drained_interval,
         ));
 
@@ -581,15 +581,15 @@ impl GameState {
         // ── Sleep tier transitions ──
 
         if self.is_sleeping {
-            m = m.min(ticks_down(self.tired, SLEEP_TIER_SLOW, SLEEP_RECOVERY_SLOW).max(1));
-            m = m.min(ticks_down(self.tired, SLEEP_TIER_MEDIUM, SLEEP_RECOVERY_MEDIUM).max(1));
+            m = m.min(ticks_down(self.tired, SLEEP_TIER_SLOW(), SLEEP_RECOVERY_SLOW()).max(1));
+            m = m.min(ticks_down(self.tired, SLEEP_TIER_MEDIUM(), SLEEP_RECOVERY_MEDIUM()).max(1));
             // Auto-wake: tired → 0.
-            let wake_rate = if self.tired >= SLEEP_TIER_SLOW {
-                SLEEP_RECOVERY_SLOW
-            } else if self.tired >= SLEEP_TIER_MEDIUM {
-                SLEEP_RECOVERY_MEDIUM
+            let wake_rate = if self.tired >= SLEEP_TIER_SLOW() {
+                SLEEP_RECOVERY_SLOW()
+            } else if self.tired >= SLEEP_TIER_MEDIUM() {
+                SLEEP_RECOVERY_MEDIUM()
             } else {
-                SLEEP_RECOVERY_FAST
+                SLEEP_RECOVERY_FAST()
             };
             m = m.min(ticks_down(self.tired, 0, wake_rate).max(1));
         }
@@ -608,15 +608,15 @@ impl GameState {
             let t = ticks as u16;
             match action {
                 Action::Feed => {
-                    self.hunger = sat_sub(self.hunger, mul_dt(FEED_HUNGER_RELIEF, t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(FEED_DRAINED_RELIEF, t as u32));
+                    self.hunger = sat_sub(self.hunger, mul_dt(FEED_HUNGER_RELIEF(), t as u32));
+                    self.drained = sat_sub(self.drained, mul_dt(FEED_DRAINED_RELIEF(), t as u32));
                 }
                 Action::Heal => {
-                    self.sick = sat_sub(self.sick, mul_dt(HEAL_SICK_RELIEF, t as u32));
+                    self.sick = sat_sub(self.sick, mul_dt(HEAL_SICK_RELIEF(), t as u32));
                 }
                 Action::Relax => {
-                    self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF, t as u32));
-                    self.hunger = sat_add(self.hunger, mul_dt(RELAX_HUNGER_COST, t as u32));
+                    self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), t as u32));
+                    self.hunger = sat_add(self.hunger, mul_dt(RELAX_HUNGER_COST(), t as u32));
                 }
                 Action::Play => {
                     let cm = curiosity_modifier(self.curiosity);
@@ -624,21 +624,21 @@ impl GameState {
                     let apply = |base: u16| -> u16 {
                         mul_dt((base as u32 * cost_mul / 10) as u16, t as u32)
                     };
-                    self.hunger = sat_add(self.hunger, apply(PLAY_HUNGER_COST));
-                    self.tired = sat_add(self.tired, apply(PLAY_TIRED_COST));
-                    self.drained = sat_add(self.drained, apply(PLAY_DRAINED_COST));
+                    self.hunger = sat_add(self.hunger, apply(PLAY_HUNGER_COST()));
+                    self.tired = sat_add(self.tired, apply(PLAY_TIRED_COST()));
+                    self.drained = sat_add(self.drained, apply(PLAY_DRAINED_COST()));
                 }
             }
 
             if self.action_ticks_remaining == 0 {
                 // Action complete — set cooldown.
                 match action {
-                    Action::Feed => self.cooldown_feed = FEED_COOLDOWN,
-                    Action::Heal => self.cooldown_heal = HEAL_COOLDOWN,
-                    Action::Relax => self.cooldown_relax = RELAX_COOLDOWN,
+                    Action::Feed => self.cooldown_feed = FEED_COOLDOWN(),
+                    Action::Heal => self.cooldown_heal = HEAL_COOLDOWN(),
+                    Action::Relax => self.cooldown_relax = RELAX_COOLDOWN(),
                     Action::Play => {
                         self.miserable = 0; // play zeroes miserable on completion
-                        self.cooldown_play = PLAY_COOLDOWN;
+                        self.cooldown_play = PLAY_COOLDOWN();
                     }
                 }
                 self.active_action = None;
@@ -666,13 +666,13 @@ impl GameState {
 
     /// Apply stat decay while awake for `delta` ticks.
     fn apply_awake_decay(&mut self, delta: u32) {
-        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD;
+        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD();
 
         // Hunger (suppressed during feed action + cooldown).
         if self.cooldown_feed == 0 && self.active_action != Some(Action::Feed) {
-            let rate = HUNGER_RATE
+            let rate = HUNGER_RATE()
                 + if miserable_high {
-                    HUNGER_MISERABLE_BOOST
+                    HUNGER_MISERABLE_BOOST()
                 } else {
                     0
                 };
@@ -681,9 +681,9 @@ impl GameState {
 
         // Tired (never suppressed).
         {
-            let rate = TIRED_RATE
+            let rate = TIRED_RATE()
                 + if miserable_high {
-                    TIRED_MISERABLE_BOOST
+                    TIRED_MISERABLE_BOOST()
                 } else {
                     0
                 };
@@ -693,36 +693,36 @@ impl GameState {
         // Tired passive recovery.
         {
             let (fires, new_counter) =
-                interval_fires(delta, self.tired_passive_counter, TIRED_PASSIVE_INTERVAL);
+                interval_fires(delta, self.tired_passive_counter, TIRED_PASSIVE_INTERVAL());
             self.tired_passive_counter = new_counter;
             if fires > 0 {
-                self.tired = sat_sub(self.tired, mul_dt(TIRED_PASSIVE_RECOVERY, fires));
+                self.tired = sat_sub(self.tired, mul_dt(TIRED_PASSIVE_RECOVERY(), fires));
             }
         }
 
         // Drained (suppressed during relax action + cooldown).
         if self.cooldown_relax == 0 && self.active_action != Some(Action::Relax) {
-            let interval = if self.miserable >= MISERABLE_DRAIN_THRESHOLD {
-                DRAINED_INTERVAL_MISERABLE
+            let interval = if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
+                DRAINED_INTERVAL_MISERABLE()
             } else {
-                DRAINED_INTERVAL
+                DRAINED_INTERVAL()
             };
             let (fires, new_counter) =
                 interval_fires(delta, self.drained_interval_counter, interval);
             self.drained_interval_counter = new_counter;
             if fires > 0 {
-                self.drained = sat_add(self.drained, mul_dt(DRAINED_AMOUNT, fires));
+                self.drained = sat_add(self.drained, mul_dt(DRAINED_AMOUNT(), fires));
             }
         }
 
         // Sick (suppressed during heal action + cooldown).
         if self.cooldown_heal == 0 && self.active_action != Some(Action::Heal) {
-            let base = mul_dt(SICK_RATE, delta);
+            let base = mul_dt(SICK_RATE(), delta);
             let condition = if sick_condition_active(self) {
                 let rate = if miserable_high {
-                    SICK_CONDITION_MISERABLE_RATE
+                    SICK_CONDITION_MISERABLE_RATE()
                 } else {
-                    SICK_CONDITION_RATE
+                    SICK_CONDITION_RATE()
                 };
                 mul_dt(rate, delta)
             } else {
@@ -734,29 +734,29 @@ impl GameState {
         // Miserable (suppressed during play action + cooldown).
         if self.cooldown_play == 0 && self.active_action != Some(Action::Play) {
             let above = count_above_60(self);
-            let interval = MISERABLE_INTERVAL_BASE
-                .saturating_sub(MISERABLE_INTERVAL_PER_STAT * above)
-                .max(MISERABLE_INTERVAL_MIN);
+            let interval = MISERABLE_INTERVAL_BASE()
+                .saturating_sub(MISERABLE_INTERVAL_PER_STAT() * above)
+                .max(MISERABLE_INTERVAL_MIN());
             let (fires, new_counter) =
                 interval_fires(delta, self.miserable_interval_counter, interval);
             self.miserable_interval_counter = new_counter;
             if fires > 0 {
-                self.miserable = sat_add(self.miserable, mul_dt(MISERABLE_AMOUNT, fires));
+                self.miserable = sat_add(self.miserable, mul_dt(MISERABLE_AMOUNT(), fires));
             }
         }
     }
 
     /// Apply stat changes during sleep for `delta` ticks.
     fn apply_sleep_decay(&mut self, delta: u32) {
-        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD;
+        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD();
 
         // Tired recovery (tiered by current level).
-        let recovery_rate = if self.tired >= SLEEP_TIER_SLOW {
-            SLEEP_RECOVERY_SLOW
-        } else if self.tired >= SLEEP_TIER_MEDIUM {
-            SLEEP_RECOVERY_MEDIUM
+        let recovery_rate = if self.tired >= SLEEP_TIER_SLOW() {
+            SLEEP_RECOVERY_SLOW()
+        } else if self.tired >= SLEEP_TIER_MEDIUM() {
+            SLEEP_RECOVERY_MEDIUM()
         } else {
-            SLEEP_RECOVERY_FAST
+            SLEEP_RECOVERY_FAST()
         };
         self.tired = sat_sub(self.tired, mul_dt(recovery_rate, delta));
 
@@ -766,15 +766,15 @@ impl GameState {
         }
 
         // Drained recovers during sleep.
-        self.drained = sat_sub(self.drained, mul_dt(DRAINED_SLEEP_RECOVERY, delta));
+        self.drained = sat_sub(self.drained, mul_dt(DRAINED_SLEEP_RECOVERY(), delta));
 
         // Hunger still decays during sleep, and faster than awake —
         // sleeping is restorative, not free.
         if self.cooldown_feed == 0 {
-            let rate = HUNGER_RATE
-                + SLEEP_HUNGER_COST
+            let rate = HUNGER_RATE()
+                + SLEEP_HUNGER_COST()
                 + if miserable_high {
-                    HUNGER_MISERABLE_BOOST
+                    HUNGER_MISERABLE_BOOST()
                 } else {
                     0
                 };
@@ -783,12 +783,12 @@ impl GameState {
 
         // Sick still decays during sleep.
         if self.cooldown_heal == 0 {
-            let base = mul_dt(SICK_RATE, delta);
+            let base = mul_dt(SICK_RATE(), delta);
             let condition = if sick_condition_active(self) {
                 let rate = if miserable_high {
-                    SICK_CONDITION_MISERABLE_RATE
+                    SICK_CONDITION_MISERABLE_RATE()
                 } else {
-                    SICK_CONDITION_RATE
+                    SICK_CONDITION_RATE()
                 };
                 mul_dt(rate, delta)
             } else {
@@ -811,7 +811,7 @@ impl GameState {
         }
 
         self.leaving_countdown += delta;
-        let threshold = LEAVING_THRESHOLDS[maxed.min(4)];
+        let threshold = LEAVING_THRESHOLDS()[maxed.min(4)];
 
         if self.leaving_countdown >= threshold {
             self.phase = Phase::Gone;
@@ -843,7 +843,7 @@ impl GameState {
             return false;
         }
         self.active_action = Some(Action::Feed);
-        self.action_ticks_remaining = FEED_DURATION;
+        self.action_ticks_remaining = FEED_DURATION();
         true
     }
 
@@ -856,7 +856,7 @@ impl GameState {
             return false;
         }
         self.active_action = Some(Action::Heal);
-        self.action_ticks_remaining = HEAL_DURATION;
+        self.action_ticks_remaining = HEAL_DURATION();
         true
     }
 
@@ -869,7 +869,7 @@ impl GameState {
             return false;
         }
         self.active_action = Some(Action::Relax);
-        self.action_ticks_remaining = RELAX_DURATION;
+        self.action_ticks_remaining = RELAX_DURATION();
         true
     }
 
@@ -882,7 +882,7 @@ impl GameState {
             return false;
         }
         self.active_action = Some(Action::Play);
-        self.action_ticks_remaining = PLAY_DURATION;
+        self.action_ticks_remaining = PLAY_DURATION();
         true
     }
 
@@ -936,16 +936,16 @@ impl GameState {
             return;
         }
         // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
-        self.drained = sat_sub(self.drained, RELAX_DRAINED_RELIEF * 2);
-        self.hunger = sat_add(self.hunger, MINIGAME_HUNGER_COST);
+        self.drained = sat_sub(self.drained, RELAX_DRAINED_RELIEF() * 2);
+        self.hunger = sat_add(self.hunger, MINIGAME_HUNGER_COST());
         match game {
-            MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN,
-            MiniGame::LightsOut => self.cooldown_lightsout = MINIGAME_COOLDOWN,
-            MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN,
-            MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN,
-            MiniGame::Maze => self.cooldown_maze = MINIGAME_COOLDOWN,
-            MiniGame::TripleBorn => self.cooldown_tripleborn = MINIGAME_COOLDOWN,
-            MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN,
+            MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN(),
+            MiniGame::LightsOut => self.cooldown_lightsout = MINIGAME_COOLDOWN(),
+            MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN(),
+            MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN(),
+            MiniGame::Maze => self.cooldown_maze = MINIGAME_COOLDOWN(),
+            MiniGame::TripleBorn => self.cooldown_tripleborn = MINIGAME_COOLDOWN(),
+            MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
     }
 
@@ -981,7 +981,7 @@ impl GameState {
         }
 
         let now = self.last_update_tick;
-        let mut earliest = now + MAX_SLEEP_TICKS;
+        let mut earliest = now + MAX_SLEEP_TICKS();
 
         // Hatching countdown.
         if self.phase == Phase::Hatching {
@@ -1008,45 +1008,45 @@ impl GameState {
         }
 
         // Stat boundary crossings.
-        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD;
+        let miserable_high = self.miserable >= MISERABLE_BOOST_THRESHOLD();
 
         // Hunger → sick trigger threshold.
-        if self.hunger < SICK_TRIGGER_HUNGER && self.cooldown_feed == 0 {
-            let rate = HUNGER_RATE
+        if self.hunger < SICK_TRIGGER_HUNGER() && self.cooldown_feed == 0 {
+            let rate = HUNGER_RATE()
                 + if miserable_high {
-                    HUNGER_MISERABLE_BOOST
+                    HUNGER_MISERABLE_BOOST()
                 } else {
                     0
                 };
             if rate > 0 {
-                let ticks = (SICK_TRIGGER_HUNGER - self.hunger) as u32 / rate as u32;
+                let ticks = (SICK_TRIGGER_HUNGER() - self.hunger) as u32 / rate as u32;
                 earliest = earliest.min(now + ticks);
             }
         }
 
         // Tired → sick trigger threshold.
-        if self.tired < SICK_TRIGGER_TIRED {
-            let rate = TIRED_RATE
+        if self.tired < SICK_TRIGGER_TIRED() {
+            let rate = TIRED_RATE()
                 + if miserable_high {
-                    TIRED_MISERABLE_BOOST
+                    TIRED_MISERABLE_BOOST()
                 } else {
                     0
                 };
             if rate > 0 {
-                let ticks = (SICK_TRIGGER_TIRED - self.tired) as u32 / rate as u32;
+                let ticks = (SICK_TRIGGER_TIRED() - self.tired) as u32 / rate as u32;
                 earliest = earliest.min(now + ticks);
             }
         }
 
         // Miserable → 70% boost threshold.
-        if self.miserable < MISERABLE_BOOST_THRESHOLD && self.cooldown_play == 0 {
+        if self.miserable < MISERABLE_BOOST_THRESHOLD() && self.cooldown_play == 0 {
             let above = count_above_60(self);
-            let interval = MISERABLE_INTERVAL_BASE
-                .saturating_sub(MISERABLE_INTERVAL_PER_STAT * above)
-                .max(MISERABLE_INTERVAL_MIN);
-            // Average rate: MISERABLE_AMOUNT / interval.
+            let interval = MISERABLE_INTERVAL_BASE()
+                .saturating_sub(MISERABLE_INTERVAL_PER_STAT() * above)
+                .max(MISERABLE_INTERVAL_MIN());
+            // Average rate: MISERABLE_AMOUNT() / interval.
             let fires_to_threshold =
-                (MISERABLE_BOOST_THRESHOLD - self.miserable) as u32 / MISERABLE_AMOUNT as u32;
+                (MISERABLE_BOOST_THRESHOLD() - self.miserable) as u32 / MISERABLE_AMOUNT() as u32;
             let ticks = fires_to_threshold * interval;
             earliest = earliest.min(now + ticks);
         }
@@ -1055,7 +1055,7 @@ impl GameState {
         if self.phase == Phase::Leaving {
             let maxed = count_maxed(self);
             if maxed > 0 {
-                let threshold = LEAVING_THRESHOLDS[maxed.min(4)];
+                let threshold = LEAVING_THRESHOLDS()[maxed.min(4)];
                 let remaining = threshold.saturating_sub(self.leaving_countdown);
                 earliest = earliest.min(now + remaining);
             }
@@ -1063,12 +1063,12 @@ impl GameState {
 
         // Sleep: tired reaching 0 (auto-wake).
         if self.is_sleeping && self.tired > 0 {
-            let rate = if self.tired >= SLEEP_TIER_SLOW {
-                SLEEP_RECOVERY_SLOW
-            } else if self.tired >= SLEEP_TIER_MEDIUM {
-                SLEEP_RECOVERY_MEDIUM
+            let rate = if self.tired >= SLEEP_TIER_SLOW() {
+                SLEEP_RECOVERY_SLOW()
+            } else if self.tired >= SLEEP_TIER_MEDIUM() {
+                SLEEP_RECOVERY_MEDIUM()
             } else {
-                SLEEP_RECOVERY_FAST
+                SLEEP_RECOVERY_FAST()
             };
             let ticks = self.tired as u32 / rate as u32;
             earliest = earliest.min(now + ticks.max(1));
@@ -1158,7 +1158,7 @@ pub struct PetStats {
 
 /// Convert internal stat (0=good, 65535=bad) to display (0=bad, 100=good).
 fn to_display_pct(val: u16) -> u8 {
-    100 - (val as u32 * 100 / STAT_MAX as u32) as u8
+    100 - (val as u32 * 100 / STAT_MAX() as u32) as u8
 }
 
 impl GameState {
@@ -1232,7 +1232,7 @@ impl GameState {
 impl GameState {
     /// Returns `true` if the state should be saved to flash.
     ///
-    /// Becomes true when at least `SAVE_INTERVAL_TICKS` (15 minutes)
+    /// Becomes true when at least `SAVE_INTERVAL_TICKS()` (15 minutes)
     /// have elapsed since the last save.  The caller does the async
     /// save and then calls `mark_saved()`.
     ///
@@ -1240,7 +1240,7 @@ impl GameState {
     /// piggybacks on whatever triggered the current update.
     pub fn needs_save(&self) -> bool {
         self.save_pending
-            || self.age_ticks.saturating_sub(self.last_save_tick) >= SAVE_INTERVAL_TICKS
+            || self.age_ticks.saturating_sub(self.last_save_tick) >= SAVE_INTERVAL_TICKS()
     }
 
     /// Mark the state as successfully saved.  Resets the save timer.

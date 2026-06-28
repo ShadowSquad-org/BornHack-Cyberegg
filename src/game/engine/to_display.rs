@@ -69,12 +69,12 @@ pub enum DisplayAnim {
     Idle,
 }
 
-/// Count of maxed stats (= STAT_MAX).
+/// Count of maxed stats (= STAT_MAX()).
 fn count_maxed(state: &GameState) -> u8 {
-    (state.hunger == STAT_MAX) as u8
-        + (state.tired == STAT_MAX) as u8
-        + (state.drained == STAT_MAX) as u8
-        + (state.sick == STAT_MAX) as u8
+    (state.hunger == STAT_MAX()) as u8
+        + (state.tired == STAT_MAX()) as u8
+        + (state.drained == STAT_MAX()) as u8
+        + (state.sick == STAT_MAX()) as u8
 }
 
 impl GameState {
@@ -118,44 +118,44 @@ impl GameState {
 
         // ── Group 4: critical stats ─────────────────────────────────
         // Ranked by recovery difficulty: sick > tired > hungry > drained.
-        if self.sick > SICK_TRIGGER_TIRED {
+        if self.sick > SICK_TRIGGER_TIRED() {
             return DisplayAnim::CriticalSick;
         }
-        if self.tired > SICK_TRIGGER_TIRED {
+        if self.tired > SICK_TRIGGER_TIRED() {
             return DisplayAnim::CriticalTired;
         }
-        if self.hunger > SICK_TRIGGER_HUNGER {
+        if self.hunger > SICK_TRIGGER_HUNGER() {
             return DisplayAnim::CriticalHungry;
         }
-        if self.drained > SICK_TRIGGER_DRAINED {
+        if self.drained > SICK_TRIGGER_DRAINED() {
             return DisplayAnim::CriticalDrained;
         }
 
         // ── Group 5: warning stats ──────────────────────────────────
         // Same priority ranking, lower thresholds.
-        if self.sick > WARNING_SICK {
+        if self.sick > WARNING_SICK() {
             return DisplayAnim::WarningSick;
         }
-        if self.tired > WARNING_TIRED {
+        if self.tired > WARNING_TIRED() {
             return DisplayAnim::WarningTired;
         }
-        if self.hunger > WARNING_HUNGER {
+        if self.hunger > WARNING_HUNGER() {
             return DisplayAnim::WarningHungry;
         }
-        if self.drained > WARNING_DRAINED {
+        if self.drained > WARNING_DRAINED() {
             return DisplayAnim::WarningDrained;
         }
-        if self.miserable > WARNING_MISERABLE {
+        if self.miserable > WARNING_MISERABLE() {
             return DisplayAnim::WarningMiserable;
         }
 
         // ── Group 6: content ────────────────────────────────────────
         // Happy when all stats are well below warning thresholds.
-        if self.hunger < WARNING_HUNGER / 2
-            && self.tired < WARNING_TIRED / 2
-            && self.drained < WARNING_DRAINED / 2
-            && self.sick < WARNING_SICK / 2
-            && self.miserable < WARNING_MISERABLE / 2
+        if self.hunger < WARNING_HUNGER() / 2
+            && self.tired < WARNING_TIRED() / 2
+            && self.drained < WARNING_DRAINED() / 2
+            && self.sick < WARNING_SICK() / 2
+            && self.miserable < WARNING_MISERABLE() / 2
         {
             return DisplayAnim::Happy;
         }

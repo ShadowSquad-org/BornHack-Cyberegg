@@ -34,6 +34,64 @@ Your pet has four decaying stats. Anything above 100% is bad — that's "starvin
 
 If you're putting the badge away for more than a few hours, open the action menu and **Hibernate**. Stats freeze until you wake the pet. Forget to hibernate before storing the badge and the pet decays — by the time you find it again it may have starved.
 
+## Game modes
+
+Two built-in difficulty presets, picked via **Main → Bornagotchi → Mode**:
+
+- **Classic** — the original balance the badge ships with.
+- **Casual** — roughly half the decay speed, doubled lifetimes, more relief per Feed / Heal / Relax action. Friendly for people who don't want to baby-sit.
+
+The setting persists in flash. Changing it shows a `*` next to the mode name in the menu — that means the new mode is queued but the active engine is still running the old one. **Reboot the badge** (unplug + plug USB, or hit the factory-reset combo if you really want to start clean) for it to take effect.
+
+## Custom balance: `BORNPETS.CFG`
+
+If neither preset is your speed you can override individual numbers via a config file on the badge's USB drive.
+
+1. Plug the badge in via USB-C.
+2. Open the `CYBR<4 hex>` drive on your computer.
+3. Create or edit `BORNPETS.CFG` in the root with one `KEY=VALUE` per line:
+
+   ```
+   # speed up hunger decay, slow down drained
+   HUNGER_RATE=4
+   DRAINED_INTERVAL=180
+   ```
+
+4. Eject the drive and reboot the badge.
+
+When a `BORNPETS.CFG` is active, the pet name on the stats screen and traits screen gets a small `*` after it — so you can tell at a glance that your pet is running on a non-standard balance.
+
+Known keys (everything else is silently ignored, so you don't have to keep your file up to date):
+
+| Key | What it does | Reasonable range |
+| --- | --- | --- |
+| `HUNGER_RATE` | how fast hunger fills per tick | 1 – 30 |
+| `TIRED_RATE` | how fast tired fills per tick | 1 – 30 |
+| `SLEEP_HUNGER_COST` | hunger gained per sleep tick | 0 – 6000 |
+| `DRAINED_INTERVAL` | ticks between drain bumps | 30 – 360 |
+| `DRAINED_INTERVAL_MISERABLE` | drain interval when miserable | 10 – 120 |
+| `SICK_RATE` | baseline sick decay per tick | 0 – 5 |
+| `SICK_CONDITION_RATE` | sick decay when stats are bad | 0 – 2000 |
+| `SICK_CONDITION_MISERABLE_RATE` | sick decay when miserable | 0 – 4000 |
+| `MISERABLE_INTERVAL_BASE` | base miserable interval | 120 – 600 |
+| `MISERABLE_INTERVAL_MIN` | min miserable interval (when many stats are bad) | 10 – 200 |
+| `FEED_HUNGER_RELIEF` | hunger drop per Feed tick | 1000 – 20000 |
+| `FEED_DRAINED_RELIEF` | drained drop per Feed tick | 0 – 5000 |
+| `HEAL_SICK_RELIEF` | sick drop per Heal tick | 1000 – 30000 |
+| `RELAX_DRAINED_RELIEF` | drained drop per Relax tick | 1000 – 20000 |
+| `RELAX_HUNGER_COST` | hunger gained per Relax tick | 0 – 10000 |
+| `PLAY_HUNGER_COST` | hunger gained per Play tick | 0 – 3000 |
+| `PLAY_TIRED_COST` | tired gained per Play tick | 0 – 3000 |
+| `PLAY_DRAINED_COST` | drained gained per Play tick | 0 – 3000 |
+| `MINIGAME_HUNGER_COST` | hunger gained per mini-game completed | 0 – 10000 |
+| `MINIGAME_COOLDOWN` | ticks between mini-game stat awards | 1 – 200 |
+| `HATCHING_TICKS` | how long hatching takes (6 = 1 minute) | 1 – 200 |
+| `MAX_SLEEP_TICKS` | max ticks the engine sleeps between updates | 30 – 600 |
+
+Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Anything you set is clamped to the value type's range — no way to brick the engine. Unknown keys are logged and skipped.
+
+To go back to a preset, delete `BORNPETS.CFG` from the drive and reboot.
+
 ## The seven mini-games
 
 Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has its own cooldown (limit on how often you can play it for stat reduction). **CAN** always exits any mini-game.

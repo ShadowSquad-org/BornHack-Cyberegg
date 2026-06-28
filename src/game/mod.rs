@@ -26,6 +26,7 @@ pub mod nav;
 pub mod nim;
 pub mod pet_select;
 pub mod realm_view;
+pub mod settings;
 pub mod sprite_loader;
 pub mod stat_bar;
 pub mod station;

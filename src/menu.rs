@@ -632,8 +632,7 @@ impl<const M: usize> DisplayState<M> {
                     s.about_page = 0;
                     s.sub_items = None;
                     // Leaving / resetting the About view also redraws fully.
-                    crate::FULL_REFRESH_PENDING
-                        .store(true, core::sync::atomic::Ordering::Relaxed);
+                    crate::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
                 }
                 _ => {}
             }
@@ -1799,7 +1798,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
-static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
+static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1811,6 +1810,14 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "Disable Game",
         kind: MenuItemKind::Action(|| {}),
+    },
+    MenuItem {
+        label: || "",
+        kind: MenuItemKind::ValueStepper {
+            format: fmt_game_mode,
+            inc: action_game_mode_next,
+            dec: action_game_mode_next,
+        },
     },
     MenuItem {
         label: || "",
@@ -1834,6 +1841,33 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 6] = [
         }),
     },
 ];
+
+fn fmt_game_mode(buf: &mut heapless::String<24>) {
+    use core::fmt::Write;
+    #[cfg(feature = "game")]
+    {
+        let mode = crate::game::settings::pending_mode();
+        let needs_reboot = crate::game::settings::pending_differs_from_active();
+        let suffix = if needs_reboot { "*" } else { "" };
+        let _ = write!(buf, "Mode: {}{}", mode.label(), suffix);
+    }
+    #[cfg(not(feature = "game"))]
+    {
+        let _ = write!(buf, "Mode: -");
+    }
+}
+
+fn action_game_mode_next() {
+    #[cfg(feature = "game")]
+    {
+        use crate::game::engine::thresholds::Mode;
+        let next = match crate::game::settings::pending_mode() {
+            Mode::Classic => Mode::Casual,
+            Mode::Casual => Mode::Classic,
+        };
+        crate::game::settings::request_mode_change(next);
+    }
+}
 
 #[cfg(feature = "game")]
 static GAME_ITEMS: [MenuItem; 2] = [

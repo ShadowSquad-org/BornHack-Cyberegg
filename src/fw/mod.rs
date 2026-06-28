@@ -1,5 +1,6 @@
 pub mod battery;
 pub mod board;
+pub mod bornpets_cfg;
 pub mod button;
 pub mod buzzer;
 pub mod device_id;
