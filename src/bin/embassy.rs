@@ -657,7 +657,25 @@ async fn display_loop(
                         // patched LUT (select_no_invert) → non-flashing; the
                         // path auto-promotes to a full (flashing) OTP refresh
                         // once the changed-pixel counter trips, to de-ghost.
-                        let _ = display.update_partial(partial_state, speed).await;
+                        //
+                        // Exception: the start screen is a heavy full-frame
+                        // graphic (large solid-black + a red accent).  Laid down
+                        // via the non-inverting delta LUT it under-drives and
+                        // ghosts badly into the next screen (e.g. the sponsor
+                        // slideshow).  While it's shown, force a genuine
+                        // inverting full refresh so it's fully driven and clears
+                        // cleanly.  The `partial_idle` short-circuit above
+                        // already skips redundant redraws, so this only fires on
+                        // an actual content change — no repeated flashing.
+                        #[cfg(feature = "game")]
+                        let start_screen = !bornhack_aegg::game::lifecycle::is_started();
+                        #[cfg(not(feature = "game"))]
+                        let start_screen = false;
+                        if start_screen {
+                            let _ = display.force_full_refresh(partial_state, speed).await;
+                        } else {
+                            let _ = display.update_partial(partial_state, speed).await;
+                        }
                     } else {
                         let _ = display.update_bw(UpdateMode::Mode1, speed).await;
                     }
