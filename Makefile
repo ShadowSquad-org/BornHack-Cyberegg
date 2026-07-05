@@ -17,7 +17,7 @@ FW_OUT = firmware
 BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
 
 .PHONY: fw fw-release fw-release-debug fw-game fw-game-release fw-mesh fw-mesh-release \
-        fw-hwtest flash-hwtest run-hwtest monitor-hwtest fw-hwtest-bin \
+        fw-hwtest flash-hwtest run-hwtest monitor-hwtest fw-hwtest-bin fw-full-bin \
         sim flash flash-release flash-release-debug run-release-debug \
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
@@ -145,6 +145,34 @@ fw-hwtest-bin: fw-hwtest
 	@echo "hwtest ELF: $(abspath $(FW_OUT)/cyber-aegg-hwtest.elf)"
 	@echo "hwtest BIN: $(abspath $(FW_OUT)/cyber-aegg-hwtest.bin) (load @ 0x00000000)"
 	@echo "hwtest HEX: $(abspath $(FW_OUT)/cyber-aegg-hwtest.hex)"
+
+# Full flash image — bootloader + app combined into one .hex/.bin for a
+# single-shot SWD/J-Link reflash (recovery path for badges with very
+# old bootloaders that can't be DFU'd).  Emits the individual pieces
+# too so the user can pick what they need.
+#
+#  layout: 0x00000000 bootloader (~28 KB) → padded to 0x00010000 → app
+fw-full-bin: bl-bin fw-bin-release
+	@mkdir -p $(FW_OUT)
+	arm-none-eabi-objcopy -O ihex   $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.hex
+	arm-none-eabi-objcopy -O ihex   $(ELF_REL) $(FW_OUT)/cyber-aegg.hex
+	cp $(ELF_REL) $(FW_OUT)/cyber-aegg.elf
+	# Combined HEX — strip BL's EOF marker, then concat app HEX (which
+	# carries its own EOF + the app's "start linear address" record).
+	grep -v '^:00000001FF' $(FW_OUT)/nrf-aegg-bootloader.hex > $(FW_OUT)/cyber-aegg-full.hex
+	cat $(FW_OUT)/cyber-aegg.hex >> $(FW_OUT)/cyber-aegg-full.hex
+	# Combined BIN — derived from the combined HEX so the two files
+	# are byte-identical (gap regions are 0xFF in both).  Generating
+	# the BIN by raw concat of the per-binary .bin files would emit
+	# 0x00 in section gaps that objcopy -O binary leaves un-filled,
+	# which mismatches the HEX and confuses verify-after-program.
+	arm-none-eabi-objcopy -I ihex -O binary --gap-fill=0xff \
+	    $(FW_OUT)/cyber-aegg-full.hex $(FW_OUT)/cyber-aegg-full.bin
+	@echo
+	@echo "full HEX: $(abspath $(FW_OUT)/cyber-aegg-full.hex)  (load via J-Link / nrfjprog / probe-rs)"
+	@echo "full BIN: $(abspath $(FW_OUT)/cyber-aegg-full.bin)  (load @ 0x00000000)"
+	@echo "bl ELF:   $(abspath $(FW_OUT)/nrf-aegg-bootloader.elf)"
+	@echo "app ELF:  $(abspath $(FW_OUT)/cyber-aegg.elf)"
 
 # ---------- Simulator ----------
 
