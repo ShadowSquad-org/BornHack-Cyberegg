@@ -45,13 +45,21 @@ where
     let name = super::lifecycle::pet_name();
     let kind_name = super::lifecycle::pet_kind().name();
     let generation = super::lifecycle::pet_generation();
+    let custom_mark = if super::engine::thresholds::is_custom() {
+        "*"
+    } else {
+        ""
+    };
     let mut header: heapless::String<28> = heapless::String::new();
     if !name.is_empty() {
-        let _ = core::fmt::Write::write_fmt(&mut header, format_args!("{} ({})", name, kind_name));
+        let _ = core::fmt::Write::write_fmt(
+            &mut header,
+            format_args!("{}{} ({})", name, custom_mark, kind_name),
+        );
     } else {
         let _ = core::fmt::Write::write_fmt(
             &mut header,
-            format_args!("{} Gen {}", kind_name, generation),
+            format_args!("{} Gen {}{}", kind_name, generation, custom_mark),
         );
     }
     Text::with_text_style(header.as_str(), Point::new(4, 24), TEXT_BOLD_BLACK, left)

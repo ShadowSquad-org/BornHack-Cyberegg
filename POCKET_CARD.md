@@ -59,6 +59,7 @@ Plug USB-C. Badge appears as **`CYBR<4 hex>`** drive.
 | `ALARMS.ICS`                        | imports alarms + calendar events |
 | `020000.PCX` … `020009.PCX`         | sponsor slides                  |
 | `<6 hex>.PCX`                       | game sprite asset               |
+| `BORNPETS.CFG`                      | custom pet balance (KEY=VALUE)  |
 
 Reboot the badge after dropping files.
 

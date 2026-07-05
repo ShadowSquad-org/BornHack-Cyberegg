@@ -342,7 +342,7 @@ pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
         return match (row, col) {
             (Row::Top, 0) => ModalKind::Stats,
             (Row::Top, 1) => ModalKind::Hibernate,
-            _             => ModalKind::None,
+            _ => ModalKind::None,
         };
     }
     match (row, col) {
@@ -757,17 +757,32 @@ where
     // the bottom of the last stat bar (which now occupies y ≤ 122).
     let footer_y = MARGIN + MODAL_H as i32 - BORDER as i32 - 6;
     let mut footer: heapless::String<32> = heapless::String::new();
+    // `*` after the name when BORNPETS.CFG overrode at least one
+    // threshold field — lets the player tell at a glance that their
+    // pet is running on a non-standard balance.
+    let custom_mark = if super::engine::thresholds::is_custom() {
+        "*"
+    } else {
+        ""
+    };
     if !name.is_empty() {
         let _ = core::fmt::Write::write_fmt(
             &mut footer,
-            format_args!("{} | {}d {}h", name, age_days, age_hours % 24),
+            format_args!(
+                "{}{} | {}d {}h",
+                name,
+                custom_mark,
+                age_days,
+                age_hours % 24
+            ),
         );
     } else {
         let _ = core::fmt::Write::write_fmt(
             &mut footer,
             format_args!(
-                "Gen {} | {}d {}h",
+                "Gen {}{} | {}d {}h",
                 stats.generation,
+                custom_mark,
                 age_days,
                 age_hours % 24
             ),

@@ -21,8 +21,8 @@ use bornhack_aegg::{
     ADVERT_SIGNAL, LORA_MSG_SIGNAL, PM_SIGNAL, SCREEN_ADVERT, SCREEN_CHANNEL, SCREEN_PM,
 };
 use bornhack_aegg::{
-    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH,
-    board, draw_graphics, health_err, unix_now, with_health,
+    BLE_PAIRING_SIGNAL, DISPLAY_STATE, MINUTE_TICK, SCREEN_MAIN, SCREEN_TOKEN, SCREEN_WATCH, board,
+    draw_graphics, health_err, unix_now, with_health,
 };
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -204,7 +204,9 @@ async fn main(spawner: Spawner) {
 
     display.clear(Color::White);
     let _ = display.reset().await;
-    let _ = display.update_tc(bornhack_aegg::fw::epd::current_lut_speed()).await;
+    let _ = display
+        .update_tc(bornhack_aegg::fw::epd::current_lut_speed())
+        .await;
 
     // USB mass storage — spawn BEFORE the first-boot interactive
     // gate so the factory-floor "one plug-cycle per badge" workflow
@@ -245,6 +247,18 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::watch::import_alarms_from_fat12().await;
         spawner.must_spawn(bornhack_aegg::watch::settings_persister_task());
         spawner.must_spawn(bornhack_aegg::watch::alarm_ring_timeout_task());
+    }
+
+    // ── BornPets balance — install the active threshold set before any
+    //    game tick runs.  Mode comes from the KV `game.mode` setting
+    //    (defaults to Classic on a fresh badge); `BORNPETS.CFG` on the
+    //    USB-MSC partition, if present, overrides individual fields on
+    //    top of the preset.
+    #[cfg(feature = "game")]
+    {
+        let mode = bornhack_aegg::game::settings::load_mode_from_kv().await;
+        let _ = bornhack_aegg::fw::bornpets_cfg::load_and_install(mode).await;
+        spawner.must_spawn(bornhack_aegg::game::settings::persister_task());
     }
 
     // ── Mesh stack (contacts, identity, BLE) ─────────────────────────────
@@ -321,8 +335,7 @@ async fn main(spawner: Spawner) {
                 bornhack_aegg::MULTI_ACKS.store(ma, Relaxed);
                 // Only telemetry_mode_base is exposed via the badge UI;
                 // loc/env stay 0 (no GPS, no env sensors).
-                bornhack_aegg::TELEMETRY_MODE_BASE
-                    .store(op.telemetry_mode_base.min(2), Relaxed);
+                bornhack_aegg::TELEMETRY_MODE_BASE.store(op.telemetry_mode_base.min(2), Relaxed);
             }
             bornhack_aegg::fw::mesh::PATH_HASH_MODE
                 .store(settings::get_path_hash_mode().await.min(2), Relaxed);
@@ -351,8 +364,9 @@ async fn main(spawner: Spawner) {
         // rest of the firmware (LoRa, watch, game, display) carries on.
         if hw.hfxo_ok {
             let ble_prng_seed = bornhack_aegg::fw::mesh::device_identity::trng_seed();
-            static SDC_MEM: StaticCell<nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>> =
-                StaticCell::new();
+            static SDC_MEM: StaticCell<
+                nrf_sdc::Mem<{ bornhack_aegg::fw::mesh::ble::SDC_MEM_SIZE }>,
+            > = StaticCell::new();
             let sdc = init_ble(
                 &spawner,
                 p.RTC0,
@@ -627,8 +641,7 @@ async fn display_loop(
         // pays ~500 ms of dead time on the bus and re-blinks the
         // status LED — making the device look like it's continuously
         // refreshing even when nothing is changing.
-        let partial_idle = use_partial_path
-            && partial_state.bbox_of_dirty().is_none();
+        let partial_idle = use_partial_path && partial_state.bbox_of_dirty().is_none();
 
         let sprite_advance = if partial_idle {
             last_screen = active_screen;
@@ -978,6 +991,11 @@ async fn show_battery_critical(display: &mut EpdGfx<'_>, err: &battery::BatteryE
     let _ = Text::with_text_style("battery", Point::new(76, 130), font, centered).draw(display);
 
     let _ = display.reset().await;
-    let _ = display.update_bw(UpdateMode::Mode1, bornhack_aegg::fw::epd::current_lut_speed()).await;
+    let _ = display
+        .update_bw(
+            UpdateMode::Mode1,
+            bornhack_aegg::fw::epd::current_lut_speed(),
+        )
+        .await;
     let _ = display.deep_sleep().await;
 }
