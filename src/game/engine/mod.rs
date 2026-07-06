@@ -1346,9 +1346,11 @@ impl GameState {
     /// Returns `None` if the buffer is too short.
     #[allow(unused_assignments)]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        // Accept old 65-byte saves (default to Bartholomeus, formerly
-        // "Snail") and new 66-byte saves with the explicit pet-kind byte.
-        if b.len() < SAVE_SIZE - 1 {
+        // Only accept current fixed-size saves. Pre-pet_kind (65-byte) saves
+        // are intentionally ignored — there is no fielded old firmware to
+        // migrate from, so a short/legacy blob is treated as "no save" and the
+        // player starts fresh rather than loading a half-parsed state.
+        if b.len() != SAVE_SIZE {
             return None;
         }
         let mut i = 0;
@@ -1414,11 +1416,7 @@ impl GameState {
         let hibernating = r8!() != 0;
         let hibernate_ticks = r32!();
         let last_save_tick = r32!();
-        let pet_kind = if i < b.len() {
-            PetKind::from_u8(r8!())
-        } else {
-            PetKind::Bartholomeus
-        };
+        let pet_kind = PetKind::from_u8(r8!());
 
         Some(Self {
             pet_kind,
