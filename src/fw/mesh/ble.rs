@@ -802,6 +802,10 @@ async fn nus_peripheral_loop<C>(
                                 }
                             }
                             let data = &cmd_buf[..cmd_len];
+                            if data.is_empty() {
+                                // Empty write — no command byte to dispatch.
+                                continue;
+                            }
                             defmt::debug!(
                                 "companion: cmd=0x{:02x} outbox={}",
                                 data[0],

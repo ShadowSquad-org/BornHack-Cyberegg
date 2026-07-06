@@ -1,7 +1,7 @@
 //! First-boot sponsor logo slideshow.
 //!
 //! Displays full-screen sponsor logos (152×152 PCX files) stored on
-//! the FAT12 filesystem as `020000.PCX` through `020009.PCX`.
+//! the FAT12 filesystem as `030000.PCX` through `030009.PCX`.
 //! Missing files are silently skipped.
 //!
 //! After the slideshow completes, a flag is written to ekv so the
@@ -18,7 +18,7 @@ use ssd1675::graphics::Color;
 use super::epd::EpdGfx;
 use super::fat12;
 
-/// Maximum number of sponsor slides (filenames 020000–020009).
+/// Maximum number of sponsor slides (filenames 030000–030009).
 const MAX_SPONSORS: usize = 10;
 
 /// Seconds to display each sponsor logo.
@@ -168,7 +168,7 @@ pub async fn run(
     defmt::info!("sponsors: slideshow complete");
 }
 
-/// Returns true if at least one sponsor PCX file (020000.PCX .. 0200NN.PCX)
+/// Returns true if at least one sponsor PCX file (030000.PCX .. 0300NN.PCX)
 /// exists on the FAT partition.
 async fn any_sponsor_file_present() -> bool {
     for i in 0..MAX_SPONSORS as u8 {

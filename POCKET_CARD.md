@@ -38,7 +38,7 @@ One-page badge cheat sheet. Print and tuck under the strap.
 | Single green flash       | boot done                                   |
 | Red flicker              | screen refreshing                           |
 | Blue flicker             | USB drive write                             |
-| Solid green              | contacts wipe in progress                   |
+| Blinking green           | contacts wipe in progress                   |
 | R / G / B one-shot       | someone pinged you via mesh (`blinkme`)     |
 
 ## Power-on combos (hold while resetting / connecting USB)

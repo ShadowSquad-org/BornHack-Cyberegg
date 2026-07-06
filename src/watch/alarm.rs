@@ -612,14 +612,16 @@ static ALARM_RING_SIGNAL: embassy_sync::signal::Signal<
 /// One-shot slots auto-disable after firing so they don't ring again on the
 /// next reboot if the badge is rebooted while still on the same calendar day.
 ///
-/// Only the *first* matching slot fires per minute boundary — running two
-/// melodies on top of each other would just sound bad.  Slot order is the
-/// natural numeric one (slot 0 wins ties).
+/// Only the *first* matching slot plays a melody per minute boundary — running
+/// two melodies on top of each other would just sound bad (slot 0 wins ties).
+/// Every *other* matching one-shot slot still auto-disables, though, so a
+/// colliding calendar alarm doesn't linger enabled and mis-fire on a later day.
 #[cfg(feature = "embassy-base")]
 pub fn check_and_fire_alarm() {
     let Some(c) = clock::wall_clock() else {
         return;
     };
+    let mut fired = false;
     for slot in 0..N_ALARMS {
         if !alarm_enabled_n(slot) {
             continue;
@@ -636,23 +638,28 @@ pub fn check_and_fire_alarm() {
             continue;
         }
         if c.hour == alarm_hour_n(slot) && c.minute == alarm_minute_n(slot) {
-            ALARM_RINGING.store(true, Ordering::Relaxed);
-            ALARM_RING_SIGNAL.signal(());
-            // One-shot (imported calendar) slots have no per-event tone
-            // UI — they inherit slot 0's melody so the user's chosen
-            // Settings → Alarm → Tone applies to every alarm consistently.
-            let melody = if alarm_is_one_shot_n(slot) {
-                alarm_melody_n(0)
-            } else {
-                alarm_melody_n(slot)
-            };
-            crate::fw::buzzer::play(melody as usize);
-            // One-shot alarms auto-disable after firing.
+            // Play a melody for the first matching slot only; stacking tones
+            // sounds bad. Later matches still process below (auto-disable).
+            if !fired {
+                fired = true;
+                ALARM_RINGING.store(true, Ordering::Relaxed);
+                ALARM_RING_SIGNAL.signal(());
+                // One-shot (imported calendar) slots have no per-event tone
+                // UI — they inherit slot 0's melody so the user's chosen
+                // Settings → Alarm → Tone applies to every alarm consistently.
+                let melody = if alarm_is_one_shot_n(slot) {
+                    alarm_melody_n(0)
+                } else {
+                    alarm_melody_n(slot)
+                };
+                crate::fw::buzzer::play(melody as usize);
+            }
+            // One-shot alarms auto-disable after firing — every colliding
+            // one-shot, not just the one that played, so none linger enabled.
             if alarm_is_one_shot_n(slot) {
                 ALARM_ENABLED[slot].store(false, Ordering::Relaxed);
                 super::signal_settings_dirty();
             }
-            return;
         }
     }
 }

@@ -114,6 +114,12 @@ pub async fn init(
 /// Handles QSPI alignment requirements internally: the address and length
 /// passed to the hardware are always 4-byte aligned via the bounce buffer.
 pub async fn read(addr: u32, data: &mut [u8]) -> Result<(), FlashError> {
+    let end = (addr as usize)
+        .checked_add(data.len())
+        .ok_or(FlashError::OutOfBounds)?;
+    if end > FLASH_TOTAL_BYTES {
+        return Err(FlashError::OutOfBounds);
+    }
     let mut guard = FLASH.lock().await;
     let (qspi, buf) = guard.as_mut().ok_or(FlashError::NotInitialised)?;
 
@@ -145,6 +151,12 @@ pub async fn read(addr: u32, data: &mut [u8]) -> Result<(), FlashError> {
 /// Handles QSPI alignment requirements: address and length are 4-byte
 /// aligned via the bounce buffer with read-modify-write for partial words.
 pub async fn write(addr: u32, data: &[u8]) -> Result<(), FlashError> {
+    let end = (addr as usize)
+        .checked_add(data.len())
+        .ok_or(FlashError::OutOfBounds)?;
+    if end > FLASH_TOTAL_BYTES {
+        return Err(FlashError::OutOfBounds);
+    }
     let mut guard = FLASH.lock().await;
     let (qspi, buf) = guard.as_mut().ok_or(FlashError::NotInitialised)?;
 
@@ -179,6 +191,12 @@ pub async fn write(addr: u32, data: &[u8]) -> Result<(), FlashError> {
 
 /// Erase one 4 KiB sector at absolute flash address (must be sector-aligned).
 pub async fn erase(addr: u32) -> Result<(), FlashError> {
+    let end = (addr as usize)
+        .checked_add(PAGE_SIZE)
+        .ok_or(FlashError::OutOfBounds)?;
+    if end > FLASH_TOTAL_BYTES {
+        return Err(FlashError::OutOfBounds);
+    }
     let mut guard = FLASH.lock().await;
     let (qspi, _) = guard.as_mut().ok_or(FlashError::NotInitialised)?;
     qspi.erase(addr).await.map_err(|_| FlashError::Hardware)

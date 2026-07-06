@@ -195,7 +195,25 @@ fn parse_datetime(value: &[u8]) -> Option<ParsedDateTime> {
     }
     let hour = digits(&value[9..11])? as u8;
     let minute = digits(&value[11..13])? as u8;
-    if month == 0 || month > 12 || day == 0 || day > 31 || hour > 23 || minute > 59 {
+    if month == 0 || month > 12 || hour > 23 || minute > 59 {
+        return None;
+    }
+    // Validate the day against the actual month length (incl. leap years) so a
+    // malformed date like 0230 / 0431 is rejected instead of producing a
+    // phantom one-shot alarm that can never fire or auto-disable.
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        } // month == 2
+    };
+    if day == 0 || day > days_in_month {
         return None;
     }
     // `Z` may follow the seconds — accept either trailing position
