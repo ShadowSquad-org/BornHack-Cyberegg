@@ -41,7 +41,7 @@ Ten built-in tones to pick from in the **Tone** field:
 
 - Beep, Imperial March, Rickroll, Pink Panther, Sandstorm, Startup, Trololo, Daisy Bell, Nokia, Samsung
 
-When an alarm fires the buzzer plays the chosen tone up to four times, every 8 seconds. Any button press silences it. If you ignore it, the alarm self-dismisses after 5 seconds.
+When an alarm fires the buzzer plays the chosen tone up to five times, 8 seconds apart. Any button press silences it. If you ignore it, the alarm stops itself after about 32 seconds.
 
 > Alarms only fire when the clock is set. If the badge has rebooted and you haven't paired or heard a time advert, the alarm is dead — pair first.
 

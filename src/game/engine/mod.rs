@@ -947,7 +947,9 @@ impl GameState {
             return;
         }
         // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
-        self.drained = sat_sub(self.drained, RELAX_DRAINED_RELIEF() * 2);
+        // mul_dt widens to u32 and clamps, so a large configured relief value
+        // can't overflow the u16 multiply.
+        self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), 2));
         self.hunger = sat_add(self.hunger, MINIGAME_HUNGER_COST());
         match game {
             MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN(),

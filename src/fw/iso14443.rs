@@ -109,7 +109,11 @@ pub mod iso14443_4 {
 
             loop {
                 let n = self.nfc.receive(&mut temp).await.map_err(Error::Lower)?;
-                assert!(n != 0);
+                if n == 0 {
+                    // A zero-length frame from the lower layer is a protocol
+                    // error, not a panic — bail cleanly.
+                    return Err(Error::Protocol);
+                }
                 match temp[0] {
                     0x02 | 0x03 => {
                         // ISO-DEP I-block.  block_num bit toggles per

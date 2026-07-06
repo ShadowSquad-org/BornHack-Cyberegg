@@ -375,6 +375,11 @@ static RNG: AtomicU32 = AtomicU32::new(0xDEAD_BEEF);
 
 fn rng_next() -> u32 {
     let mut x = RNG.load(Ordering::Relaxed);
+    // xorshift locks up on an all-zero state (a zero seed would produce a fully
+    // degenerate maze). Guard it like the sibling mini-games do.
+    if x == 0 {
+        x = 0xDEAD_BEEF;
+    }
     x ^= x << 13;
     x ^= x >> 17;
     x ^= x << 5;
