@@ -5,7 +5,7 @@
 //! in this module.  All functions are async (flash access goes through
 //! the shared QSPI mutex).
 
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use super::engine::{DisplayAnim, GameState, PET_NAME_MAX, PetRealm, PetRecord, PetStats};
 #[cfg(feature = "embassy-base")]
@@ -307,6 +307,14 @@ enum Severity {
 
 static LAST_SEVERITY: AtomicU8 = AtomicU8::new(Severity::Uninit as u8);
 
+/// Set when the in-memory Unicorn Realm buffer has been mutated (a pet pushed)
+/// and needs persisting on the next save cycle, but the record was NOT derived
+/// from the current `GameState` (e.g. a manual "Reset Pet" in `new_generation`,
+/// after which the live state is already the fresh egg). Distinct from
+/// `GameState::realm_pending`, which means "derive+record the current pet on
+/// the next save" (the natural-death path).
+static REALM_DIRTY: AtomicBool = AtomicBool::new(false);
+
 fn current_severity(state: &GameState) -> Severity {
     use super::engine::Phase;
     use super::engine::thresholds::{
@@ -495,20 +503,42 @@ pub fn add_drained_relief(amount: u16) {
 /// Start a new generation (after pet has left or manual reset).
 /// Records the current pet in the Unicorn Realm before replacing it.
 pub fn new_generation(kind: super::engine::PetKind) {
+    use super::engine::Phase;
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
-        // Record the departing pet in the realm (unless it never hatched).
-        if s.phase != super::engine::Phase::Hatching {
-            let record = PetRecord::from_game_state(s, pet_name_bytes_sync());
-            let realm = unsafe { &mut *REALM.get() };
-            realm.push(record);
-            // Mark realm_pending so it gets persisted on the next save cycle.
-            s.realm_pending = true;
-        }
+        // Record the departing pet exactly once.
+        //   - Hatching: never lived, nothing to record.
+        //   - Gone: the natural-death path already handles it. If `realm_pending`
+        //     is still set the save cycle hasn't run yet, so record it here (and
+        //     clear the flag) before we overwrite the state; if it's already
+        //     cleared, save_if_needed recorded it — recording again would
+        //     duplicate the Unicorn Realm entry.
+        //   - Active/Leaving (manual "Reset Pet" on a living pet): never recorded
+        //     by the death path, so record it here.
+        let should_record = match s.phase {
+            Phase::Hatching => false,
+            Phase::Gone => s.realm_pending,
+            _ => true,
+        };
+        let departing =
+            should_record.then(|| PetRecord::from_game_state(s, pet_name_bytes_sync()));
+
+        // Consume any pending death-record flag so save_if_needed doesn't also
+        // record the (about-to-be-replaced) pet.
+        s.realm_pending = false;
 
         let seed = now_tick() as u64 ^ 0xDEAD_BEEF;
         s.new_generation(seed, kind);
         s.last_update_tick = now_tick();
+
+        // Push AFTER the state reset (so new_generation() can't clobber the
+        // flag) and persist the realm buffer via REALM_DIRTY — the record was
+        // taken from the old state above, not from the current fresh egg.
+        if let Some(record) = departing {
+            let realm = unsafe { &mut *REALM.get() };
+            realm.push(record);
+            REALM_DIRTY.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -579,21 +609,29 @@ pub async fn save_if_needed() -> bool {
         return false;
     };
 
-    // If the pet just left, record it in the Unicorn Realm.
+    // Natural-death path: the pet just went Gone (engine set realm_pending) and
+    // no manual reset intervened — record the current pet in the Unicorn Realm.
     if state.realm_pending {
         state.realm_pending = false;
         let record = PetRecord::from_game_state(state, pet_name_bytes_sync());
         let realm = unsafe { &mut *REALM.get() };
         realm.push(record);
+        REALM_DIRTY.store(true, Ordering::Relaxed);
+        defmt::info!(
+            "game: pet recorded in Unicorn Realm (gen={})",
+            record.generation
+        );
+    }
+
+    // Persist the realm buffer if it changed — either from the death-record
+    // above or from a manual reset in new_generation (which pushed + flagged it).
+    if REALM_DIRTY.swap(false, Ordering::Relaxed) {
+        let realm = unsafe { &*REALM.get() };
         let buf = realm.to_bytes();
         let ns = crate::fw::kv::namespace("game");
         if ns.set("realm", &buf, true).await.is_err() {
+            REALM_DIRTY.store(true, Ordering::Relaxed); // retry next cycle
             defmt::warn!("game: realm save failed");
-        } else {
-            defmt::info!(
-                "game: pet recorded in Unicorn Realm (gen={})",
-                record.generation
-            );
         }
     }
 
