@@ -416,14 +416,50 @@ pub async fn run_ble_peripheral(
 
     let bond_tx = BOND_CMD_CHANNEL.sender();
 
-    // Run the HCI runner in parallel with the advertising loop.
-    embassy_futures::join::join(
+    // Run the HCI runner in parallel with the advertising loop (+ a debug-only
+    // pool probe).
+    embassy_futures::join::join3(
         async {
             loop {
-                if runner.run().await.is_err() {}
+                if let Err(e) = runner.run().await {
+                    defmt::warn!("BLE: HCI runner error: {:?}", defmt::Debug2Format(&e));
+                }
             }
         },
         nus_peripheral_loop(&mut peripheral, bond_tx, &ctx),
+        // [DEBUG #92] Pool free-count probe. Every 1 s, allocate shared-pool
+        // buffers until exhausted (leaving a 2-buffer margin for the HCI runner)
+        // then drop them, logging the free count. This is the discriminator for
+        // the BLE OOM: does the free count recover to ~capacity when idle
+        // (saturation) or stay low (leak)? Public API only; the sample loop has
+        // no `.await`, so it is atomic w.r.t. the async RX/TX allocators and
+        // cannot itself cause an OOM. Compiled out of release builds.
+        async {
+            #[cfg(debug_assertions)]
+            {
+                let cap = DefaultPacketPool::capacity();
+                loop {
+                    embassy_time::Timer::after_secs(1).await;
+                    let mut held: heapless::Vec<<DefaultPacketPool as PacketPool>::Packet, 64> =
+                        heapless::Vec::new();
+                    while held.len() + 2 < cap {
+                        match DefaultPacketPool::allocate() {
+                            Some(p) => {
+                                if held.push(p).is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    let free = held.len();
+                    drop(held);
+                    defmt::debug!("BLE: pool free={=usize}/{=usize} (probe)", free, cap);
+                }
+            }
+            #[cfg(not(debug_assertions))]
+            core::future::pending::<()>().await;
+        },
     )
     .await;
 }
@@ -2038,6 +2074,13 @@ async fn nus_peripheral_loop<C>(
                                 match server.nus.tx.notify(&gatt_conn, &vec).await {
                                     Ok(()) => {
                                         outbox.pop_front();
+                                        // Yield so the HCI runner can hand this
+                                        // packet to the controller (freeing its
+                                        // shared-pool buffer) before we allocate
+                                        // the next notification — otherwise this
+                                        // back-to-back drain pins pool buffers and
+                                        // starves the RX path.
+                                        embassy_futures::yield_now().await;
                                     }
                                     Err(e) => {
                                         defmt::warn!(
@@ -2180,6 +2223,34 @@ async fn nus_peripheral_loop<C>(
                             reply.send().await;
                         }
                     }
+                    // Every GATT event borrows a packet from the shared pool and
+                    // must be answered. The old catch-all dropped Read/Other/
+                    // NotAllowed events — trouble-host's Drop then builds a reply
+                    // but sends it via a non-awaiting try_send that is silently
+                    // dropped under pool pressure, stalling the (sequential) ATT
+                    // channel and starving the pool. Accept + await send() here
+                    // so the transaction completes and the loop yields/backpressures.
+                    GattConnectionEvent::Gatt {
+                        event: GattEvent::Read(e),
+                    } => {
+                        if let Ok(reply) = e.accept() {
+                            reply.send().await;
+                        }
+                    }
+                    GattConnectionEvent::Gatt {
+                        event: GattEvent::Other(e),
+                    } => {
+                        if let Ok(reply) = e.accept() {
+                            reply.send().await;
+                        }
+                    }
+                    GattConnectionEvent::Gatt {
+                        event: GattEvent::NotAllowed(e),
+                    } => {
+                        if let Ok(reply) = e.accept() {
+                            reply.send().await;
+                        }
+                    }
                     _ => {}
                 },
 
@@ -2196,15 +2267,25 @@ async fn nus_peripheral_loop<C>(
                     }
 
                     PushEvent::RawPacket(pkt) => {
-                        defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
-                        outbox_push(
-                            outbox,
-                            &companion::Response::LogRxData {
-                                snr_x4: pkt.snr_x4,
-                                rssi: pkt.rssi,
-                                data: &pkt.data[..pkt.len],
-                            },
-                        );
+                        // Raw-RX logging (0x88) fires once per *raw* LoRa frame,
+                        // pre-dedup — in dense RF (a field full of badges) this is
+                        // a flood and is the lowest-priority, best-effort stream.
+                        // Drop it unless the outbox has clear headroom so it can
+                        // never displace command responses / higher-priority
+                        // events or pin shared BLE pool buffers under load.
+                        if outbox.len() * 2 < OUTBOX_CAP {
+                            defmt::debug!("BLE: raw LoRa pkt {} bytes, pushing 0x88", pkt.len);
+                            outbox_push(
+                                outbox,
+                                &companion::Response::LogRxData {
+                                    snr_x4: pkt.snr_x4,
+                                    rssi: pkt.rssi,
+                                    data: &pkt.data[..pkt.len],
+                                },
+                            );
+                        } else {
+                            defmt::debug!("BLE: raw LoRa pkt dropped (outbox busy)");
+                        }
                     }
 
                     PushEvent::Advert(notif) => {
