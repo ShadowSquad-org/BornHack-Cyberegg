@@ -518,7 +518,12 @@ pub static EPD_LUT_SPEED_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::ne
 /// Clamps to `[EPD_LUT_SPEED_MIN, 255]` — defends against a stale KV
 /// value (e.g. from a build that allowed lower values) locking the user
 /// out of an unreadable display.
-#[cfg(feature = "embassy-base")]
+///
+/// Gated on `mesh`, not `embassy-base`: the settings KV store lives under
+/// `fw::mesh::settings`, so persistence only exists in mesh builds. In
+/// non-mesh configs (embassy-game / embassy-watch) the menu still tunes the
+/// live atomic; the value just isn't saved across reboots.
+#[cfg(feature = "mesh")]
 pub async fn load_persisted_lut_speed() {
     let scale = crate::fw::mesh::settings::get_epd_lut_speed()
         .await
@@ -556,7 +561,8 @@ pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
 #[cfg(feature = "embassy-base")]
 pub static EPD_TEMP_BIAS_DIRTY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-#[cfg(feature = "embassy-base")]
+// Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.
+#[cfg(feature = "mesh")]
 pub async fn load_persisted_temp_bias() {
     let v = crate::fw::mesh::settings::get_epd_temp_bias_c10()
         .await
@@ -565,7 +571,8 @@ pub async fn load_persisted_temp_bias() {
     EPD_TEMP_BIAS_C10.store(v, Ordering::Relaxed);
 }
 
-#[cfg(feature = "embassy-base")]
+// Spawned only by the mesh settings persister; needs `fw::mesh::settings`.
+#[cfg(feature = "mesh")]
 pub async fn epd_temp_bias_persist_loop() -> ! {
     loop {
         EPD_TEMP_BIAS_DIRTY.wait().await;
@@ -612,7 +619,8 @@ pub fn current_lut_speed() -> u8 {
 /// Persister loop: waits on [`EPD_LUT_SPEED_DIRTY`], writes the current
 /// [`EPD_LUT_SPEED`] value to the `"settings"` KV namespace.  Spawned by
 /// [`crate::fw::mesh::persister::run`] alongside the other settings loops.
-#[cfg(feature = "embassy-base")]
+// Gated on `mesh` (settings KV store) — see `load_persisted_lut_speed`.
+#[cfg(feature = "mesh")]
 pub async fn epd_lut_speed_persist_loop() -> ! {
     loop {
         EPD_LUT_SPEED_DIRTY.wait().await;

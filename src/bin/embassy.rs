@@ -169,8 +169,13 @@ async fn main(spawner: Spawner) {
     .await
     .unwrap();
     defmt::info!("EPD initialized");
-    bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
-    bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
+    // EPD tuning is persisted via the mesh settings KV store; non-mesh builds
+    // boot with the compiled-in defaults (LUT speed 100, temp bias 0).
+    #[cfg(feature = "mesh")]
+    {
+        bornhack_aegg::fw::epd::load_persisted_lut_speed().await;
+        bornhack_aegg::fw::epd::load_persisted_temp_bias().await;
+    }
 
     // Host-side partial-refresh state — lazily allocates ~46 KB
     // .bss buffers (shadow + pending + sent_pending + dirty + 2
