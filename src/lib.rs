@@ -79,6 +79,49 @@ pub enum ScreenError {
 
 #[cfg(feature = "embassy-base")]
 pub mod fw;
+// `fw::emoji` is pure embedded-graphics glyph rendering (no embassy/HAL deps)
+// and is shared with the `watch` face, which the simulator also compiles.
+// The simulator doesn't pull in the rest of `fw` (battery, board, radio, …),
+// so expose just this one submodule there to keep `crate::fw::emoji::*`
+// resolving. Guarded against `embassy-base` so the two `mod fw` blocks are
+// mutually exclusive.
+#[cfg(all(feature = "simulator", not(feature = "embassy-base")))]
+pub mod fw {
+    pub mod emoji;
+
+    /// Host-simulator stubs for the shared settings menu, which reads these EPD
+    /// tuning atomics/consts (`menu.rs`). The host has no e-paper panel, so the
+    /// state is inert — the menu's adjust actions still update the live value
+    /// but the `*_DIRTY` persist signals are `embassy-base`-gated in the real
+    /// `fw::epd`, so nothing is written. Values MUST mirror `src/fw/epd.rs`.
+    pub mod epd {
+        use core::sync::atomic::{AtomicI8, AtomicU8};
+        pub const EPD_LUT_SPEED_MIN: u8 = 30;
+        pub static EPD_LUT_SPEED: AtomicU8 = AtomicU8::new(100);
+        pub const EPD_TEMP_BIAS_MIN: i8 = -50;
+        pub const EPD_TEMP_BIAS_MAX: i8 = 50;
+        pub const EPD_TEMP_BIAS_STEP: i8 = 5;
+        pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
+    }
+
+    /// Host-simulator stub: no Qwiic I2C bus off-badge, so the scan overlay is
+    /// never active, open/close are no-ops, and `draw` (only reached when
+    /// `is_active()` is true) never runs but must still type-check.
+    pub mod qwiic {
+        use embedded_graphics::draw_target::DrawTarget;
+        pub fn is_active() -> bool {
+            false
+        }
+        pub fn open() {}
+        pub fn close() {}
+        pub fn draw<D>(_display: &mut D) -> Result<(), D::Error>
+        where
+            D: DrawTarget<Color = crate::TriColor>,
+        {
+            Ok(())
+        }
+    }
+}
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;

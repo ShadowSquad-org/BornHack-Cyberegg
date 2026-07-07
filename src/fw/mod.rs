@@ -1,5 +1,8 @@
 pub mod battery;
 pub mod board;
+/// BORNPETS.CFG parser — overrides game balance thresholds from the USB-MSC
+/// partition. Game-only: it reads `crate::game` threshold types.
+#[cfg(feature = "game")]
 pub mod bornpets_cfg;
 pub mod button;
 pub mod buzzer;
@@ -15,6 +18,9 @@ pub mod kv;
 pub mod qwiic;
 pub mod led;
 pub mod nfct;
+/// PETS.CFG parser — registers custom pets from the USB-MSC partition.
+/// Game-only: it reads `crate::game` pet-registry types.
+#[cfg(feature = "game")]
 pub mod pets_cfg;
 pub mod sponsors;
 pub mod storage;
