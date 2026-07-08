@@ -125,6 +125,7 @@ pub mod fw {
 #[cfg(feature = "game")]
 pub mod game;
 pub mod menu;
+pub mod lut_file;
 pub mod name_screen;
 #[cfg(feature = "mesh")]
 pub mod qr_screen;
