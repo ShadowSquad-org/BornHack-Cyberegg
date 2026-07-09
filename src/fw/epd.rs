@@ -420,14 +420,16 @@ async fn load_custom_lut(
     lut_table: &mut [[u8; 107]; LUT_TABLE_SIZE],
     panel: ssd1675::DisplayVariant,
     scratch: &mut [u8],
-) {
+) -> [bool; LUT_TABLE_SIZE] {
     use crate::lut_file::{BandScan, LutVariant, MetaScan};
 
+    const NONE: [bool; LUT_TABLE_SIZE] = [false; LUT_TABLE_SIZE];
+
     let Some(name) = crate::fw::fat12::to_8_3("LUT.CFG") else {
-        return;
+        return NONE;
     };
     let Ok(file) = crate::fw::fat12::find_file(&name).await else {
-        return; // no LUT.CFG — normal, keep OTP
+        return NONE; // no LUT.CFG — normal, keep OTP
     };
 
     // Pass 1 — meta + full dry-run validation, streamed.
@@ -440,13 +442,13 @@ async fn load_custom_lut(
     .await;
     if streamed.is_err() {
         defmt::warn!("LUT.CFG rejected (unreadable or malformed) — keeping OTP");
-        return;
+        return NONE;
     }
     let meta = match meta.finish() {
         Ok(m) => m,
         Err(_) => {
             defmt::warn!("LUT.CFG present but rejected (bad meta)");
-            return;
+            return NONE;
         }
     };
     let file_is_b = meta.variant == LutVariant::B;
@@ -457,10 +459,11 @@ async fn load_custom_lut(
             file_is_b,
             panel_is_b
         );
-        return;
+        return NONE;
     }
     let has_waveform = check.finish().iter().any(|&s| s);
 
+    let mut band_set = NONE;
     if has_waveform {
         // Pass 2 — apply (contents already validated above).
         let mut apply = BandScan::apply(lut_table);
@@ -469,9 +472,9 @@ async fn load_custom_lut(
             .is_err()
         {
             defmt::warn!("LUT.CFG apply pass failed mid-stream (flash re-read)");
-            return;
+            return NONE;
         }
-        let band_set = apply.finish();
+        band_set = apply.finish();
         let count = band_set.iter().filter(|&&s| s).count() as u8;
         defmt::info!("LUT.CFG accepted: {=u8} band(s) applied", count);
     } else {
@@ -481,6 +484,7 @@ async fn load_custom_lut(
     if let Some(speed) = meta.speed {
         LUT_FILE_SPEED.store(speed as i16, Ordering::Relaxed);
     }
+    band_set
 }
 
 /// Apply a `LUT.CFG`-supplied `speed=` (if any) over the persisted value.
@@ -582,11 +586,12 @@ pub async fn init_epd<'a>(
     // against the panel inside `load_custom_lut`; it fills only the bands
     // the file specifies. Skipped when the user holds Fire at boot — the
     // escape hatch for a LUT that renders badly.
-    if !force_otp_lut {
-        load_custom_lut(lut_table, variant, work_buffer).await;
+    let custom_bands = if !force_otp_lut {
+        load_custom_lut(lut_table, variant, work_buffer).await
     } else {
         defmt::info!("EPD: Fire held at boot — forcing OTP LUT, ignoring LUT.CFG");
-    }
+        [false; LUT_TABLE_SIZE]
+    };
 
     // Build the SPI bus.
     let mut cfg = Config::default();
@@ -626,14 +631,19 @@ pub async fn init_epd<'a>(
     }
 
     // SSD1675A full-refresh override: replace the probed OTP full LUT with the
-    // hand-tuned v5 calibration waveform ([`FULL_LUT_1675A_V5`]) across all
-    // temperature bands.  Done *after* deriving `lut_table_no_invert` so the
-    // partial/delta path keeps the OTP waveform — only the full-refresh path
-    // (`lut_table`, used by `update_tc`) is swapped.  SSD1675B keeps its OTP
-    // full LUT, which drives the panel well as-is.
-    if variant == DisplayVariant::Ssd1675 {
-        for band in lut_table.iter_mut() {
-            *band = FULL_LUT_1675A_V5;
+    // hand-tuned v5 calibration waveform ([`FULL_LUT_1675A_V5`]) — the new
+    // built-in default for A panels.  Done *after* deriving
+    // `lut_table_no_invert` so the partial/delta path keeps the OTP waveform —
+    // only the full-refresh path (`lut_table`, used by `update_tc`) is
+    // swapped.  SSD1675B keeps its OTP full LUT, which drives the panel well
+    // as-is.  Bands supplied by a valid `LUT.CFG` win over the v5 default, and
+    // Fire-held-at-boot skips it entirely — the escape hatch must land on the
+    // panel's own OTP waveform, not another baked-in override.
+    if variant == DisplayVariant::Ssd1675 && !force_otp_lut {
+        for (band, &from_file) in lut_table.iter_mut().zip(custom_bands.iter()) {
+            if !from_file {
+                *band = FULL_LUT_1675A_V5;
+            }
         }
     }
 
