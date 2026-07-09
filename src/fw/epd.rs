@@ -327,29 +327,76 @@ async fn probe_lut(
 /// over the persisted-KV value.
 pub static LUT_FILE_SPEED: AtomicI16 = AtomicI16::new(-1);
 
+/// Stream `file` through `scratch` line by line, invoking `f` once per
+/// text line (without its `\n`). Lines may span read-chunk boundaries —
+/// the partial tail is carried over between reads — so the file itself
+/// can be (much) larger than `scratch`. Errors on a read failure, a `f`
+/// parse error, or a single line longer than the whole scratch buffer.
+async fn for_each_file_line<F>(
+    file: &crate::fw::fat12::FileRef,
+    scratch: &mut [u8],
+    mut f: F,
+) -> Result<(), ()>
+where
+    F: FnMut(&[u8]) -> Result<(), crate::lut_file::LutCfgError>,
+{
+    let mut offset: u32 = 0;
+    let mut carry: usize = 0;
+    loop {
+        let n = match crate::fw::fat12::read_file(file, offset, &mut scratch[carry..]).await {
+            Ok(n) => n,
+            Err(_) => return Err(()),
+        };
+        offset = offset.saturating_add(n as u32);
+        let filled = carry + n;
+        let eof = n == 0 || offset >= file.size;
+
+        let consumed = crate::lut_file::drain_lines(&scratch[..filled], &mut f).map_err(|_| ())?;
+        if eof {
+            if consumed < filled {
+                // Final line without a trailing newline.
+                f(&scratch[consumed..filled]).map_err(|_| ())?;
+            }
+            return Ok(());
+        }
+        carry = filled - consumed;
+        if carry == scratch.len() {
+            return Err(()); // one line larger than the whole scratch buffer
+        }
+        scratch.copy_within(consumed..filled, 0);
+    }
+}
+
 /// Read and apply a custom `LUT.CFG` from the USB-MSC FAT partition into
 /// `lut_table`, in place.
 ///
-/// `scratch` is a caller-owned byte buffer used to read the file — the EPD
-/// `work_buffer` is reused for this so we add **no** new `.bss` (mesh
-/// RAM/stack is marginal; extra statics overflow the boot stack and
-/// HardFault). It also bounds the max file size to `scratch.len()`.
+/// `scratch` is a caller-owned byte buffer used as the streaming window —
+/// the EPD `work_buffer` is reused for this so we add **no** new `.bss`
+/// (mesh RAM/stack is marginal; extra statics overflow the boot stack and
+/// HardFault). The file is streamed through it in two passes, so its size
+/// is *not* limited by `scratch.len()` — a full 16-band
+/// temperature-compensated export (~3.7 KB) loads fine through the
+/// 2.8 KB work buffer. Only a single *line* longer than `scratch` (never
+/// legitimate: a LUT line is ~230 bytes) rejects the file.
 ///
 /// Fills only the bands the file specifies (a `band_lut` base and/or
 /// `band_lut_NN` overrides); bands the file leaves out keep their
 /// OTP-probed waveform, so a partial set still tracks temperature. A
 /// `speed=` value is stashed in [`LUT_FILE_SPEED`] for later application.
 ///
-/// The file's `variant` is validated against the live `panel`, and the
-/// whole waveform is validated (`validate_bands`), *before* `lut_table` is
-/// written — so a mismatched-variant or malformed file never half-applies.
-/// Any failure is a no-op (OTP kept).
+/// Pass 1 streams the file through `MetaScan` (variant/speed, checked
+/// against the live `panel`) and a dry-run `BandScan::validate` — so a
+/// mismatched-variant or malformed file never touches `lut_table`. Pass 2
+/// re-streams and applies. Should the second read fail mid-stream (flash
+/// hiccup on an already-validated file), some bands hold file values and
+/// the rest OTP — every one is a complete waveform for this panel
+/// (variant-checked), so that is safe, just logged.
 async fn load_custom_lut(
     lut_table: &mut [[u8; 107]; LUT_TABLE_SIZE],
     panel: ssd1675::DisplayVariant,
     scratch: &mut [u8],
 ) {
-    use crate::lut_file::LutVariant;
+    use crate::lut_file::{BandScan, LutVariant, MetaScan};
 
     let Some(name) = crate::fw::fat12::to_8_3("LUT.CFG") else {
         return;
@@ -357,13 +404,20 @@ async fn load_custom_lut(
     let Ok(file) = crate::fw::fat12::find_file(&name).await else {
         return; // no LUT.CFG — normal, keep OTP
     };
-    let Ok(n) = crate::fw::fat12::read_file(&file, 0, scratch).await else {
-        return;
-    };
-    let data = &scratch[..n];
 
-    // Variant + speed, validated against the panel before anything else.
-    let meta = match crate::lut_file::parse_meta(data) {
+    // Pass 1 — meta + full dry-run validation, streamed.
+    let mut meta = MetaScan::new();
+    let mut check = BandScan::validate();
+    let streamed = for_each_file_line(&file, scratch, |line| {
+        meta.feed_line(line)?;
+        check.feed_line(line)
+    })
+    .await;
+    if streamed.is_err() {
+        defmt::warn!("LUT.CFG rejected (unreadable or malformed) — keeping OTP");
+        return;
+    }
+    let meta = match meta.finish() {
         Ok(m) => m,
         Err(_) => {
             defmt::warn!("LUT.CFG present but rejected (bad meta)");
@@ -380,23 +434,23 @@ async fn load_custom_lut(
         );
         return;
     }
+    let has_waveform = check.finish().iter().any(|&s| s);
 
-    // Dry-run validate every waveform value BEFORE writing, so a malformed
-    // file can't leave `lut_table` half-overwritten (no scratch table).
-    if crate::lut_file::validate_bands(data).is_err() {
-        defmt::warn!("LUT.CFG waveform rejected (bad hex / length / band) — keeping OTP");
-        return;
-    }
-
-    let mut band_set = [false; LUT_TABLE_SIZE];
-    match crate::lut_file::parse_bands(data, lut_table, &mut band_set) {
-        Ok(true) => {
-            let count = band_set.iter().filter(|&&s| s).count() as u8;
-            defmt::info!("LUT.CFG accepted: {=u8} band(s) applied", count);
+    if has_waveform {
+        // Pass 2 — apply (contents already validated above).
+        let mut apply = BandScan::apply(lut_table);
+        if for_each_file_line(&file, scratch, |line| apply.feed_line(line))
+            .await
+            .is_err()
+        {
+            defmt::warn!("LUT.CFG apply pass failed mid-stream (flash re-read)");
+            return;
         }
-        Ok(false) => defmt::info!("LUT.CFG accepted: no waveform (settings only)"),
-        // Unreachable after validate_bands, but keep OTP if it ever fires.
-        Err(_) => return,
+        let band_set = apply.finish();
+        let count = band_set.iter().filter(|&&s| s).count() as u8;
+        defmt::info!("LUT.CFG accepted: {=u8} band(s) applied", count);
+    } else {
+        defmt::info!("LUT.CFG accepted: no waveform (settings only)");
     }
 
     if let Some(speed) = meta.speed {

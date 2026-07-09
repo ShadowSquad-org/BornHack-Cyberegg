@@ -70,24 +70,134 @@ pub enum LutCfgError {
     BadSpeed,
 }
 
+/// Incremental variant of [`parse_meta`] for streamed files: feed each
+/// text line as it comes off flash, then [`MetaScan::finish`]. Lines can
+/// arrive in any chunking as long as each `feed_line` call gets one whole
+/// line (no `\n`).
+pub struct MetaScan {
+    variant: Option<LutVariant>,
+    speed: Option<u8>,
+}
+
+impl MetaScan {
+    pub const fn new() -> Self {
+        Self {
+            variant: None,
+            speed: None,
+        }
+    }
+
+    pub fn feed_line(&mut self, line: &[u8]) -> Result<(), LutCfgError> {
+        let Some((key, val)) = kv_of_line(line) else {
+            return Ok(());
+        };
+        if key.eq_ignore_ascii_case(b"variant") {
+            self.variant = Some(parse_variant(val)?);
+        } else if key.eq_ignore_ascii_case(b"speed") {
+            self.speed = Some(parse_dec(val).and_then(u8_in_range).ok_or(LutCfgError::BadSpeed)?);
+        }
+        Ok(())
+    }
+
+    pub fn finish(&self) -> Result<LutMeta, LutCfgError> {
+        Ok(LutMeta {
+            variant: self.variant.ok_or(LutCfgError::MissingOrBadVariant)?,
+            speed: self.speed,
+        })
+    }
+}
+
+/// Incremental band scanner, in one of two modes:
+///
+/// - [`BandScan::validate`] — dry-run: every waveform value is checked
+///   (hex, exact length, band index) but written nowhere. Lets the caller
+///   reject a malformed file *before* mutating the live LUT table.
+/// - [`BandScan::apply`] — fills the caller's band table. `band_lut` sets
+///   a base applied to every band (at [`BandScan::finish`]); `band_lut_NN`
+///   overrides band `NN` on sight. Bands set by neither are left untouched
+///   so the caller keeps the OTP value there.
+///
+/// `finish` returns which bands were (or, for a dry-run, would be) set.
+pub struct BandScan<'a> {
+    bands: Option<&'a mut [[u8; LUT_UNIT_LEN]; NUM_BANDS]>,
+    band_set: [bool; NUM_BANDS],
+    base: Option<[u8; LUT_UNIT_LEN]>,
+}
+
+impl<'a> BandScan<'a> {
+    /// Dry-run mode — validate only.
+    pub const fn validate() -> BandScan<'static> {
+        BandScan {
+            bands: None,
+            band_set: [false; NUM_BANDS],
+            base: None,
+        }
+    }
+
+    /// Apply mode — write into `bands`. Only run this over data a
+    /// [`BandScan::validate`] pass has already accepted: a `feed_line`
+    /// error in this mode can leave the table partially written.
+    pub fn apply(bands: &'a mut [[u8; LUT_UNIT_LEN]; NUM_BANDS]) -> Self {
+        BandScan {
+            bands: Some(bands),
+            band_set: [false; NUM_BANDS],
+            base: None,
+        }
+    }
+
+    pub fn feed_line(&mut self, line: &[u8]) -> Result<(), LutCfgError> {
+        let Some((key, val)) = kv_of_line(line) else {
+            return Ok(());
+        };
+        if key.eq_ignore_ascii_case(b"band_lut") {
+            let mut b = [0u8; LUT_UNIT_LEN];
+            decode_exact(val, &mut b)?;
+            self.base = Some(b);
+        } else if let Some(suffix) = strip_prefix_ci(key, b"band_lut_") {
+            let idx = parse_dec(suffix)
+                .filter(|&n| (n as usize) < NUM_BANDS)
+                .ok_or(LutCfgError::BadBandIndex)? as usize;
+            match &mut self.bands {
+                Some(t) => decode_exact(val, &mut t[idx])?,
+                None => {
+                    let mut b = [0u8; LUT_UNIT_LEN];
+                    decode_exact(val, &mut b)?;
+                }
+            }
+            self.band_set[idx] = true;
+        }
+        Ok(())
+    }
+
+    /// Fill the base into any band not explicitly overridden, and return
+    /// the final per-band set map.
+    pub fn finish(mut self) -> [bool; NUM_BANDS] {
+        if self.base.is_some() {
+            match (&mut self.bands, &self.base) {
+                (Some(t), Some(b)) => {
+                    for i in 0..NUM_BANDS {
+                        if !self.band_set[i] {
+                            t[i] = *b;
+                            self.band_set[i] = true;
+                        }
+                    }
+                }
+                _ => self.band_set = [true; NUM_BANDS], // dry-run: base fills all
+            }
+        }
+        self.band_set
+    }
+}
+
 /// Pass 1 — parse `variant` (required) and `speed` (optional), ignoring
 /// waveform data. Cheap; lets the caller reject a variant mismatch before
 /// filling the band table.
 pub fn parse_meta(data: &[u8]) -> Result<LutMeta, LutCfgError> {
-    let mut variant: Option<LutVariant> = None;
-    let mut speed: Option<u8> = None;
-    for_each_kv(data, |key, val| {
-        if key.eq_ignore_ascii_case(b"variant") {
-            variant = Some(parse_variant(val)?);
-        } else if key.eq_ignore_ascii_case(b"speed") {
-            speed = Some(parse_dec(val).and_then(u8_in_range).ok_or(LutCfgError::BadSpeed)?);
-        }
-        Ok(())
-    })?;
-    Ok(LutMeta {
-        variant: variant.ok_or(LutCfgError::MissingOrBadVariant)?,
-        speed,
-    })
+    let mut scan = MetaScan::new();
+    for line in data.split(|&b| b == b'\n') {
+        scan.feed_line(line)?;
+    }
+    scan.finish()
 }
 
 /// Pass 2 — fill `bands` from the file's waveform keys.
@@ -101,30 +211,11 @@ pub fn parse_bands(
     bands: &mut [[u8; LUT_UNIT_LEN]; NUM_BANDS],
     band_set: &mut [bool; NUM_BANDS],
 ) -> Result<bool, LutCfgError> {
-    let mut base: Option<[u8; LUT_UNIT_LEN]> = None;
-    for_each_kv(data, |key, val| {
-        if key.eq_ignore_ascii_case(b"band_lut") {
-            let mut b = [0u8; LUT_UNIT_LEN];
-            decode_exact(val, &mut b)?;
-            base = Some(b);
-        } else if let Some(suffix) = strip_prefix_ci(key, b"band_lut_") {
-            let idx = parse_dec(suffix)
-                .filter(|&n| (n as usize) < NUM_BANDS)
-                .ok_or(LutCfgError::BadBandIndex)? as usize;
-            decode_exact(val, &mut bands[idx])?;
-            band_set[idx] = true;
-        }
-        Ok(())
-    })?;
-    // Base fills any band not explicitly overridden.
-    if let Some(b) = base {
-        for i in 0..NUM_BANDS {
-            if !band_set[i] {
-                bands[i] = b;
-                band_set[i] = true;
-            }
-        }
+    let mut scan = BandScan::apply(bands);
+    for line in data.split(|&b| b == b'\n') {
+        scan.feed_line(line)?;
     }
+    *band_set = scan.finish();
     Ok(band_set.iter().any(|&s| s))
 }
 
@@ -133,41 +224,43 @@ pub fn parse_bands(
 /// malformed file *before* it mutates the live LUT table, so no scratch
 /// table is needed. Each value decodes into a small reused stack local.
 pub fn validate_bands(data: &[u8]) -> Result<(), LutCfgError> {
-    for_each_kv(data, |key, val| {
-        if key.eq_ignore_ascii_case(b"band_lut") {
-            let mut b = [0u8; LUT_UNIT_LEN];
-            decode_exact(val, &mut b)?;
-        } else if let Some(suffix) = strip_prefix_ci(key, b"band_lut_") {
-            parse_dec(suffix)
-                .filter(|&n| (n as usize) < NUM_BANDS)
-                .ok_or(LutCfgError::BadBandIndex)?;
-            let mut b = [0u8; LUT_UNIT_LEN];
-            decode_exact(val, &mut b)?;
-        }
-        Ok(())
-    })
+    let mut scan = BandScan::validate();
+    for line in data.split(|&b| b == b'\n') {
+        scan.feed_line(line)?;
+    }
+    Ok(())
+}
+
+/// Feed every complete (`\n`-terminated) line in `buf` to `f`, and return
+/// the index just past the last newline — i.e. the start of the trailing
+/// incomplete line, which the caller carries over into the next read
+/// chunk. Building block for streaming a file through a scratch buffer
+/// smaller than the file.
+pub fn drain_lines<F>(buf: &[u8], f: &mut F) -> Result<usize, LutCfgError>
+where
+    F: FnMut(&[u8]) -> Result<(), LutCfgError>,
+{
+    let mut start = 0;
+    while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
+        f(&buf[start..start + pos])?;
+        start += pos + 1;
+    }
+    Ok(start)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Call `f(key, val)` for each non-comment `KEY=VALUE` line.
-fn for_each_kv<F>(data: &[u8], mut f: F) -> Result<(), LutCfgError>
-where
-    F: FnMut(&[u8], &[u8]) -> Result<(), LutCfgError>,
-{
-    for line in data.split(|&b| b == b'\n') {
-        let line = trim(line);
-        if line.is_empty() || line[0] == b'#' {
-            continue;
-        }
-        let Some(eq) = line.iter().position(|&b| b == b'=') else {
-            continue;
-        };
-        f(trim(&line[..eq]), trim(&line[eq + 1..]))?;
+/// Split one line into `(key, value)`, or `None` for comments / blanks /
+/// lines without `=`.
+fn kv_of_line(line: &[u8]) -> Option<(&[u8], &[u8])> {
+    let line = trim(line);
+    if line.is_empty() || line[0] == b'#' {
+        return None;
     }
-    Ok(())
+    let eq = line.iter().position(|&b| b == b'=')?;
+    Some((trim(&line[..eq]), trim(&line[eq + 1..])))
 }
 
 fn parse_variant(val: &[u8]) -> Result<LutVariant, LutCfgError> {
@@ -387,5 +480,115 @@ mod tests {
         let (mut bands, mut set) = empty_bands();
         assert!(parse_bands(cfg.as_bytes(), &mut bands, &mut set).unwrap());
         assert_eq!(bands[3][0], 9);
+    }
+
+    // ── streaming API ────────────────────────────────────────────────────
+
+    /// Push `data` through the scanners the way the firmware's chunked
+    /// file reader does: read `chunk`-sized pieces into a window buffer,
+    /// drain complete lines, carry the partial tail over. Mirrors
+    /// `epd::for_each_file_line`.
+    fn stream_chunked<F>(data: &[u8], window: usize, chunk: usize, f: &mut F)
+    where
+        F: FnMut(&[u8]) -> Result<(), LutCfgError>,
+    {
+        let mut buf = vec![0u8; window];
+        let mut carry = 0usize;
+        let mut offset = 0usize;
+        loop {
+            let space = window - carry;
+            let n = chunk.min(space).min(data.len() - offset);
+            buf[carry..carry + n].copy_from_slice(&data[offset..offset + n]);
+            offset += n;
+            let filled = carry + n;
+            let consumed = drain_lines(&buf[..filled], f).unwrap();
+            if offset == data.len() {
+                if consumed < filled {
+                    f(&buf[consumed..filled]).unwrap();
+                }
+                return;
+            }
+            carry = filled - consumed;
+            assert!(carry < window, "line longer than window");
+            buf.copy_within(consumed..filled, 0);
+        }
+    }
+
+    #[test]
+    fn streamed_equals_slice_parse() {
+        // A file bigger than the stream window: base + all 16 overrides
+        // (~3.7 KB), streamed through a 512-byte window in 128-byte reads.
+        let mut cfg = format!("# big\nvariant=B\nspeed=90\nband_lut={}\n", hex_tagged(0xEE));
+        for i in 0..NUM_BANDS {
+            cfg.push_str(&format!("band_lut_{:02}={}\n", i, hex_tagged(i as u8)));
+        }
+        let data = cfg.as_bytes();
+        assert!(data.len() > 512);
+
+        let mut meta = MetaScan::new();
+        let mut check = BandScan::validate();
+        stream_chunked(data, 512, 128, &mut |line: &[u8]| {
+            meta.feed_line(line)?;
+            check.feed_line(line)
+        });
+        let m = meta.finish().unwrap();
+        assert_eq!(m.variant, LutVariant::B);
+        assert_eq!(m.speed, Some(90));
+        assert!(check.finish().iter().all(|&s| s));
+
+        let (mut bands, _) = empty_bands();
+        let mut apply = BandScan::apply(&mut bands);
+        stream_chunked(data, 512, 128, &mut |line: &[u8]| apply.feed_line(line));
+        let set = apply.finish();
+        assert!(set.iter().all(|&s| s));
+        // Overrides win over base; every band carries its own tag.
+        for (i, b) in bands.iter().enumerate() {
+            assert_eq!(b[0], i as u8);
+        }
+
+        // Same input through the slice API gives the same table.
+        let (mut bands2, mut set2) = empty_bands();
+        parse_bands(data, &mut bands2, &mut set2).unwrap();
+        assert_eq!(bands, bands2);
+    }
+
+    #[test]
+    fn streamed_base_fill_at_finish() {
+        let cfg = format!("variant=A\nband_lut={}\nband_lut_05={}\n", hex_tagged(0xBB), hex_tagged(0x55));
+        let (mut bands, _) = empty_bands();
+        let mut apply = BandScan::apply(&mut bands);
+        // Tiny window/chunk to force many carry-overs mid-line.
+        stream_chunked(cfg.as_bytes(), 256, 7, &mut |line: &[u8]| apply.feed_line(line));
+        let set = apply.finish();
+        assert!(set.iter().all(|&s| s));
+        assert_eq!(bands[5][0], 0x55);
+        assert_eq!(bands[0][0], 0xBB);
+        assert_eq!(bands[15][0], 0xBB);
+    }
+
+    #[test]
+    fn streamed_validate_catches_errors() {
+        let mut check = BandScan::validate();
+        let bad = format!("variant=A\nband_lut_16={}\n", hex_tagged(1));
+        let mut err = None;
+        for line in bad.as_bytes().split(|&b| b == b'\n') {
+            if let Err(e) = check.feed_line(line) {
+                err = Some(e);
+                break;
+            }
+        }
+        assert_eq!(err, Some(LutCfgError::BadBandIndex));
+    }
+
+    #[test]
+    fn drain_lines_returns_partial_tail_start() {
+        let mut seen: std::vec::Vec<std::vec::Vec<u8>> = vec![];
+        let consumed = drain_lines(b"a=1\nb=2\npartial", &mut |l: &[u8]| {
+            seen.push(l.to_vec());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(consumed, 8);
+        assert_eq!(seen, vec![b"a=1".to_vec(), b"b=2".to_vec()]);
     }
 }
