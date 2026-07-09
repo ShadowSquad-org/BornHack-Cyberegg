@@ -52,16 +52,13 @@ The multi-stage `stage_luts` and the staged-drive `controls` from the
 calibration tool's full export are **not** used by this path — the badge
 firmware runs the single-LUT refresh engine.
 
-### Size limit: keep the file under ~2.8 KB
+### Size
 
-`LUT.CFG` is read into a fixed 2888-byte scratch buffer (the display's
-work buffer, borrowed during boot). A larger file is truncated mid-line,
-fails validation, and the **whole file is silently ignored** (OTP
-waveform used instead). A full 16-band export with comments easily
-exceeds this — trim it: rely on one base `band_lut=` line (it already
-fills all 16 bands) plus only the `band_lut_NN` overrides you actually
-need, and strip comments. A base + a handful of overrides fits fine; a
-base plus all 16 overrides does not.
+No practical limit — the file is streamed off flash in chunks, so a
+full 16-band temperature-compensated export (~3.7 KB, base plus all 16
+`band_lut_NN` overrides, comments and all) loads fine. The only hard
+constraint is per *line*: a single line longer than ~2.8 KB is rejected,
+and no legitimate LUT line comes anywhere near that (~230 bytes).
 
 ### `speed` floor
 
@@ -78,10 +75,9 @@ Rejection is silent (log-only). Checklist:
 2. **Wrong key** — the calibration tool's full JSON export calls things
    `stage_luts` / `controls`; the badge wants the flat `band_lut` hex
    field. Copy that one.
-3. **File too big** — see the size limit above.
-4. **Bad hex / wrong length** — each LUT value must be exactly 214 hex
+3. **Bad hex / wrong length** — each LUT value must be exactly 214 hex
    chars; any parse error anywhere rejects the whole file.
-5. **Fire held at boot** — forces OTP for that boot (see recovery).
+4. **Fire held at boot** — forces OTP for that boot (see recovery).
 
 ## Recovery — if a LUT renders badly
 
