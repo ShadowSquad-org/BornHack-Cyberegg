@@ -91,6 +91,8 @@ When the badge is plugged in via USB-C it appears on your computer as a small dr
 | `030000.PCX` … `030009.PCX`   | Sponsor slides shown on the splash carousel            |
 | `<6 hex>.PCX`                 | Game sprites (palette + size enforced by asset tool)   |
 | `BORNPETS.CFG`                | Override BornPets balance — see [USER_GAMES.md](USER_GAMES.md) |
+| `PETS.CFG`                    | Add / rename pets (with their sprite PCX files) — see [USER_GAMES.md](USER_GAMES.md) |
+| `LUT.CFG`                     | Custom e-paper waveform — see [LUT.md](LUT.md)         |
 
 Reboot the badge after dropping files (re-plug or hold power if no power switch — pull the strap and replug USB).
 
