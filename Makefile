@@ -200,15 +200,17 @@ bl:
 # Build the bootloader release artifact for the SWD mass-programmer
 # (../mass-flash-bl). probe-rs flashes the ELF directly (it
 # carries its own load addresses), so the ELF is what mass-flash-bl consumes;
-# a raw .bin is also emitted for convenience.
+# a raw .bin is also emitted for convenience, plus a .hex for the Nordic tools.
 bl-bin:
 	cd bootloader && cargo bl
 	@mkdir -p $(FW_OUT)
 	cp $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.elf
 	arm-none-eabi-objcopy -O binary $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.bin
+	arm-none-eabi-objcopy -O ihex   $(BL_ELF) $(FW_OUT)/nrf-aegg-bootloader.hex
 	@arm-none-eabi-size $(BL_ELF) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
 	@echo "bootloader ELF (pass to mass-flash-bl -f): $(abspath $(FW_OUT)/nrf-aegg-bootloader.elf)"
 	@echo "raw bin (optional):                        $(abspath $(FW_OUT)/nrf-aegg-bootloader.bin)"
+	@echo "hex (nrfjprog / nRF Connect Programmer):   $(abspath $(FW_OUT)/nrf-aegg-bootloader.hex)"
 
 flash-bl:
 	probe-rs erase --chip nRF52840_xxAA
@@ -231,9 +233,14 @@ dfu-flash-release:
 
 # Build the release .bin and drop it in the auto-flasher's firmware dir so
 # cyber-aegg-flasher serves it for WebUSB DFU. Does not flash anything.
+# The .hex comes from the ELF, not the .bin: `-O binary` discards the load
+# address, and the Nordic tools place records by address (app sits at
+# 0x00010000, above the bootloader).
 fw-bin-release:
 	cargo fw-release
 	@mkdir -p $(FW_OUT)
 	arm-none-eabi-objcopy -O binary $(ELF_REL) $(FW_OUT)/cyber-aegg.bin
+	arm-none-eabi-objcopy -O ihex   $(ELF_REL) $(FW_OUT)/cyber-aegg.hex
 	@arm-none-eabi-size $(ELF_REL) | tail -1 | awk '{printf "  flash: %s B  ram: %s B\n", $$1+$$2, $$3}'
-	@echo "app bin (pass to the DFU flasher): $(abspath $(FW_OUT)/cyber-aegg.bin)"
+	@echo "app bin (pass to the DFU flasher):       $(abspath $(FW_OUT)/cyber-aegg.bin)"
+	@echo "app hex (nrfjprog / nRF Connect Prog.):  $(abspath $(FW_OUT)/cyber-aegg.hex)"
