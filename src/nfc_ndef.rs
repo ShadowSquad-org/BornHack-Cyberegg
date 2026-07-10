@@ -168,17 +168,23 @@ fn parse_record(msg: &[u8], mut i: usize) -> Option<(RecordHeader, &[u8], &[u8],
         0
     };
 
-    if i + type_len > msg.len() {
+    // Bounds via checked_add: `payload_len` comes from a 4-byte field and can
+    // be up to 0xFFFF_FFFF, so `i + payload_len` would wrap on the 32-bit
+    // target (usize = u32) and slip past a plain `>` guard — an attacker-
+    // crafted NDEF write then slices out of bounds and panics (badge reset).
+    let type_end = i.checked_add(type_len)?;
+    if type_end > msg.len() {
         return None;
     }
-    let type_bytes = &msg[i..i + type_len];
-    i += type_len + id_len;
+    let type_bytes = &msg[i..type_end];
+    i = type_end.checked_add(id_len)?;
 
-    if i + payload_len > msg.len() {
+    let payload_end = i.checked_add(payload_len)?;
+    if payload_end > msg.len() {
         return None;
     }
-    let payload = &msg[i..i + payload_len];
-    i += payload_len;
+    let payload = &msg[i..payload_end];
+    i = payload_end;
 
     Some((RecordHeader { me, tnf }, type_bytes, payload, i))
 }
@@ -292,5 +298,18 @@ mod tests {
         assert_eq!(find_text_record(&[0xff]), None); // truncated
         // CF=1 (chunked) record header → bail.
         assert!(!is_vcard_message(&[0x20, 0x00, 0x00]));
+    }
+
+    #[test]
+    fn giant_payload_len_does_not_panic() {
+        // Non-short record (SR=0) with a 4-byte payload_len of 0xFFFF_FFFF.
+        // On the 32-bit target `i + payload_len` wraps; the parser must reject
+        // via checked arithmetic, not slice out of bounds. Header: TNF=1,
+        // MB|ME, SR=0, IL=0 -> 0xC1. type_len=1, payload_len=FFFFFFFF, type=T.
+        let msg = [0xc1u8, 0x01, 0xff, 0xff, 0xff, 0xff, b'T'];
+        assert_eq!(find_text_record(&msg), None);
+        // Same wrap risk via the ID-length field pushing `i` past the buffer.
+        let msg_il = [0xc9u8, 0x01, 0x01, 0xff, b'T', b'X'];
+        assert_eq!(find_text_record(&msg_il), None);
     }
 }

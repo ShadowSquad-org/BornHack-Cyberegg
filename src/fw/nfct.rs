@@ -301,7 +301,13 @@ fn dispatch_plain(
                     *selected = Selected::Ndef;
                     let _ = out.extend_from_slice(ok);
                 }
-                _ => todo!(),
+                // Any other (or malformed-length) file ID: answer "file not
+                // found" instead of panicking. A non-standard reader or NFC
+                // fuzzer within range must not be able to reset the badge with
+                // a stray SELECT.
+                _ => {
+                    let _ = out.extend_from_slice(&[0x6a, 0x82]);
+                }
             }
         }
         (0, 0xb0, p1, p2) => {
