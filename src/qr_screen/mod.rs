@@ -65,9 +65,22 @@ const PX_PER_MODULE: i32 = 3;
 pub fn build_url<'a>(buf: &'a mut [u8], name: &str, pub_key: &[u8; 32]) -> Option<&'a [u8]> {
     use core::fmt::Write;
 
-    let mut s: heapless::String<200> = heapless::String::new();
+    // 111 fixed bytes + name (≤31 chars, ≤3× when fully percent-encoded).
+    let mut s: heapless::String<256> = heapless::String::new();
     s.push_str("meshcore://contact/add?name=").ok()?;
-    s.push_str(name).ok()?;
+    // Percent-encode the name: NODE_NAME can contain spaces and the
+    // specials `_.,()*/+-?#` (see text_entry), several of which (` `,
+    // `#`, `+`, `?`, `/`) corrupt the URL query when left raw, so the
+    // MeshCore app rejects or truncates the contact.  Keep only the
+    // RFC 3986 unreserved set literal; emit everything else as %XX.
+    for &b in name.as_bytes() {
+        let unreserved = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+        if unreserved {
+            s.push(b as char).ok()?;
+        } else {
+            write!(s, "%{:02X}", b).ok()?;
+        }
+    }
     s.push_str("&public_key=").ok()?;
     for byte in pub_key {
         write!(s, "{:02x}", byte).ok()?;

@@ -1,5 +1,5 @@
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::iso_8859_1::FONT_7X13_BOLD;
@@ -424,6 +424,16 @@ impl<const M: usize> DisplayState<M> {
     /// Programmatically jump to a specific screen (e.g. an NFC bonus
     /// hands focus back to the game screen so the toast is visible).
     /// Ignored if the requested screen is out of range or disabled.
+    /// Apply a screen switch requested by a menu action via [`request_screen`].
+    /// Called from [`Self::dispatch_button`] after the action returns, so the
+    /// action never has to re-lock `DISPLAY_STATE` from inside `fire()`.
+    fn apply_requested_screen(&mut self) {
+        let req = REQUESTED_SCREEN.swap(NO_REQUESTED_SCREEN, Ordering::Relaxed);
+        if req != NO_REQUESTED_SCREEN {
+            self.set_active_screen(req);
+        }
+    }
+
     pub fn set_active_screen(&mut self, s: u8) {
         let idx = s as usize;
         if idx < M && self.enabled[idx] {
@@ -659,7 +669,24 @@ impl<const M: usize> DisplayState<M> {
             ButtonId::Left => self.screen_left(),
             ButtonId::Right => self.screen_right(),
         }
+        // A menu action (e.g. "My QR") may have requested a screen switch;
+        // apply it now that `fire()` has returned and we still hold `&mut self`.
+        self.apply_requested_screen();
     }
+}
+
+/// Sentinel for [`REQUESTED_SCREEN`]: no switch pending.
+const NO_REQUESTED_SCREEN: u8 = 0xFF;
+
+/// A menu action requests a screen switch by storing the target screen id here
+/// instead of locking `DISPLAY_STATE` (which is already borrowed while the
+/// action runs).  Drained by [`DisplayState::apply_requested_screen`].
+static REQUESTED_SCREEN: AtomicU8 = AtomicU8::new(NO_REQUESTED_SCREEN);
+
+/// Record a pending screen switch for a menu action.  Safe to call from inside
+/// `fire()` — no `DISPLAY_STATE` lock is taken.
+pub fn request_screen(screen: u8) {
+    REQUESTED_SCREEN.store(screen, Ordering::Relaxed);
 }
 
 // ── Action / label helpers
@@ -1172,8 +1199,14 @@ fn on_name_complete(name: &[u8]) {
 
 /// Menu action: jump straight to the QR-share screen so a peer can scan
 /// the meshcore://contact/add URL.
+///
+/// Must NOT lock `DISPLAY_STATE`: this runs from inside `fire()`, which is
+/// already inside `with_display_state_mut!` — the `RefCell` is borrowed, and
+/// a re-entrant `borrow_mut()` panics (badge reboots).  Instead we record the
+/// requested screen; [`DisplayState::dispatch_button`] applies it right after
+/// the action returns, while it still holds `&mut self`.
 fn action_show_qr() {
-    crate::with_display_state_mut!(|s| s.set_active_screen(crate::SCREEN_QR));
+    request_screen(crate::SCREEN_QR);
 }
 
 fn action_set_name() {
