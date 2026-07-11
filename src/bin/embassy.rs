@@ -730,7 +730,16 @@ async fn display_loop(
                         // actual content change (arriving / name edited).
                         let name_screen = active_screen == bornhack_aegg::SCREEN_NAME;
                         if start_screen || name_screen {
-                            let _ = display.force_full_refresh(partial_state, speed).await;
+                            // Render via the full tri-color path (the same one
+                            // the sponsor slideshow uses), NOT the delta
+                            // no-invert LUT.  The no-invert LUT leaves the red
+                            // row (LUT2) undriven, so the red band / accents
+                            // render transparent.  `update_tc` drives red via
+                            // LUT2.  Keep the delta shadow consistent with the
+                            // panel afterwards so the next screen diffs cleanly.
+                            let _ = display.update_tc(speed).await;
+                            partial_state.snapshot_pending();
+                            partial_state.commit_refresh();
                         } else {
                             let _ = display.update_partial(partial_state, speed).await;
                         }
