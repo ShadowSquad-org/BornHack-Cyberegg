@@ -82,9 +82,9 @@ static LUT_TABLE_NO_INVERT_CELL: StaticCell<[[u8; 107]; LUT_TABLE_SIZE]> = Stati
 ///
 /// Replaces the probed OTP **full** LUT across every temperature band on
 /// SSD1675A (this waveform is not temperature-compensated — a single
-/// calibrated band is used for all temperatures). SSD1675B keeps its OTP
-/// full LUT. Only the full-refresh path (`lut_table`) is swapped; the
-/// no-invert / partial table stays OTP-derived.
+/// calibrated band is used for all temperatures). SSD1675B gets
+/// [`FULL_LUT_1675B_V3`] instead. Only the full-refresh path (`lut_table`) is
+/// swapped; the no-invert / partial table stays OTP-derived.
 const FULL_LUT_1675A_V5: [u8; 107] = [
     0x14, 0x99, 0x21, 0x44, 0x50, 0x53, 0x00, 0x14, 0x99, 0x21, 0xa0, 0xb8,
     0xb8, 0x00, 0x14, 0x99, 0x21, 0xa0, 0x2b, 0x2b, 0x2f, 0x68, 0x00, 0x00,
@@ -95,6 +95,36 @@ const FULL_LUT_1675A_V5: [u8; 107] = [
     0xad, 0x26, 0x10, 0x02, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
     0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
     0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21,
+];
+
+/// SSD1675**B** full-refresh waveform — the hand-tuned v3 calibration LUT
+/// (`ssd1675-calibration/full-lut-1975B-v3-.json5`, band 10 ≈ 30 °C,
+/// skip-red).
+///
+/// 107-byte cmd-`0x32` register image in the SSD1675B layout: waveform bytes
+/// `0..50` (5 rows × 10 phases), TP timing `50..100`, voltage trailer
+/// `100..=106` (VGH `0x11`, VSH1 `0x37`, VSH2 `0xB2`, VSL `0x2A`, VCOM
+/// `0x50`, Dummy `0x0E`, Gate `0x06`).
+///
+/// Installed via `Display::set_full_lut_override`, so it drives every **full**
+/// refresh on B — `update_tc` (name / start screen) and the delta path's
+/// de-ghost promotion — with its own voltage trailer, at every temperature
+/// (the waveform is not temperature-compensated). 1224 waveform frames ≈ 6.1 s
+/// of panel drive (v2 was 514 ≈ 2.6 s; B's OTP full LUT is 1345 warm / 2201
+/// cold). The UI can't repaint while a full refresh runs, so that duration is
+/// also the dead time on any screen that triggers one. The no-invert / partial
+/// table stays OTP-derived. A valid `LUT.CFG` and Fire-held-at-boot both
+/// suppress the override.
+const FULL_LUT_1675B_V3: [u8; 107] = [
+    0x92, 0x66, 0x21, 0x44, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x92, 0x66,
+    0x21, 0xa0, 0xa2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x92, 0x66, 0x01, 0x00,
+    0x04, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x60, 0x33, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x60, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x11, 0x11, 0x00, 0x00, 0x00, 0x02, 0x02, 0x03, 0x03, 0x04,
+    0x01, 0x0a, 0x01, 0x0a, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0a,
+    0x0a, 0x20, 0x04, 0x0a, 0x0a, 0x0a, 0x60, 0x05, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x11, 0x37, 0xb2, 0x2a, 0x50, 0x0e, 0x06,
 ];
 
 fn pin_nr(p: &Peri<'_, AnyPin>) -> u8 {
@@ -637,10 +667,9 @@ pub async fn init_epd<'a>(
     // built-in default for A panels.  Done *after* deriving
     // `lut_table_no_invert` so the partial/delta path keeps the OTP waveform —
     // only the full-refresh path (`lut_table`, used by `update_tc`) is
-    // swapped.  SSD1675B keeps its OTP full LUT, which drives the panel well
-    // as-is.  Bands supplied by a valid `LUT.CFG` win over the v5 default, and
-    // Fire-held-at-boot skips it entirely — the escape hatch must land on the
-    // panel's own OTP waveform, not another baked-in override.
+    // swapped.  Bands supplied by a valid `LUT.CFG` win over the v5 default,
+    // and Fire-held-at-boot skips it entirely — the escape hatch must land on
+    // the panel's own OTP waveform, not another baked-in override.
     if variant == DisplayVariant::Ssd1675 && !force_otp_lut {
         for (band, &from_file) in lut_table.iter_mut().zip(custom_bands.iter()) {
             if !from_file {
@@ -650,6 +679,20 @@ pub async fn init_epd<'a>(
     }
 
     gfx.register_lut_tables(lut_table, lut_table_no_invert);
+
+    // SSD1675B full-refresh default: the hand-tuned v3 calibration waveform
+    // ([`FULL_LUT_1675B_V3`]).  Installed as an *override* rather than written
+    // into `lut_table`, because the "Hello my name is" screen still needs the
+    // panel's own probed OTP full LUT (`update_tc_otp`) — which lives in
+    // `lut_table`.  A valid `LUT.CFG` (any band) and Fire-held-at-boot both
+    // suppress it, so the user-supplied / escape-hatch waveforms stay reachable.
+    if variant == DisplayVariant::Ssd1675B
+        && !force_otp_lut
+        && !custom_bands.iter().any(|&b| b)
+    {
+        gfx.set_full_lut_override(Some(&FULL_LUT_1675B_V3));
+        defmt::info!("EPD: SSD1675B full-refresh LUT = built-in v2 calibration");
+    }
     defmt::info!(
         "Display controller: {}",
         match gfx.variant() {
