@@ -41,7 +41,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 pub use nav::{GameNav, Row};
 
-use crate::{BLACK, TriColor};
+use crate::{BLACK, RED, TriColor};
 
 /// Action feedback shown briefly after an action.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -231,6 +231,9 @@ where
         .alignment(Alignment::Center)
         .build();
     let font = MonoTextStyle::new(&FONT_7X13_BOLD, BLACK);
+    // Red style for pet status prompts (the "gone / new egg" screen) so they
+    // stand out from the black countdown timer / labels.
+    let font_red = MonoTextStyle::new(&FONT_7X13_BOLD, RED);
 
     // ── Full-screen takeover screens ───────────────────────────────────
     if pet_select::is_active() {
@@ -337,11 +340,11 @@ where
     if anim == DisplayAnim::Gone {
         // Farewell animation blitted by embassy.rs if available.
         if sprite_loader::frame_count() == 0 {
-            Text::with_text_style("Your pet has left", Point::new(76, 50), font, centered)
+            Text::with_text_style("Your pet has left", Point::new(76, 50), font_red, centered)
                 .draw(display)?;
         }
-        Text::with_text_style("Press Fire", Point::new(76, 90), font, centered).draw(display)?;
-        Text::with_text_style("for a new egg", Point::new(76, 106), font, centered)
+        Text::with_text_style("Press Fire", Point::new(76, 90), font_red, centered).draw(display)?;
+        Text::with_text_style("for a new egg", Point::new(76, 106), font_red, centered)
             .draw(display)?;
         return Ok(());
     }
@@ -420,7 +423,9 @@ where
             Text::with_text_style(
                 msg,
                 Point::new(2, SEP_TOP + 2),
-                MonoTextStyle::new(&FONT_7X13_BOLD, BLACK),
+                // Red so the action feedback (-hunger / -sick / +inspired /
+                // bonus) pops against the black UI.
+                MonoTextStyle::new(&FONT_7X13_BOLD, RED),
                 style,
             )
             .draw(display)?;
