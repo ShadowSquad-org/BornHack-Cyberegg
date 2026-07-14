@@ -48,8 +48,25 @@ def rle(row):
     return out
 
 
+def content_bbox(src):
+    """Bounding box of the actual logo — non-transparent pixels, or if the
+    image is opaque, non-white pixels — so we can strip the logo's own margin
+    and let it fill the panel."""
+    alpha = src.split()[3]
+    bbox = alpha.getbbox()
+    if bbox and bbox != (0, 0, src.width, src.height):
+        return bbox
+    from PIL import ImageChops
+    rgb = src.convert("RGB")
+    bg = Image.new("RGB", rgb.size, (255, 255, 255))
+    return ImageChops.difference(rgb, bg).getbbox() or bbox
+
+
 def convert(in_png, out_pcx, pad, bg_transparent):
     src = Image.open(in_png).convert("RGBA")
+    bbox = content_bbox(src)
+    if bbox:
+        src = src.crop(bbox)  # drop the logo's own surrounding whitespace
     max_wh = W - 2 * pad
     src.thumbnail((max_wh, max_wh), Image.LANCZOS)
     # White canvas, paste logo centred using its own alpha as the mask.
@@ -79,7 +96,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("in_png")
     ap.add_argument("out_pcx")
-    ap.add_argument("--pad", type=int, default=6)
+    ap.add_argument("--pad", type=int, default=0)
     ap.add_argument("--bg", choices=["white", "transparent"], default="white")
     a = ap.parse_args()
     convert(a.in_png, a.out_pcx, a.pad, a.bg == "transparent")
