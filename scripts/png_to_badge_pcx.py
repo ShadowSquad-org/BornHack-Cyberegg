@@ -62,17 +62,23 @@ def content_bbox(src):
     return ImageChops.difference(rgb, bg).getbbox() or bbox
 
 
-def convert(in_png, out_pcx, pad, bg_transparent):
+def convert(in_png, out_pcx, pad, bg_transparent, asis=False):
     src = Image.open(in_png).convert("RGBA")
-    bbox = content_bbox(src)
-    if bbox:
-        src = src.crop(bbox)  # drop the logo's own surrounding whitespace
-    max_wh = W - 2 * pad
-    src.thumbnail((max_wh, max_wh), Image.LANCZOS)
-    # White canvas, paste logo centred using its own alpha as the mask.
-    canvas = Image.new("RGB", (W, H), (255, 255, 255))
-    ox, oy = (W - src.width) // 2, (H - src.height) // 2
-    canvas.paste(src, (ox, oy), src)
+    if asis:
+        # Palette-only: keep the artist's exact 152x152 layout, no crop/scale.
+        canvas = Image.new("RGB", (W, H), (255, 255, 255))
+        canvas.paste(src, ((W - src.width) // 2, (H - src.height) // 2), src)
+        ox, oy = 0, 0
+    else:
+        bbox = content_bbox(src)
+        if bbox:
+            src = src.crop(bbox)  # drop the logo's own surrounding whitespace
+        max_wh = W - 2 * pad
+        src.thumbnail((max_wh, max_wh), Image.LANCZOS)
+        # White canvas, paste logo centred using its own alpha as the mask.
+        canvas = Image.new("RGB", (W, H), (255, 255, 255))
+        ox, oy = (W - src.width) // 2, (H - src.height) // 2
+        canvas.paste(src, (ox, oy), src)
     px = canvas.load()
     alpha = src.split()[3]
 
@@ -98,5 +104,6 @@ if __name__ == "__main__":
     ap.add_argument("out_pcx")
     ap.add_argument("--pad", type=int, default=0)
     ap.add_argument("--bg", choices=["white", "transparent"], default="white")
+    ap.add_argument("--asis", action="store_true", help="palette-only: keep the 152x152 layout, no crop/scale")
     a = ap.parse_args()
-    convert(a.in_png, a.out_pcx, a.pad, a.bg == "transparent")
+    convert(a.in_png, a.out_pcx, a.pad, a.bg == "transparent", a.asis)
