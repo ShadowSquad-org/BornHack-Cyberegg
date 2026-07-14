@@ -133,6 +133,13 @@ pub async fn run_boot_slideshow(
     if already_shown().await {
         return;
     }
+    // No sponsor assets at all (empty FAT12 after a fresh flash): show the
+    // "No assets found" screen and block forever so the factory operator
+    // copies the PCX files in via USB and power-cycles.  `shown` is never
+    // marked, so the slideshow still plays on that next boot.
+    if !any_slide_present(GROUP_EVENT).await && !any_slide_present(GROUP_BADGE).await {
+        show_missing_assets_forever(display).await; // never returns
+    }
     // Event sponsors get the intro; badge sponsors chain straight on (no
     // mid white flash, no second intro); the final white comes after badge.
     show_slideshow(display, button_rcvr, GROUP_EVENT, BOOT_SLIDE_SECS, true, false).await;
@@ -226,6 +233,38 @@ async fn show_slideshow(
     }
 
     defmt::info!("sponsors: slideshow complete");
+}
+
+/// Draw a full-screen "No assets found" message, commit it, then block
+/// forever.  For factory flashing: the operator flashes the firmware, sees
+/// this, copies the sponsor PCX files in via USB mass storage (running on its
+/// own task), then power-cycles the badge.
+async fn show_missing_assets_forever(display: &mut EpdGfx<'_>) {
+    defmt::info!("sponsors: no sponsor PCX files found — waiting for USB upload");
+
+    display.clear(Color::White);
+
+    let centered = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let font = MonoTextStyle::new(&FONT_7X13_BOLD, Color::Black);
+
+    let _ =
+        Text::with_text_style("No assets found", Point::new(76, 60), font, centered).draw(display);
+    let _ = Text::with_text_style("in flash", Point::new(76, 76), font, centered).draw(display);
+    let _ =
+        Text::with_text_style("Copy via USB,", Point::new(76, 100), font, centered).draw(display);
+    let _ = Text::with_text_style("then power cycle", Point::new(76, 116), font, centered)
+        .draw(display);
+
+    let _ = display.reset().await;
+    let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
+    let _ = display.deep_sleep().await;
+
+    // Block forever — USB mass storage stays live on its own task; a
+    // power-cycle after copying the assets is the intended exit.
+    core::future::pending::<()>().await
 }
 
 /// Returns true if at least one slide of `group` exists on the FAT partition.
