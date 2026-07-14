@@ -504,9 +504,10 @@ async fn main(spawner: Spawner) {
         bornhack_aegg::fw::buzzer::play(bornhack_aegg::SONG_STARTUP_INDEX as usize);
     }
 
-    // Sponsors are no longer shown at boot — the "Badge sponsors" item in the
-    // Bornagotchi menu plays them on demand (see `sponsors::run_if_requested`
-    // in the display loop below).
+    // ── Boot sponsor slideshow ───────────────────────────────────────────
+    // Event sponsors first, then the badge hardware sponsors, 2s per slide.
+    // The root-menu "Sponsors" / "Badge sponsors" items replay them on demand.
+    bornhack_aegg::fw::sponsors::run_boot_slideshow(&mut display, &mut button_rcvr).await;
 
     // ── Display loop + concurrent tasks ──────────────────────────────────
     defmt::info!("Entering main loop...");

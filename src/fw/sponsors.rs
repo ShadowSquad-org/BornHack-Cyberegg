@@ -5,9 +5,10 @@
 //! * "Sponsors"       → `030100.PCX`..`03010F.PCX` (BornHack event sponsors).
 //! Missing files are silently skipped.
 //!
-//! Triggered by the menu via [`request_show_badge`] / [`request_show_event`];
-//! the display loop polls [`run_if_requested`] and plays it inline (it owns
-//! the display + button receiver).  Not shown automatically at boot.
+//! Played once at boot ([`run_boot_slideshow`]: event sponsors then badge
+//! sponsors, 2s/slide) and on demand from the root menu (via
+//! [`request_show_badge`] / [`request_show_event`], drained by
+//! [`run_if_requested`] in the display loop, 5s/slide).
 
 use embassy_time::Timer;
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -24,6 +25,26 @@ const MAX_SPONSORS: usize = 16;
 
 /// Seconds to display each sponsor logo.
 const SLIDE_DURATION_SECS: u64 = 5;
+
+/// EKV namespace + key: presence means the boot slideshow has already run.
+const KV_NAMESPACE: &str = "sponsors";
+const KV_KEY: &str = "shown";
+
+/// True once the first-boot slideshow has run (flag present in ekv).
+async fn already_shown() -> bool {
+    let mut buf = [0u8; 1];
+    crate::fw::kv::namespace(KV_NAMESPACE)
+        .get(KV_KEY, &mut buf)
+        .await
+        .is_ok()
+}
+
+/// Mark the boot slideshow as shown so it never replays automatically.
+async fn mark_shown() {
+    let _ = crate::fw::kv::namespace(KV_NAMESPACE)
+        .set(KV_KEY, &[1], true)
+        .await;
+}
 
 // ── Filename generation ──────────────────────────────────────────────────────
 
@@ -86,11 +107,35 @@ pub async fn run_if_requested(
     >,
 ) {
     if SHOW_BADGE.swap(false, Ordering::Relaxed) {
-        show_slideshow(display, button_rcvr, GROUP_BADGE).await;
+        show_slideshow(display, button_rcvr, GROUP_BADGE, SLIDE_DURATION_SECS).await;
     }
     if SHOW_EVENT.swap(false, Ordering::Relaxed) {
-        show_slideshow(display, button_rcvr, GROUP_EVENT).await;
+        show_slideshow(display, button_rcvr, GROUP_EVENT, SLIDE_DURATION_SECS).await;
     }
+}
+
+/// Seconds per slide for the first-boot slideshow (faster than the on-demand
+/// menu view).
+const BOOT_SLIDE_SECS: u64 = 2;
+
+/// First-boot slideshow: all event sponsors, then the badge hardware sponsors.
+/// Runs once per badge (guarded by the ekv `shown` flag), before the main
+/// display loop takes the panel.  Replay any time from the root menu.
+pub async fn run_boot_slideshow(
+    display: &mut EpdGfx<'_>,
+    button_rcvr: &mut embassy_sync::watch::Receiver<
+        '_,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        u8,
+        2,
+    >,
+) {
+    if already_shown().await {
+        return;
+    }
+    show_slideshow(display, button_rcvr, GROUP_EVENT, BOOT_SLIDE_SECS).await;
+    show_slideshow(display, button_rcvr, GROUP_BADGE, BOOT_SLIDE_SECS).await;
+    mark_shown().await;
 }
 
 // ── Slideshow runner ─────────────────────────────────────────────────────────
@@ -107,6 +152,7 @@ async fn show_slideshow(
         2,
     >,
     group: u8,
+    secs: u64,
 ) {
     if !any_slide_present(group).await {
         defmt::info!("sponsors: group {} has no slides — nothing to show", group);
@@ -138,7 +184,7 @@ async fn show_slideshow(
     let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
     let _ = display.deep_sleep().await;
 
-    wait_or_button(button_rcvr, SLIDE_DURATION_SECS).await;
+    wait_or_button(button_rcvr, secs).await;
 
     // ── Logo slides ──────────────────────────────────────────────────
     for i in 0..MAX_SPONSORS as u8 {
@@ -158,7 +204,7 @@ async fn show_slideshow(
         let _ = display.update_tc(crate::fw::epd::current_lut_speed()).await;
         let _ = display.deep_sleep().await;
 
-        wait_or_button(button_rcvr, SLIDE_DURATION_SECS).await;
+        wait_or_button(button_rcvr, secs).await;
     }
 
     // ── Final white clear ────────────────────────────────────────────
