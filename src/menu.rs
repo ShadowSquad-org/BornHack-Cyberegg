@@ -1843,7 +1843,7 @@ static SETTINGS_ITEMS: [MenuItem; SETTINGS_ITEMS_LEN] = [
     },
 ];
 
-static BORNAGOTCHI_ITEMS: [MenuItem; 8] = [
+static BORNAGOTCHI_ITEMS: [MenuItem; 7] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1883,13 +1883,6 @@ static BORNAGOTCHI_ITEMS: [MenuItem; 8] = [
         kind: MenuItemKind::Action(|| {
             #[cfg(feature = "game")]
             crate::game::realm_view::open();
-        }),
-    },
-    MenuItem {
-        label: || "Badge sponsors",
-        kind: MenuItemKind::Action(|| {
-            #[cfg(feature = "embassy-base")]
-            crate::fw::sponsors::request_show();
         }),
     },
 ];
@@ -2115,7 +2108,7 @@ fn apply_lora_preset(idx: usize) {
     crate::LORA_RADIO_CHANGED_SIGNAL.signal(());
 }
 
-static MAIN_ITEMS: [MenuItem; 4] = [
+static MAIN_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: || "Bornagotchi",
         kind: MenuItemKind::Submenu(&BORNAGOTCHI_ITEMS),
@@ -2131,6 +2124,13 @@ static MAIN_ITEMS: [MenuItem; 4] = [
     MenuItem {
         label: || "About",
         kind: MenuItemKind::Submenu(&ABOUT_ITEMS),
+    },
+    MenuItem {
+        label: || "Badge sponsors",
+        kind: MenuItemKind::Action(|| {
+            #[cfg(feature = "embassy-base")]
+            crate::fw::sponsors::request_show();
+        }),
     },
 ];
 
