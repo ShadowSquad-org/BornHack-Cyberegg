@@ -38,6 +38,14 @@ driver submodule (`Ranzbak/ssd1675`).
 - Dropped an unused `defmt::todo` import — clears the last build warning
   (#129).
 - Submodule bumps to carry the ssd1675 fixes onto `main` (#127, #128).
+- **Clippy cleanup** (#133) — idiomatic lints across the crate
+  (`is_multiple_of`, `sort_unstable_by_key`, `contains`, collapsed
+  let-chains, redundant unit bindings, …). No behavior change; 57 → 30
+  warnings. `nfct.rs` deliberately excluded — clippy's auto-fix there
+  would have moved a `#[cfg]` block out of scope and altered control flow.
+- **meshcore + companion → Cargo git deps** (#134) — dropped the two
+  in-tree submodules in favour of git dependencies pinned to the same
+  revs (build bit-identical). `ssd1675` stays a submodule.
 
 ---
 
@@ -48,4 +56,4 @@ driver submodule (`Ranzbak/ssd1675`).
 
 ---
 
-_Verified on hardware (A panel) via DFU/JLink; badge runs `main` @ 528f8e0._
+_Verified on hardware (A panel) via DFU/JLink; badge runs `main` @ 759efda._
