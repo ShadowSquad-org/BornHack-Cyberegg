@@ -18,6 +18,8 @@ pub mod blackhole;
 pub mod bornjeweled;
 pub mod debug_cheats;
 pub mod engine;
+pub mod friends;
+pub mod friends_view;
 pub mod health_view;
 pub mod input;
 pub mod lifecycle;
@@ -74,6 +76,8 @@ pub enum Toast {
     DebugCheat = 17,
     Drink = 18,
     Rehab = 19,
+    NewFriend = 20,
+    FriendReunion = 21,
 }
 
 impl Toast {
@@ -98,6 +102,8 @@ impl Toast {
             17 => Self::DebugCheat,
             18 => Self::Drink,
             19 => Self::Rehab,
+            20 => Self::NewFriend,
+            21 => Self::FriendReunion,
             _ => Self::None,
         }
     }
@@ -125,6 +131,8 @@ impl Toast {
             Toast::DebugCheat => "cheat applied",
             Toast::Drink => "+drunk",
             Toast::Rehab => "+sober",
+            Toast::NewFriend => "new friend!",
+            Toast::FriendReunion => "+happy",
         }
     }
 }

@@ -133,6 +133,9 @@ pub async fn init() {
             }
         }
     }
+
+    // Friends met over the SHDW mesh channel — own KV namespace.
+    super::friends::init().await;
 }
 
 #[cfg(feature = "embassy-base")]
@@ -502,6 +505,15 @@ pub fn drink(kind: super::engine::DrinkKind) -> bool {
     with_state(|s| s.drink(kind))
 }
 
+/// Apply a happiness boost from meeting/spending time with a mesh friend.
+/// `big` = true for a brand-new friend, false for a cooldown-gated
+/// recurring reunion. No-op if no game is active.
+pub fn friend_boost(big: bool) {
+    if let Some(state) = unsafe { (*GAME.get()).as_mut() } {
+        state.friend_boost(big);
+    }
+}
+
 pub fn rehab() -> bool {
     with_state(|s| s.rehab())
 }
@@ -714,6 +726,11 @@ pub fn realm_pet(index: usize) -> Option<PetRecord> {
 /// brings the KV store).  Stubbed out for the simulator below.
 #[cfg(feature = "embassy-base")]
 pub async fn save_if_needed() -> bool {
+    // Friends list has its own dirty flag and KV namespace, independent of
+    // the main game-state save below — flush it even if no pet is active
+    // (a beacon can still be received while between generations).
+    super::friends::save_if_needed().await;
+
     let state = unsafe { (*GAME.get()).as_mut() };
     let Some(state) = state else {
         return false;

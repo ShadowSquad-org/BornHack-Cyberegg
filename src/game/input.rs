@@ -35,6 +35,16 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return true;
     }
 
+    // ── Friends view: Up/Down scrolls, any other button closes it ───────
+    if super::friends_view::is_active() {
+        match btn {
+            ButtonId::Up => super::friends_view::scroll_up(),
+            ButtonId::Down => super::friends_view::scroll_down(),
+            _ => super::friends_view::close(),
+        }
+        return true;
+    }
+
     // ── Pet selection screen ────────────────────────────────────────────
     // Cancel is intentionally ignored here — picking a pet is mandatory
     // for the game to start, so closing the screen without a confirmed

@@ -57,9 +57,10 @@ things before they spiral!
 
 Select the **Stats** icon (top-left) and choose "View stats" to see all
 six stat bars at once (labeled "Fit" for weight — 100% = lean, 0% =
-obese), or "Health status" for a plain-language readout of Diabetic /
+obese), "Health status" for a plain-language readout of Diabetic /
 Overweight / Alcoholic / Fit%, with a short explanation of what triggers
-each.
+each, or "Friends" for the pets your badge has met over the mesh (see
+[Friends & the SHDW Channel](#friends--the-shdw-channel) below).
 
 ## Actions
 
@@ -177,6 +178,30 @@ Whenever medication has lapsed, a persistent **"NEEDS MEDS"** banner
 shows in the corner of the pet screen until you re-dose — the pet itself
 keeps showing its normal animation underneath, the banner doesn't
 replace it.
+
+## Friends & the SHDW Channel
+
+Every badge running this firmware auto-joins a private mesh channel
+called **SHDW** — no setup needed. While your pet is active, the badge
+quietly broadcasts a small presence beacon on it every 15 minutes. When
+another SHDW badge is in LoRa range and its beacon comes in, your pet
+"meets" theirs:
+
+- **Meeting a badge for the first time** — a new friend, a bigger
+  happiness boost (drops **Miserable** by a lot)
+- **Meeting a known friend again**, after a few hours apart — "spending
+  time together", a smaller happiness boost
+- **Meeting a known friend again too soon** — no boost (they need some
+  time apart before it counts as quality time again)
+
+Check who your pet has met via **Stats > Friends** — a scrollable list
+of every friend seen so far, with how long ago you first met and whether
+you've spent time together recently. Use **Up/Down** to scroll, any
+other button to close.
+
+This only works between two physical badges, both running this firmware
+and both in LoRa range of each other and on the SHDW channel — there's
+no simulated version of meeting a friend.
 
 ## Hibernate
 

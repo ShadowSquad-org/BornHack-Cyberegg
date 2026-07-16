@@ -309,6 +309,7 @@ async fn main(spawner: Spawner) {
         // after a spin-wait on `INITIAL_BONDS`, which let the meshcore
         // listener load an empty channel set on a fresh-flash boot.
         channels::init().await;
+        channels::ensure_shdw_channel().await;
         defmt::info!(
             "channels: store ready ({} active)",
             channels::count_active().await
@@ -493,6 +494,8 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(minute_tick_task());
     #[cfg(feature = "mesh")]
     spawner.must_spawn(advert_ticker_task());
+    #[cfg(all(feature = "mesh", feature = "game"))]
+    spawner.must_spawn(pet_beacon_ticker_task());
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
@@ -1107,6 +1110,59 @@ async fn advert_ticker_task() {
                 bornhack_aegg::ADVERT_CHANGED_SIGNAL.reset();
             }
         }
+    }
+}
+
+/// Periodic BornPets friend-discovery beacon on the private SHDW channel.
+///
+/// Wakes every 15 minutes; while a pet is active, broadcasts a `PetBeacon`
+/// (identity + pet snapshot) as `GrpData` so other badges on SHDW can
+/// record a new/returning friend — see `game::friends::on_pet_beacon`.
+/// Skipped entirely when no pet is active (nothing to announce).
+#[cfg(all(feature = "mesh", feature = "game"))]
+#[embassy_executor::task]
+async fn pet_beacon_ticker_task() {
+    use bornhack_aegg::game::{engine::PET_NAME_MAX, friends, lifecycle};
+
+    const PET_BEACON_INTERVAL_SECS: u64 = 15 * 60;
+
+    // Brief delay on boot so the radio and mesh stack are up before our
+    // first TX — same rationale as `advert_ticker_task` above.
+    Timer::after(embassy_time::Duration::from_secs(45)).await;
+
+    loop {
+        if lifecycle::is_started() {
+            let kind = lifecycle::pet_kind();
+            let name = lifecycle::pet_name();
+            let mut beacon_name = [0u8; PET_NAME_MAX];
+            let n = name.len().min(PET_NAME_MAX);
+            beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
+
+            let beacon = friends::PetBeacon {
+                device_id: bornhack_aegg::fw::device_id::get(),
+                pet_kind: kind.id(),
+                generation: lifecycle::pet_generation(),
+                name: beacon_name,
+                name_len: n as u8,
+            };
+
+            let mut data: heapless::Vec<u8, { bornhack_aegg::fw::mesh::MAX_CHANNEL_DATA }> =
+                heapless::Vec::new();
+            let _ = data.extend_from_slice(&beacon.to_bytes());
+
+            let _ =
+                bornhack_aegg::fw::mesh::tx_send(bornhack_aegg::fw::mesh::TxRequest::ChannelData(
+                    bornhack_aegg::fw::mesh::TxChannelData {
+                        channel_idx: bornhack_aegg::fw::mesh::channels::SHDW_SLOT,
+                        data_type: friends::PET_BEACON_TYPE,
+                        path_len: bornhack_aegg::fw::mesh::contacts::OUT_PATH_UNKNOWN,
+                        path: heapless::Vec::new(),
+                        data,
+                    },
+                ));
+        }
+
+        Timer::after(embassy_time::Duration::from_secs(PET_BEACON_INTERVAL_SECS)).await;
     }
 }
 

@@ -752,6 +752,16 @@ async fn push_grp_data(
         path_len,
     );
 
+    // BornPets friend-discovery beacon on the private SHDW channel — handed
+    // straight to the game layer, not queued for the companion app (it's an
+    // internal pet-presence ping, not something a human needs to see).
+    #[cfg(feature = "game")]
+    if ch.slot_idx == channels::SHDW_SLOT && dec.data_type == crate::game::friends::PET_BEACON_TYPE
+    {
+        crate::game::friends::on_pet_beacon(&dec.data).await;
+        return;
+    }
+
     // Queue the binary blob for the companion app.
     let mut blob: heapless::Vec<u8, { msg_queue::MAX_TEXT }> = heapless::Vec::new();
     let _ = blob.extend_from_slice(&dec.data[..dec.data.len().min(msg_queue::MAX_TEXT)]);

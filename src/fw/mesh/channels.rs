@@ -157,6 +157,35 @@ pub async fn delete(idx: u8) -> bool {
     true
 }
 
+/// Fixed slot for the private "SHDW" channel used by the BornPets
+/// friend-discovery beacon (see `crate::game::friends`).
+pub const SHDW_SLOT: u8 = 3;
+
+/// Ensure slot [`SHDW_SLOT`] holds the "SHDW" channel, deriving its key the
+/// same deterministic way `#bornhack`/`#test` are seeded so every badge
+/// running this firmware joins it with zero configuration.
+///
+/// Runs on every boot (unlike `seed_defaults`, which only fires once ever)
+/// so badges upgraded from older firmware still pick it up.
+pub async fn ensure_shdw_channel() {
+    const NAME: &[u8] = b"SHDW";
+    if let Some((name, _)) = get(SHDW_SLOT).await
+        && &name[..NAME.len()] == NAME
+        && name[NAME.len()..].iter().all(|&b| b == 0)
+    {
+        return;
+    }
+    let mut name = [0u8; NAME_LEN];
+    name[..NAME.len()].copy_from_slice(NAME);
+    set(
+        SHDW_SLOT,
+        &name,
+        &meshcore::channel::key_from_hashtag("SHDW"),
+    )
+    .await;
+    defmt::info!("channels: joined SHDW friend-discovery channel");
+}
+
 /// Reset all slots to factory defaults.
 ///
 /// All slots are written as all-zero, then slot 0 is re-seeded with the
