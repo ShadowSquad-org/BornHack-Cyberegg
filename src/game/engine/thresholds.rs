@@ -285,7 +285,7 @@ impl Thresholds {
         REHAB_DURATION: 3,
         REHAB_COOLDOWN: 1440,
 
-        BATTLE_COOLDOWN: 180,
+        BATTLE_COOLDOWN: 12,
     };
 
     /// Half-speed decay, doubled lifetimes, more generous action relief.
@@ -405,7 +405,7 @@ impl Thresholds {
         REHAB_DURATION: 3,
         REHAB_COOLDOWN: 2880,
 
-        BATTLE_COOLDOWN: 180,
+        BATTLE_COOLDOWN: 12,
     };
 }
 

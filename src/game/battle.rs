@@ -238,6 +238,15 @@ fn broadcast_result(_msg: &BattleResultMsg) {}
 ///
 /// Returns `None` if no pet is currently active.
 pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
+    // Refuse a self-battle outright — this should never come up through
+    // the normal Friends flow (`friends::on_pet_beacon` already ignores
+    // our own beacon echo, so we should never appear in our own list),
+    // but guarding it here means a bad `FriendRecord` can't corrupt our
+    // own win/loss tally by battling "ourselves".
+    if friend.device_id == super::friends::local_device_id() {
+        return None;
+    }
+
     let my_stats = super::lifecycle::combat_stats()?;
     let their_stats = CombatStats {
         attack: friend.attack,
@@ -282,6 +291,15 @@ pub async fn on_battle_result(data: &[u8]) {
     };
 
     if msg.target_id != super::friends::local_device_id() {
+        return;
+    }
+
+    // A flood broadcast can echo back to its own sender (e.g. bounced by
+    // a nearby repeater) — if we're also the challenger named in this
+    // packet, we already recorded our side synchronously in `challenge`
+    // the moment we sent it, so ignore it here rather than double-count
+    // ourselves as our own opponent.
+    if msg.challenger_id == super::friends::local_device_id() {
         return;
     }
 

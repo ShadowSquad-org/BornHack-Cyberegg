@@ -7,7 +7,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Timer;
 use meshcore::channel::hash_from_key;
 use meshcore::contacts::Contacts;
-use meshcore::dedup::{MsgHashRing, msg_hash};
+use meshcore::dedup::{MsgHashRing, msg_hash, relay_hash};
 
 use super::device_identity::DeviceIdentity;
 use super::sx1262::{MeshCoreConfig, SimpleLoRa};
@@ -75,6 +75,17 @@ static CONTACTS: Mutex<CriticalSectionRawMutex, RefCell<Contacts<20>>> =
     Mutex::new(RefCell::new(Contacts::new()));
 
 static MSG_SEEN: Mutex<CriticalSectionRawMutex, RefCell<MsgHashRing<50>>> =
+    Mutex::new(RefCell::new(MsgHashRing::new()));
+
+/// Dedup ring for `GrpData` — the same "arrived more than once via
+/// different mesh paths" problem `MSG_SEEN` solves for `GrpTxt`, just
+/// keyed on the raw (pre-decrypt, hop-stable) payload via `relay_hash`
+/// instead of `msg_hash` since `GrpData` carries no timestamp to hash.
+/// Without this, a single logical beacon or Battle-result broadcast
+/// could be processed multiple times (each a fresh friend-boost or
+/// win/loss increment) if it reached a receiver by more than one path —
+/// the likely cause of mismatched Battle records between badges.
+static GRP_DATA_SEEN: Mutex<CriticalSectionRawMutex, RefCell<MsgHashRing<50>>> =
     Mutex::new(RefCell::new(MsgHashRing::new()));
 
 // ---------------------------------------------------------------------------
@@ -705,7 +716,27 @@ async fn push_grp_data(
     path_len: u8,
     channels: &[LoadedChannel],
 ) {
+    use meshcore::packet::PayloadType;
     use meshcore::payload::grp_data;
+
+    // Suppress exact duplicates of the same broadcast arriving via more
+    // than one mesh path (direct + one or more repeater hops) — see
+    // `GRP_DATA_SEEN`'s doc comment. Must happen before any of the
+    // stateful handlers below (beacon boost, Battle result) run.
+    let dh = relay_hash(PayloadType::GrpData.to_u8(), payload);
+    let is_new = GRP_DATA_SEEN.lock(|cell| {
+        let mut ring = cell.borrow_mut();
+        if ring.contains(dh) {
+            false
+        } else {
+            ring.insert(dh);
+            true
+        }
+    });
+    if !is_new {
+        defmt::debug!("GrpData: duplicate suppressed (hash={=u32:#010x})", dh);
+        return;
+    }
 
     let grp = match grp_data::deserialize(payload) {
         Ok(g) => g,
