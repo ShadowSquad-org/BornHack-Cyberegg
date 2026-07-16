@@ -31,8 +31,8 @@ use crate::{BLACK, TriColor};
 /// Which in-game modal is currently open.  Stored as a `u8` in `MODAL_KIND`.
 ///
 /// Layout:
-///   Top row (info/meta):    Stats, Hibernate, (empty), (empty)
-///   Bottom row (actions):   Feed,  Heal,      Play,    Rest
+///   Top row (info/meta):    Stats, Hibernate, Exercise, (empty)
+///   Bottom row (actions):   Feed,  Heal,      Play,     Rest
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ModalKind {
@@ -47,6 +47,10 @@ pub enum ModalKind {
     Rest = 6, // bot row, col 3
     // Sub-modal opened from Play.
     Music = 7,
+    Exercise = 8, // top row, col 2
+    // Hidden — opened only via the button sequence in `debug_cheats`,
+    // not reachable from any icon.
+    Debug = 9,
 }
 
 impl ModalKind {
@@ -59,6 +63,8 @@ impl ModalKind {
             5 => Self::Play,
             6 => Self::Rest,
             7 => Self::Music,
+            8 => Self::Exercise,
+            9 => Self::Debug,
             _ => Self::None,
         }
     }
@@ -73,6 +79,8 @@ impl ModalKind {
             Self::Play => "Play",
             Self::Rest => "Rest",
             Self::Music => "Music",
+            Self::Exercise => "Exercise",
+            Self::Debug => "Debug",
         }
     }
 
@@ -80,8 +88,24 @@ impl ModalKind {
         match self {
             Self::Stats => &[Item::ViewStats, Item::RolledStats, Item::Cancel],
             Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Cancel],
-            Self::Feed => &[Item::FeedNow, Item::Cancel],
-            Self::Heal => &[Item::GiveMedicine, Item::Cancel],
+            Self::Feed => &[
+                Item::FeedFood(super::engine::FoodKind::Salad),
+                Item::FeedFood(super::engine::FoodKind::Apple),
+                Item::FeedFood(super::engine::FoodKind::Burger),
+                Item::FeedFood(super::engine::FoodKind::Pizza),
+                Item::FeedFood(super::engine::FoodKind::Cake),
+                Item::Cancel,
+            ],
+            Self::Heal => &[Item::GiveMedicine, Item::GiveMedication, Item::Cancel],
+            Self::Exercise => &[Item::ExerciseNow, Item::Cancel],
+            Self::Debug => &[
+                Item::CheatForceOverweight,
+                Item::CheatForceDiabetic,
+                Item::CheatClearDiabetes,
+                Item::CheatSkipHour,
+                Item::CheatSkipDay,
+                Item::Cancel,
+            ],
             Self::Play => &[
                 Item::PlayNow,
                 Item::PlayMusic,
@@ -123,8 +147,15 @@ enum Item {
     Cancel,
     ViewStats,
     RolledStats,
-    FeedNow,
+    FeedFood(super::engine::FoodKind),
     GiveMedicine,
+    GiveMedication,
+    ExerciseNow,
+    CheatForceOverweight,
+    CheatForceDiabetic,
+    CheatClearDiabetes,
+    CheatSkipHour,
+    CheatSkipDay,
     Sleep,
     Relax,
     PlayNow,
@@ -148,8 +179,15 @@ impl Item {
             Self::Cancel => "Cancel",
             Self::ViewStats => "View stats",
             Self::RolledStats => "Rolled stats",
-            Self::FeedNow => "Feed now",
+            Self::FeedFood(food) => food.label(),
             Self::GiveMedicine => "Give medicine",
+            Self::GiveMedication => "Give medication",
+            Self::ExerciseNow => "Exercise now",
+            Self::CheatForceOverweight => "Force overweight",
+            Self::CheatForceDiabetic => "Trigger diabetes",
+            Self::CheatClearDiabetes => "Clear diabetes",
+            Self::CheatSkipHour => "Skip 1 hour",
+            Self::CheatSkipDay => "Skip 1 day",
             Self::Sleep => "Sleep",
             Self::Relax => "Relax",
             Self::PlayNow => "Play now",
@@ -195,9 +233,16 @@ impl Item {
             | Self::ViewStats
             | Self::RolledStats
             | Self::PlayMusic
-            | Self::Song(_) => true,
-            Self::FeedNow => stats.can_feed,
+            | Self::Song(_)
+            | Self::CheatForceOverweight
+            | Self::CheatForceDiabetic
+            | Self::CheatClearDiabetes
+            | Self::CheatSkipHour
+            | Self::CheatSkipDay => true,
+            Self::FeedFood(_) => stats.can_feed,
             Self::GiveMedicine => stats.can_heal,
+            Self::GiveMedication => stats.can_medicate,
+            Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
             Self::Relax => stats.can_relax,
             Self::PlayNow => stats.can_play,
@@ -227,8 +272,12 @@ impl Item {
             }
         };
         match self {
-            Self::FeedNow => action_remaining(Action::Feed).max(stats.cooldown_feed),
+            Self::FeedFood(_) => action_remaining(Action::Feed).max(stats.cooldown_feed),
             Self::GiveMedicine => action_remaining(Action::Heal).max(stats.cooldown_heal),
+            Self::GiveMedication => {
+                action_remaining(Action::Medicate).max(stats.cooldown_medicate)
+            }
+            Self::ExerciseNow => action_remaining(Action::Exercise).max(stats.cooldown_exercise),
             Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
             Self::TicTacToe => stats.cooldown_tictactoe,
@@ -251,14 +300,49 @@ impl Item {
                 super::traits_view::open();
                 close();
             }
-            Self::FeedNow => {
-                lifecycle::feed();
+            Self::FeedFood(food) => {
+                lifecycle::feed(food);
                 super::show_toast(super::Toast::Feed);
                 close();
             }
             Self::GiveMedicine => {
                 lifecycle::heal();
                 super::show_toast(super::Toast::Heal);
+                close();
+            }
+            Self::GiveMedication => {
+                lifecycle::medicate();
+                super::show_toast(super::Toast::Medicate);
+                close();
+            }
+            Self::ExerciseNow => {
+                lifecycle::exercise();
+                super::show_toast(super::Toast::Exercise);
+                close();
+            }
+            Self::CheatForceOverweight => {
+                lifecycle::debug_force_overweight();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatForceDiabetic => {
+                lifecycle::debug_force_diabetic();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatClearDiabetes => {
+                lifecycle::debug_clear_diabetes();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatSkipHour => {
+                lifecycle::debug_skip_ticks(360);
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
+            Self::CheatSkipDay => {
+                lifecycle::debug_skip_ticks(8640);
+                super::show_toast(super::Toast::DebugCheat);
                 close();
             }
             Self::Sleep => {
@@ -349,7 +433,8 @@ pub fn kind_for_icon(row: Row, col: u8) -> ModalKind {
         // Top row: info / meta.
         (Row::Top, 0) => ModalKind::Stats,
         (Row::Top, 1) => ModalKind::Hibernate,
-        // Top row cols 2-3: empty (no modal).
+        (Row::Top, 2) => ModalKind::Exercise,
+        // Top row col 3: empty (no modal).
         (Row::Top, _) => ModalKind::None,
         // Bottom row: actions.
         (Row::Bottom, 0) => ModalKind::Feed,
@@ -686,8 +771,11 @@ where
 const BAR_MAX_W: u32 = 60;
 /// Bar height — tall enough to render the inline percentage text.
 const BAR_H: u32 = 16;
-/// Vertical spacing between bars (height + small gap).
-const BAR_SPACING: i32 = 18;
+/// Vertical spacing between bars (height + small gap).  16 (== BAR_H,
+/// zero extra gap) rather than the more breathing-room-y 18 used when
+/// there were only 5 bars — needed so all 6 bars + the footer still fit
+/// inside the 132px popover without collision.
+const BAR_SPACING: i32 = 16;
 
 fn draw_stats_view<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -718,12 +806,13 @@ where
     ui::draw_title_bar(display, "Pet Stats", Point::new(inner_x, inner_y), inner_w)?;
 
     // Stat bars.
-    let bars: [(&str, u8); 5] = [
+    let bars: [(&str, u8); 6] = [
         ("Hunger", stats.hunger),
         ("Rested", stats.tired),
         ("Inspired", stats.inspired),
         ("Healthy", stats.healthy),
         ("Happy", stats.happy),
+        ("Fit", stats.weight),
     ];
 
     // Layout: label at left margin, bar to the right of the longest

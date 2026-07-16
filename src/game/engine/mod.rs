@@ -11,10 +11,12 @@
 //! is about to happen, saving significant battery on the badge.
 
 pub mod anim_files;
+pub mod food;
 pub mod thresholds;
 pub mod to_display;
 
 use thresholds::*;
+pub use food::FoodKind;
 pub use to_display::DisplayAnim;
 
 // ---------------------------------------------------------------------------
@@ -92,6 +94,8 @@ pub enum Action {
     Heal,
     Relax,
     Play,
+    Exercise,
+    Medicate,
 }
 
 /// Mini-games each track their own post-win cooldown so winning one
@@ -120,6 +124,15 @@ pub struct GameState {
     pub drained: u16,
     pub sick: u16,
     pub miserable: u16,
+    pub weight: u16,
+
+    // Diabetes — permanent once triggered by sustained overweight.
+    pub diabetic: bool,
+    /// Ticks accumulated while `weight` has stayed above
+    /// `OVERWEIGHT_TRIGGER()`.  Resets to 0 whenever weight drops back
+    /// below the trigger.  Once this reaches `DIABETES_ONSET_TICKS()`,
+    /// `diabetic` flips true and stays true for the rest of this pet's life.
+    overweight_ticks: u32,
 
     // Traits (higher = better).
     pub vitality: u16,
@@ -138,11 +151,21 @@ pub struct GameState {
 
     // Action state.
     pub active_action: Option<Action>,
+    /// Which food is being eaten during an in-progress `Action::Feed`.
+    /// Transient (not persisted) — only meaningful mid-action; defaults
+    /// to `FoodKind::Apple`-equivalent multipliers if `None` (e.g. a
+    /// reboot mid-feed for the remaining tick or two of that action).
+    pub active_food: Option<FoodKind>,
     pub action_ticks_remaining: u8,
     pub cooldown_feed: u16,
     pub cooldown_heal: u16,
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
+    pub cooldown_exercise: u16,
+    /// Doubles as the medication "protection window": while this is
+    /// above 0 the diabetes sick-penalty is suppressed, same counter
+    /// gates the "Give medication" menu item's cooldown.
+    pub cooldown_medicate: u16,
     /// Per-mini-game cooldown after winning.  Each game tracks its
     /// own counter so winning one doesn't gate the others.  None of
     /// these are persisted to flash — rebooting clears them.
@@ -216,6 +239,10 @@ impl GameState {
             drained: 0,
             sick: (STAT_MAX() - vitality) / 4,
             miserable: 0,
+            weight: 0,
+
+            diabetic: false,
+            overweight_ticks: 0,
 
             vitality,
             curiosity,
@@ -230,11 +257,14 @@ impl GameState {
             generation: 0,
 
             active_action: None,
+            active_food: None,
             action_ticks_remaining: 0,
             cooldown_feed: 0,
             cooldown_heal: 0,
             cooldown_relax: 0,
             cooldown_play: 0,
+            cooldown_exercise: 0,
+            cooldown_medicate: 0,
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
@@ -311,6 +341,23 @@ fn sick_condition_active(state: &GameState) -> bool {
     state.hunger > SICK_TRIGGER_HUNGER()
         || state.tired > SICK_TRIGGER_TIRED()
         || state.drained > SICK_TRIGGER_DRAINED()
+}
+
+/// Extra `sick` accrual for `delta` ticks while diabetic and unmedicated.
+/// Zero while medication is protecting (`cooldown_medicate > 0`) or mid-dose.
+fn diabetes_penalty(state: &GameState, delta: u32, miserable_high: bool) -> u16 {
+    if !state.diabetic
+        || state.cooldown_medicate > 0
+        || state.active_action == Some(Action::Medicate)
+    {
+        return 0;
+    }
+    let rate = if miserable_high {
+        DIABETES_SICK_MISERABLE_RATE()
+    } else {
+        DIABETES_SICK_RATE()
+    };
+    mul_dt(rate, delta)
 }
 
 /// Curiosity modifier for play costs: 0–10 range, higher = cheaper.
@@ -397,6 +444,7 @@ impl GameState {
             }
 
             self.check_leaving(segment);
+            self.check_diabetes(segment);
             // Apply the severe/leaving floor after stats and phase have
             // been updated for this segment, so the next iteration's
             // rate calculation sees the bumped `miserable`.
@@ -588,6 +636,12 @@ impl GameState {
         if self.cooldown_play > 0 {
             m = m.min(self.cooldown_play as u32);
         }
+        if self.cooldown_exercise > 0 {
+            m = m.min(self.cooldown_exercise as u32);
+        }
+        if self.cooldown_medicate > 0 {
+            m = m.min(self.cooldown_medicate as u32);
+        }
 
         // ── Sleep tier transitions ──
 
@@ -619,8 +673,15 @@ impl GameState {
             let t = ticks as u16;
             match action {
                 Action::Feed => {
-                    self.hunger = sat_sub(self.hunger, mul_dt(FEED_HUNGER_RELIEF(), t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(FEED_DRAINED_RELIEF(), t as u32));
+                    let food = self.active_food.unwrap_or(FoodKind::Apple);
+                    let hunger_relief = food.scale_hunger_relief(FEED_HUNGER_RELIEF());
+                    let drained_relief = food.scale_drained_relief(FEED_DRAINED_RELIEF());
+                    let weight_gain = food.scale_weight_gain(FEED_WEIGHT_GAIN());
+                    self.hunger = sat_sub(self.hunger, mul_dt(hunger_relief, t as u32));
+                    self.drained = sat_sub(self.drained, mul_dt(drained_relief, t as u32));
+                    // Overfeeding compounds the passive weight gain — how much
+                    // depends entirely on what was eaten (see FoodKind).
+                    self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Heal => {
                     self.sick = sat_sub(self.sick, mul_dt(HEAL_SICK_RELIEF(), t as u32));
@@ -639,6 +700,14 @@ impl GameState {
                     self.tired = sat_add(self.tired, apply(PLAY_TIRED_COST()));
                     self.drained = sat_add(self.drained, apply(PLAY_DRAINED_COST()));
                 }
+                Action::Exercise => {
+                    self.weight = sat_sub(self.weight, mul_dt(EXERCISE_WEIGHT_RELIEF(), t as u32));
+                    self.tired = sat_add(self.tired, mul_dt(EXERCISE_TIRED_COST(), t as u32));
+                    self.hunger = sat_add(self.hunger, mul_dt(EXERCISE_HUNGER_COST(), t as u32));
+                    self.drained =
+                        sat_sub(self.drained, mul_dt(EXERCISE_DRAINED_RELIEF(), t as u32));
+                }
+                Action::Medicate => {}
             }
 
             if self.action_ticks_remaining == 0 {
@@ -651,8 +720,11 @@ impl GameState {
                         self.miserable = 0; // play zeroes miserable on completion
                         self.cooldown_play = PLAY_COOLDOWN();
                     }
+                    Action::Exercise => self.cooldown_exercise = EXERCISE_COOLDOWN(),
+                    Action::Medicate => self.cooldown_medicate = MEDICATE_COOLDOWN(),
                 }
                 self.active_action = None;
+                self.active_food = None;
             }
         }
         delta
@@ -666,6 +738,8 @@ impl GameState {
         self.cooldown_heal = self.cooldown_heal.saturating_sub(d);
         self.cooldown_relax = self.cooldown_relax.saturating_sub(d);
         self.cooldown_play = self.cooldown_play.saturating_sub(d);
+        self.cooldown_exercise = self.cooldown_exercise.saturating_sub(d);
+        self.cooldown_medicate = self.cooldown_medicate.saturating_sub(d);
         self.cooldown_tictactoe = self.cooldown_tictactoe.saturating_sub(d);
         self.cooldown_lightsout = self.cooldown_lightsout.saturating_sub(d);
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
@@ -739,8 +813,16 @@ impl GameState {
             } else {
                 0
             };
-            self.sick = sat_add(self.sick, base.saturating_add(condition));
+            let diabetes = diabetes_penalty(self, delta, miserable_high);
+            self.sick = sat_add(
+                self.sick,
+                base.saturating_add(condition).saturating_add(diabetes),
+            );
         }
+
+        // Weight (passive gain — a slow, multi-day drift; Exercise is the
+        // relief valve, Feed adds a small extra bump on completion above).
+        self.weight = sat_add(self.weight, mul_dt(WEIGHT_RATE(), delta));
 
         // Miserable (suppressed during play action + cooldown).
         if self.cooldown_play == 0 && self.active_action != Some(Action::Play) {
@@ -805,8 +887,15 @@ impl GameState {
             } else {
                 0
             };
-            self.sick = sat_add(self.sick, base.saturating_add(condition));
+            let diabetes = diabetes_penalty(self, delta, miserable_high);
+            self.sick = sat_add(
+                self.sick,
+                base.saturating_add(condition).saturating_add(diabetes),
+            );
         }
+
+        // Weight still drifts upward during sleep — metabolism doesn't stop.
+        self.weight = sat_add(self.weight, mul_dt(WEIGHT_RATE(), delta));
     }
 
     /// Check leaving conditions and update leaving countdown.
@@ -833,6 +922,26 @@ impl GameState {
             self.save_pending = true;
         }
     }
+
+    /// Track sustained overweight duration and trigger permanent
+    /// diabetes once `DIABETES_ONSET_TICKS()` is reached.  Mirrors the
+    /// existing "neglect one stat long enough → penalty elsewhere"
+    /// pattern used by `sick_condition_active()`, but the trigger here
+    /// is a one-way flag rather than a continuously-reevaluated
+    /// condition — real type 2 diabetes doesn't reverse once it sets in.
+    fn check_diabetes(&mut self, delta: u32) {
+        if self.diabetic {
+            return;
+        }
+        if self.weight > OVERWEIGHT_TRIGGER() {
+            self.overweight_ticks = self.overweight_ticks.saturating_add(delta);
+            if self.overweight_ticks >= DIABETES_ONSET_TICKS() {
+                self.diabetic = true;
+            }
+        } else {
+            self.overweight_ticks = 0;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -845,8 +954,9 @@ impl GameState {
         self.phase == Phase::Active || self.phase == Phase::Leaving
     }
 
-    /// Start the feed action.  Returns false if not available.
-    pub fn feed(&mut self) -> bool {
+    /// Start the feed action with the chosen food.  Returns false if not
+    /// available.
+    pub fn feed(&mut self, food: FoodKind) -> bool {
         if !self.is_alive() || self.is_sleeping {
             return false;
         }
@@ -854,6 +964,7 @@ impl GameState {
             return false;
         }
         self.active_action = Some(Action::Feed);
+        self.active_food = Some(food);
         self.action_ticks_remaining = FEED_DURATION();
         true
     }
@@ -894,6 +1005,38 @@ impl GameState {
         }
         self.active_action = Some(Action::Play);
         self.action_ticks_remaining = PLAY_DURATION();
+        true
+    }
+
+    /// Start the exercise action — the primary relief valve for `weight`.
+    pub fn exercise(&mut self) -> bool {
+        if !self.is_alive() || self.is_sleeping {
+            return false;
+        }
+        if self.active_action.is_some() || self.cooldown_exercise > 0 {
+            return false;
+        }
+        self.active_action = Some(Action::Exercise);
+        self.action_ticks_remaining = EXERCISE_DURATION();
+        true
+    }
+
+    /// Administer diabetes medication.  Only meaningful once `diabetic`
+    /// is set — resets `cooldown_medicate`, which doubles as the
+    /// protection window during which the diabetes sick-penalty is
+    /// suppressed.
+    pub fn medicate(&mut self) -> bool {
+        if !self.diabetic {
+            return false;
+        }
+        if !self.is_alive() || self.is_sleeping {
+            return false;
+        }
+        if self.active_action.is_some() || self.cooldown_medicate > 0 {
+            return false;
+        }
+        self.active_action = Some(Action::Medicate);
+        self.action_ticks_remaining = MEDICATE_DURATION();
         true
     }
 
@@ -980,6 +1123,39 @@ impl GameState {
 }
 
 // ---------------------------------------------------------------------------
+// Debug cheats — reachable only via the hidden button sequence in
+// `crate::game::debug_cheats`. Not part of normal gameplay; exist purely so
+// the multi-day weight/diabetes arc can be tested in seconds instead of days.
+// ---------------------------------------------------------------------------
+
+impl GameState {
+    /// Push `weight` just over the overweight trigger.
+    pub fn debug_force_overweight(&mut self) {
+        self.weight = OVERWEIGHT_TRIGGER().saturating_add(1);
+    }
+
+    /// Flip `diabetic` on directly, skipping the sustained-overweight timer.
+    pub fn debug_force_diabetic(&mut self) {
+        self.diabetic = true;
+    }
+
+    /// Clear diabetes and the overweight-duration counter, so the arc can
+    /// be re-tested from scratch without starting a new pet.
+    pub fn debug_clear_diabetes(&mut self) {
+        self.diabetic = false;
+        self.overweight_ticks = 0;
+    }
+
+    /// Fast-forward the engine by `ticks` in one shot — runs the same
+    /// `update()` path real time would, just compressed. Used for "Skip
+    /// 1 hour" / "Skip 1 day" cheat items.
+    pub fn debug_skip_ticks(&mut self, ticks: u32) {
+        let target = self.last_update_tick.saturating_add(ticks);
+        self.update(target);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Next wake time — boundary-based scheduling
 // ---------------------------------------------------------------------------
 
@@ -1018,6 +1194,12 @@ impl GameState {
         }
         if self.cooldown_play > 0 {
             earliest = earliest.min(now + self.cooldown_play as u32);
+        }
+        if self.cooldown_exercise > 0 {
+            earliest = earliest.min(now + self.cooldown_exercise as u32);
+        }
+        if self.cooldown_medicate > 0 {
+            earliest = earliest.min(now + self.cooldown_medicate as u32);
         }
 
         // Stat boundary crossings.
@@ -1116,6 +1298,11 @@ pub struct PetStats {
     pub healthy: u8,
     /// How happy the pet is (100 = happy, 0 = miserable).
     pub happy: u8,
+    /// How lean/fit the pet is (100 = lean, 0 = obese).
+    pub weight: u8,
+
+    /// Whether the pet has developed type 2 diabetes (permanent once set).
+    pub diabetic: bool,
 
     /// Current lifecycle phase.
     pub phase: Phase,
@@ -1136,6 +1323,10 @@ pub struct PetStats {
     pub can_heal: bool,
     pub can_relax: bool,
     pub can_play: bool,
+    pub can_exercise: bool,
+    /// Only true once `diabetic` is set — administering medication to a
+    /// non-diabetic pet is a no-op.
+    pub can_medicate: bool,
     pub can_sleep: bool,
     pub can_wake: bool,
     /// Per-mini-game availability.  False while that game's post-win
@@ -1155,6 +1346,8 @@ pub struct PetStats {
     pub cooldown_heal: u16,
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
+    pub cooldown_exercise: u16,
+    pub cooldown_medicate: u16,
     pub cooldown_tictactoe: u16,
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
@@ -1197,6 +1390,9 @@ impl GameState {
             inspired: to_display_pct(self.drained),
             healthy: to_display_pct(self.sick),
             happy: to_display_pct(self.miserable),
+            weight: to_display_pct(self.weight),
+
+            diabetic: self.diabetic,
 
             phase: self.phase,
             is_sleeping: self.is_sleeping,
@@ -1210,6 +1406,11 @@ impl GameState {
             can_heal: awake_active && action_idle && self.cooldown_heal == 0,
             can_relax: awake_active && action_idle && self.cooldown_relax == 0,
             can_play: awake_active && action_idle && self.cooldown_play == 0,
+            can_exercise: awake_active && action_idle && self.cooldown_exercise == 0,
+            can_medicate: awake_active
+                && action_idle
+                && self.diabetic
+                && self.cooldown_medicate == 0,
             can_sleep: alive && !self.is_sleeping,
             can_wake: self.is_sleeping,
             can_play_tictactoe: awake_active && action_idle && self.cooldown_tictactoe == 0,
@@ -1224,6 +1425,8 @@ impl GameState {
             cooldown_heal: self.cooldown_heal,
             cooldown_relax: self.cooldown_relax,
             cooldown_play: self.cooldown_play,
+            cooldown_exercise: self.cooldown_exercise,
+            cooldown_medicate: self.cooldown_medicate,
             cooldown_tictactoe: self.cooldown_tictactoe,
             cooldown_lightsout: self.cooldown_lightsout,
             cooldown_blackhole: self.cooldown_blackhole,
@@ -1274,7 +1477,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 66;
+pub const SAVE_SIZE: usize = 77;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -1308,6 +1511,8 @@ impl GameState {
         w16!(self.drained);
         w16!(self.sick);
         w16!(self.miserable);
+        // Weight (2 bytes).
+        w16!(self.weight);
         // Traits (6 bytes).
         w16!(self.vitality);
         w16!(self.curiosity);
@@ -1327,20 +1532,25 @@ impl GameState {
         w16!(self.cooldown_heal);
         w16!(self.cooldown_relax);
         w16!(self.cooldown_play);
+        w16!(self.cooldown_exercise);
+        w16!(self.cooldown_medicate);
         // Interval counters (12 bytes).
         w32!(self.drained_interval_counter);
         w32!(self.miserable_interval_counter);
         w32!(self.tired_passive_counter);
-        // Flags (2 bytes).
+        // Overweight duration counter (4 bytes).
+        w32!(self.overweight_ticks);
+        // Flags (3 bytes).
         w8!(self.is_sleeping as u8);
         w8!(self.hibernating as u8);
+        w8!(self.diabetic as u8);
         // Hibernation (4 bytes).
         w32!(self.hibernate_ticks);
         // Save tick (4 bytes).
         w32!(self.last_save_tick);
         // Pet kind (1 byte).
         w8!(self.pet_kind.0);
-        // Total: 66 bytes.
+        // Total: 77 bytes.
         b
     }
 
@@ -1384,6 +1594,7 @@ impl GameState {
         let drained = r16!();
         let sick = r16!();
         let miserable = r16!();
+        let weight = r16!();
         let vitality = r16!();
         let curiosity = r16!();
         let resilience = r16!();
@@ -1411,11 +1622,15 @@ impl GameState {
         let cooldown_heal = r16!();
         let cooldown_relax = r16!();
         let cooldown_play = r16!();
+        let cooldown_exercise = r16!();
+        let cooldown_medicate = r16!();
         let drained_interval_counter = r32!();
         let miserable_interval_counter = r32!();
         let tired_passive_counter = r32!();
+        let overweight_ticks = r32!();
         let is_sleeping = r8!() != 0;
         let hibernating = r8!() != 0;
+        let diabetic = r8!() != 0;
         let hibernate_ticks = r32!();
         let last_save_tick = r32!();
         let pet_kind = PetKind::from_u8(r8!());
@@ -1427,6 +1642,9 @@ impl GameState {
             drained,
             sick,
             miserable,
+            weight,
+            diabetic,
+            overweight_ticks,
             vitality,
             curiosity,
             resilience,
@@ -1437,11 +1655,15 @@ impl GameState {
             leaving_countdown,
             generation,
             active_action,
+            // Not persisted — see the field doc on `active_food`.
+            active_food: None,
             action_ticks_remaining,
             cooldown_feed,
             cooldown_heal,
             cooldown_relax,
             cooldown_play,
+            cooldown_exercise,
+            cooldown_medicate,
             // Not persisted: rebooting clears all mini-game cooldowns.
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
@@ -1634,5 +1856,127 @@ impl PetRealm {
             }
         }
         realm
+    }
+}
+
+#[cfg(test)]
+mod overweight_diabetes_tests {
+    use super::*;
+
+    /// New fields round-trip through `to_bytes`/`from_bytes` at the new
+    /// 77-byte `SAVE_SIZE`.
+    #[test]
+    fn save_round_trip_includes_new_fields() {
+        let mut state = GameState::new_egg(42, PetKind::Cat);
+        state.weight = 41000;
+        state.diabetic = true;
+        state.cooldown_exercise = 12;
+        state.cooldown_medicate = 345;
+
+        let bytes = state.to_bytes();
+        assert_eq!(bytes.len(), SAVE_SIZE);
+        assert_eq!(SAVE_SIZE, 77);
+
+        let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
+        assert_eq!(restored.weight, 41000);
+        assert!(restored.diabetic);
+        assert_eq!(restored.cooldown_exercise, 12);
+        assert_eq!(restored.cooldown_medicate, 345);
+        assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
+    }
+
+    /// Sustained overweight for `DIABETES_ONSET_TICKS()` flips `diabetic`
+    /// permanently true; dropping weight back down afterward does not
+    /// reverse it.  Exercises `check_diabetes()` directly (it's a private
+    /// method, reachable from this same-file test module) so the test
+    /// isolates the weight/diabetes mechanic from the unrelated
+    /// hunger/tired/leaving lifecycle — driving thousands of ticks
+    /// through the full `update()` with hunger/tired left unattended
+    /// would let the *existing* neglect mechanics kill the pet
+    /// (`Phase::Gone`) long before the multi-day diabetes window elapses.
+    #[test]
+    fn sustained_overweight_triggers_permanent_diabetes() {
+        let mut state = GameState::new_egg(1, PetKind::Bartholomeus);
+        state.weight = OVERWEIGHT_TRIGGER() + 1;
+
+        state.check_diabetes(DIABETES_ONSET_TICKS() + 10);
+        assert!(state.diabetic, "should become diabetic after sustained overweight");
+
+        // Dropping weight back down afterward must not clear the flag.
+        state.weight = 0;
+        state.check_diabetes(10);
+        assert!(state.diabetic, "diabetes should be permanent");
+    }
+
+    /// Overweight time resets if weight drops back below the trigger
+    /// before the onset threshold is reached — no premature diabetes.
+    #[test]
+    fn overweight_progress_resets_on_recovery() {
+        let mut state = GameState::new_egg(2, PetKind::Bartholomeus);
+        state.weight = OVERWEIGHT_TRIGGER() + 1;
+
+        // Advance partway toward onset, then recover.
+        state.check_diabetes(DIABETES_ONSET_TICKS() / 2);
+        state.weight = 0;
+        state.check_diabetes(1);
+        assert!(!state.diabetic);
+
+        // Even after further time at low weight, no diabetes should appear.
+        state.check_diabetes(DIABETES_ONSET_TICKS());
+        assert!(!state.diabetic, "recovering before onset should reset progress");
+    }
+
+    /// Pizza should pack on far more weight than Salad for feeding the
+    /// same duration — the whole point of the food system tying into
+    /// the overweight/diabetes mechanic.
+    #[test]
+    fn unhealthy_food_gains_more_weight_than_healthy_food() {
+        let run = |food: FoodKind| -> u16 {
+            let mut state = GameState::new_egg(7, PetKind::Bartholomeus);
+            state.update(HATCHING_TICKS() as u32);
+            assert!(state.feed(food));
+            state.update(state.last_update_tick + FEED_DURATION() as u32);
+            state.weight
+        };
+
+        let salad_weight = run(FoodKind::Salad);
+        let apple_weight = run(FoodKind::Apple);
+        let pizza_weight = run(FoodKind::Pizza);
+        let cake_weight = run(FoodKind::Cake);
+
+        assert!(
+            salad_weight < apple_weight,
+            "Salad ({salad_weight}) should gain less weight than Apple ({apple_weight})"
+        );
+        assert!(
+            apple_weight < pizza_weight,
+            "Apple ({apple_weight}) should gain less weight than Pizza ({pizza_weight})"
+        );
+        assert!(
+            pizza_weight < cake_weight,
+            "Pizza ({pizza_weight}) should gain less weight than Cake ({cake_weight})"
+        );
+    }
+
+    /// Food choice must not change hunger relief ordering in the wrong
+    /// direction — Cake is the worst hunger relief (dessert, not
+    /// filling), Pizza the best (very filling).
+    #[test]
+    fn cake_is_least_filling_pizza_is_most_filling() {
+        let run = |food: FoodKind| -> u16 {
+            let mut state = GameState::new_egg(9, PetKind::Bartholomeus);
+            state.update(HATCHING_TICKS() as u32);
+            state.hunger = HUNGER_RATE().saturating_mul(10_000); // build up hunger first
+            assert!(state.feed(food));
+            state.update(state.last_update_tick + FEED_DURATION() as u32);
+            state.hunger
+        };
+
+        let cake_hunger = run(FoodKind::Cake);
+        let pizza_hunger = run(FoodKind::Pizza);
+        assert!(
+            pizza_hunger < cake_hunger,
+            "Pizza should relieve more hunger than Cake (pizza={pizza_hunger}, cake={cake_hunger})"
+        );
     }
 }

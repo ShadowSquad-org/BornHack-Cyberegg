@@ -178,6 +178,14 @@ pub fn dispatch(btn: ButtonId) -> bool {
         }
         true
     } else {
+        // Feed every idle-screen press to the hidden debug-cheat
+        // sequence tracker. On a match, open the Debug menu and
+        // consume the triggering press so it doesn't also move the nav
+        // cursor or activate whatever icon happened to be focused.
+        if super::debug_cheats::feed(btn) {
+            modal::open(modal::ModalKind::Debug);
+            return true;
+        }
         match btn {
             ButtonId::Up => {
                 nav_up();

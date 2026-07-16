@@ -4,7 +4,7 @@
 //! Usage: `cargo run --bin simulate_game --features simulator`
 //! Or:    `make simulate-game`
 
-use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
+use bornhack_aegg::game::engine::{FoodKind, GameState, PetKind, Phase};
 
 // ---------------------------------------------------------------------------
 // Player policies
@@ -37,7 +37,7 @@ fn optimal_act(state: &mut GameState) {
         return;
     }
     if state.hunger > 32768 {
-        state.feed();
+        state.feed(FoodKind::Apple);
         return;
     }
     if state.sick > 32768 {
@@ -53,7 +53,7 @@ fn optimal_act(state: &mut GameState) {
         return;
     }
     if state.hunger > 16384 {
-        state.feed();
+        state.feed(FoodKind::Apple);
     }
 }
 
@@ -124,7 +124,7 @@ impl Policy for PerfectNoHeal {
             return;
         }
         if state.hunger > 32768 {
-            state.feed();
+            state.feed(FoodKind::Apple);
             return;
         }
         if state.drained > 32768 {
@@ -136,7 +136,7 @@ impl Policy for PerfectNoHeal {
             return;
         }
         if state.hunger > 16384 {
-            state.feed();
+            state.feed(FoodKind::Apple);
         }
     }
 }
@@ -155,7 +155,7 @@ impl Policy for PerfectNoRest {
             return;
         }
         if state.hunger > 32768 {
-            state.feed();
+            state.feed(FoodKind::Apple);
             return;
         }
         if state.sick > 32768 {
@@ -167,7 +167,7 @@ impl Policy for PerfectNoRest {
             return;
         }
         if state.hunger > 16384 {
-            state.feed();
+            state.feed(FoodKind::Apple);
         }
     }
 }
@@ -212,7 +212,7 @@ impl Policy for NightOwlPolicy {
             return;
         }
         if state.hunger > 32768 {
-            state.feed();
+            state.feed(FoodKind::Apple);
             return;
         }
         if state.sick > 32768 {
@@ -268,7 +268,7 @@ impl Policy for FeedAndSleepPolicy {
             return;
         }
         if state.hunger > 32768 {
-            state.feed();
+            state.feed(FoodKind::Apple);
         }
     }
     fn next_check(&self, tick: u32) -> u32 {
@@ -299,7 +299,7 @@ impl Policy for FeedSleepHealPolicy {
             return;
         }
         if state.hunger > 32768 {
-            state.feed();
+            state.feed(FoodKind::Apple);
             return;
         }
         if state.sick > 32768 {

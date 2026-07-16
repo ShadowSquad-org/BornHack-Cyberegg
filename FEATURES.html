@@ -1,0 +1,423 @@
+<title>Cyber Ægg — Feature Log</title>
+<style>
+  :root {
+    --bg: #f2f1ee;
+    --surface: #e9e7e1;
+    --surface-2: #dedcd4;
+    --ink: #17181a;
+    --muted: #5d5b56;
+    --faint: #8a877f;
+    --accent: #ac1b28;
+    --accent-ink: #f2e9e8;
+    --rule: #cdcbc2;
+    --ok: #2f6f4e;
+    --ok-bg: #dde8de;
+    --pending: #8a6a1e;
+    --pending-bg: #ece2c9;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --surface: #1e2023;
+      --surface-2: #262830;
+      --ink: #ece9e2;
+      --muted: #a6a39a;
+      --faint: #726f68;
+      --accent: #e2606a;
+      --accent-ink: #2a1214;
+      --rule: #34363b;
+      --ok: #7cbd97;
+      --ok-bg: #1e2b23;
+      --pending: #d8b158;
+      --pending-bg: #2e2717;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17181a; --surface: #1e2023; --surface-2: #262830;
+    --ink: #ece9e2; --muted: #a6a39a; --faint: #726f68;
+    --accent: #e2606a; --accent-ink: #2a1214; --rule: #34363b;
+    --ok: #7cbd97; --ok-bg: #1e2b23; --pending: #d8b158; --pending-bg: #2e2717;
+  }
+  :root[data-theme="light"] {
+    --bg: #f2f1ee; --surface: #e9e7e1; --surface-2: #dedcd4;
+    --ink: #17181a; --muted: #5d5b56; --faint: #8a877f;
+    --accent: #ac1b28; --accent-ink: #f2e9e8; --rule: #cdcbc2;
+    --ok: #2f6f4e; --ok-bg: #dde8de; --pending: #8a6a1e; --pending-bg: #ece2c9;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  header.masthead {
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 20px;
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 30px;
+    letter-spacing: -0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .dek {
+    font-size: 16px;
+    color: var(--muted);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    margin-top: 6px;
+  }
+  .meta-row b { color: var(--muted); font-weight: 600; }
+
+  nav.toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 28px 0 48px;
+  }
+  nav.toc a {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    text-decoration: none;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 5px 10px;
+    border-radius: 3px;
+  }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--ink); border-color: var(--faint); outline: none; }
+
+  section.entry {
+    border-top: 1px solid var(--rule);
+    padding: 36px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  section.entry:first-of-type { border-top: none; padding-top: 8px; }
+
+  .entry-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 2px 7px;
+    white-space: nowrap;
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: 19px;
+    font-weight: 700;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    margin: 18px 0 2px;
+    color: var(--ink);
+  }
+  p { margin: 0; max-width: 68ch; }
+  p + p { margin-top: 12px; }
+  .lede { color: var(--muted); }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    border-radius: 999px;
+    padding: 2px 9px 2px 8px;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.pending { background: var(--pending-bg); color: var(--pending); }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+  }
+  .table-wrap { overflow-x: auto; margin-top: 4px; }
+  th, td {
+    text-align: left;
+    padding: 7px 14px 7px 0;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 600;
+  }
+  td.num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.desc, th.desc { white-space: normal; color: var(--muted); }
+
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--muted);
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .flow b { color: var(--ink); }
+  .flow .arrow { color: var(--faint); }
+
+  ul.notes { margin: 0; padding-left: 18px; color: var(--muted); }
+  ul.notes li { margin: 6px 0; }
+  ul.notes li::marker { color: var(--faint); }
+
+  code {
+    font-family: var(--mono);
+    background: var(--surface-2);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.9em;
+    color: var(--ink);
+  }
+
+  .callout {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 12px 16px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .callout b { color: var(--ink); }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <span class="eyebrow">badge.team · bornhack 2026 · cyber ægg firmware</span>
+    <h1>BornPets Feature Log</h1>
+    <p class="dek">Running record of gameplay changes made to the BornPets virtual-pet engine this build cycle — what changed, why, and what state the matching art/assets are in.</p>
+    <div class="meta-row">
+      <span><b>Firmware</b> bornhack-firmware-2026</span>
+      <span><b>Save format</b> v3 (77 bytes)</span>
+      <span><b>Last updated</b> 2026-07-16</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Sections">
+    <a href="#weight">Weight &amp; Diabetes</a>
+    <a href="#exercise">Exercise</a>
+    <a href="#medicate">Medicate</a>
+    <a href="#food">Food</a>
+    <a href="#assets">Sprite assets</a>
+    <a href="#cheats">Debug cheats</a>
+    <a href="#changelog">Changelog</a>
+  </nav>
+
+  <section class="entry" id="weight">
+    <div class="entry-head">
+      <span class="tag">stat</span>
+      <h2>Weight &amp; Type 2 Diabetes</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">A sixth pet stat, <code>weight</code>, tracked the same way as Hunger/Tired/Drained/Sick/Miserable — 0 is best, full-scale is worst. Shown as the <b>Fit</b> bar in the Stats popover.</p>
+
+    <h3>How it moves</h3>
+    <p>Weight drifts up on its own, slowly — a multi-day arc rather than an hours-scale stat like Hunger. Left completely alone it crosses the overweight line in roughly 4–5 days. Feeding adds a further nudge on top, sized entirely by <a href="#food">what was eaten</a>. Exercising is the only way to bring it back down.</p>
+
+    <h3>The diabetes trigger</h3>
+    <div class="flow">
+      <span>weight <b>&gt; 60%</b></span>
+      <span class="arrow">→</span>
+      <span>sustained <b>3 days</b> (Classic) / <b>6 days</b> (Casual)</span>
+      <span class="arrow">→</span>
+      <span><b>diabetic = true</b>, permanently</span>
+    </div>
+    <p>Dropping weight back under the line before that window elapses resets the clock to zero — no partial credit. Once triggered, though, there's no cure, only management: while diabetic and unmedicated, Sick accrues an extra penalty every tick, on top of whatever else is already pushing it up.</p>
+  </section>
+
+  <section class="entry" id="exercise">
+    <div class="entry-head">
+      <span class="tag">action</span>
+      <h2>Exercise</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">New top-level icon, top row, third slot — the row had two of its four positions unused since the badge shipped, so this didn't require touching the full bottom row.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Effect</th><th class="num">Direction</th><th class="desc">Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Weight</td><td class="num">−20% to −30%</td><td class="desc">the primary relief valve for the overweight/diabetes arc</td></tr>
+          <tr><td>Tired</td><td class="num">+</td><td class="desc">a workout costs energy, same shape as Play's cost</td></tr>
+          <tr><td>Hunger</td><td class="num">+</td><td class="desc">smaller cost — burns calories</td></tr>
+          <tr><td>Drained</td><td class="num">−</td><td class="desc">small bonus — a workout lifts mood too</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>3-tick duration, 36-tick cooldown — between Relax and Play on both counts.</p>
+  </section>
+
+  <section class="entry" id="medicate">
+    <div class="entry-head">
+      <span class="tag">action</span>
+      <h2>Give medication</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">Lives inside the existing <b>Heal</b> icon, as a second item alongside "Give medicine" — the same pattern Rest already uses for Sleep + Relax under one icon. No new icon slot needed.</p>
+    <p>Only selectable once the pet is diabetic; shows as a permanently disabled row before that, same treatment as "Defrost" sitting disabled outside Hibernate. Administering it resets a cooldown that doubles as a protection window: while it's running, the diabetes sick-penalty is suppressed. When it lapses, the penalty resumes right as the item becomes selectable again — the game's way of telling you it's time to re-dose.</p>
+  </section>
+
+  <section class="entry" id="food">
+    <div class="entry-head">
+      <span class="tag">action</span>
+      <h2>Food choice</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">Feed is now a five-item choice instead of one flat action. Each food scales the same baseline hunger/weight/drained numbers by a different percentage — <b>Apple sits at 100% across the board</b>, so it's a drop-in match for what plain Feed always did.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Food</th><th class="num">Hunger relief</th><th class="num">Weight gain</th><th class="num">Drained relief</th><th class="desc">Read</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Salad</td><td class="num">70%</td><td class="num">30%</td><td class="num">100%</td><td class="desc">healthiest, less filling</td></tr>
+          <tr><td>Apple</td><td class="num">100%</td><td class="num">100%</td><td class="num">100%</td><td class="desc">baseline</td></tr>
+          <tr><td>Burger</td><td class="num">150%</td><td class="num">250%</td><td class="num">50%</td><td class="desc">filling, real cost</td></tr>
+          <tr><td>Pizza</td><td class="num">170%</td><td class="num">300%</td><td class="num">80%</td><td class="desc">most filling, second-worst weight</td></tr>
+          <tr><td>Cake</td><td class="num">60%</td><td class="num">350%</td><td class="num">200%</td><td class="desc">barely filling, worst weight, best mood</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>One shared cooldown across all five — it's still just "feeding," whatever's on the plate.</p>
+  </section>
+
+  <section class="entry" id="assets">
+    <div class="entry-head">
+      <span class="tag">asset</span>
+      <h2>Sprite &amp; icon coverage</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">Every new menu action now has matching art — the badge's sprite loader fails soft on a missing file (same behaviour as a factory-reset badge with no art at all), so a blank slot doesn't crash anything, it just looks unfinished. This pass closes that gap.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Slot</th><th class="desc">What's there</th><th class="num">Frames</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Exercise menu icon</td><td class="desc">dumbbell glyph, top row col 3</td><td class="num">2</td><td><span class="pill ok">done</span></td></tr>
+          <tr><td>Exercising animation</td><td class="desc">each pet's idle body + a dumbbell prop in whatever canvas space that pet leaves open</td><td class="num">2 × 3 pets</td><td><span class="pill ok">done</span></td></tr>
+          <tr><td>Medicating animation</td><td class="desc">idle body + a pill-bottle/cross prop</td><td class="num">1 × 3 pets</td><td><span class="pill ok">done</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The prop-over-static-body approach is lifted directly from how the existing Playing animation works — the pet doesn't change pose, a prop just appears in open canvas space next to it.</p>
+    <div class="callout"><b>Verification note —</b> art was round-trip verified byte-for-byte against its own encoder and sanity-checked as ASCII art, but the actual e-paper/simulator render hasn't been seen firsthand. Worth a look in <code>make sim</code> or on hardware before calling it final.</div>
+  </section>
+
+  <section class="entry" id="cheats">
+    <div class="entry-head">
+      <span class="tag">tooling</span>
+      <h2>Debug cheats</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">A hidden menu for testing the multi-day weight/diabetes arc in seconds. Not part of normal play — no icon, no cooldowns.</p>
+    <div class="flow">
+      <span><b>Up Up Down Down Left Right Left Right Fire</b></span>
+      <span class="arrow">→</span>
+      <span>opens <b>Debug</b> menu</span>
+    </div>
+    <p>Entered from the idle main screen — a mistimed press just resets the tracker, arrow presses still move the nav cursor normally while attempting it.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Item</th><th class="desc">What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Force overweight</td><td class="desc">pushes weight just over the 60% trigger</td></tr>
+          <tr><td>Trigger diabetes</td><td class="desc">flips the pet diabetic immediately, skipping the onset timer</td></tr>
+          <tr><td>Clear diabetes</td><td class="desc">resets diabetic status and overweight progress for re-testing</td></tr>
+          <tr><td>Skip 1 hour / Skip 1 day</td><td class="desc">fast-forwards the engine — useful beyond just this mechanic</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="entry" id="changelog">
+    <div class="entry-head">
+      <span class="tag">log</span>
+      <h2>Changelog</h2>
+    </div>
+    <ul class="notes">
+      <li><b>2026-07-16 (2)</b> — Hidden debug-cheat menu added: a button sequence (Up Up Down Down Left Right Left Right Fire) from the idle main screen opens a Debug modal with instant weight/diabetes cheats plus a time-skip, so the multi-day arc can be tested in seconds. Not reachable from any icon, no cooldowns.</li>
+      <li><b>2026-07-16</b> — Food choice (Salad/Apple/Burger/Pizza/Cake) added to Feed. Exercising and Medicating animations built for all three pets. Caught and fixed an anim-ID collision: the first pass reused slots the asset manifest had already reserved for unbuilt features (<code>ICON_HUNGER</code>, <code>ENV_MEDICINE</code>, etc.) across Bartholomeus and Slug — two real pre-existing sprite files were briefly overwritten and restored from git before anything left this machine. Moved everything to a range confirmed clear across all three pets.</li>
+      <li><b>2026-07-15</b> — Weight stat, permanent diabetes trigger, and the Exercise/Medicate actions shipped. Save format bumped 66 → 77 bytes (existing saves reset on update, same as a prior <code>pet_kind</code> byte bump). Exercise menu icon art added after launching with a blank slot.</li>
+    </ul>
+  </section>
+
+  <footer>
+    firmware/FEATURES.html · kept in sync with src/game/engine, src/game/modal.rs, assets/to-badge
+  </footer>
+
+</div>

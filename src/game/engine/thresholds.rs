@@ -121,6 +121,25 @@ thresholds_table! {
     // Traits
     MIN_TRAIT: u16,
     MAX_TRAIT: u16,
+    // Weight
+    WEIGHT_RATE: u16,
+    FEED_WEIGHT_GAIN: u16,
+    OVERWEIGHT_TRIGGER: u16,
+    WARNING_WEIGHT: u16,
+    // Diabetes
+    DIABETES_ONSET_TICKS: u32,
+    DIABETES_SICK_RATE: u16,
+    DIABETES_SICK_MISERABLE_RATE: u16,
+    // Exercise
+    EXERCISE_DURATION: u8,
+    EXERCISE_COOLDOWN: u16,
+    EXERCISE_WEIGHT_RELIEF: u16,
+    EXERCISE_TIRED_COST: u16,
+    EXERCISE_HUNGER_COST: u16,
+    EXERCISE_DRAINED_RELIEF: u16,
+    // Medication
+    MEDICATE_DURATION: u8,
+    MEDICATE_COOLDOWN: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +221,25 @@ impl Thresholds {
 
         MIN_TRAIT: 16384,
         MAX_TRAIT: 49152,
+
+        WEIGHT_RATE: 1,
+        FEED_WEIGHT_GAIN: 200,
+        OVERWEIGHT_TRIGGER: 39321,
+        WARNING_WEIGHT: 32768,
+
+        DIABETES_ONSET_TICKS: 25920,
+        DIABETES_SICK_RATE: 655,
+        DIABETES_SICK_MISERABLE_RATE: 1310,
+
+        EXERCISE_DURATION: 3,
+        EXERCISE_COOLDOWN: 36,
+        EXERCISE_WEIGHT_RELIEF: 4370,
+        EXERCISE_TIRED_COST: 1310,
+        EXERCISE_HUNGER_COST: 655,
+        EXERCISE_DRAINED_RELIEF: 655,
+
+        MEDICATE_DURATION: 2,
+        MEDICATE_COOLDOWN: 720,
     };
 
     /// Half-speed decay, doubled lifetimes, more generous action relief.
@@ -280,6 +318,25 @@ impl Thresholds {
 
         MIN_TRAIT: 16384,
         MAX_TRAIT: 49152,
+
+        WEIGHT_RATE: 1,
+        FEED_WEIGHT_GAIN: 100,
+        OVERWEIGHT_TRIGGER: 39321,
+        WARNING_WEIGHT: 32768,
+
+        DIABETES_ONSET_TICKS: 51840,
+        DIABETES_SICK_RATE: 328,
+        DIABETES_SICK_MISERABLE_RATE: 655,
+
+        EXERCISE_DURATION: 3,
+        EXERCISE_COOLDOWN: 36,
+        EXERCISE_WEIGHT_RELIEF: 6550,
+        EXERCISE_TIRED_COST: 655,
+        EXERCISE_HUNGER_COST: 328,
+        EXERCISE_DRAINED_RELIEF: 983,
+
+        MEDICATE_DURATION: 2,
+        MEDICATE_COOLDOWN: 1440,
     };
 }
 
@@ -439,6 +496,17 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     }),
     ("HATCHING_TICKS", |t, v| t.HATCHING_TICKS = clamp_u16(v)),
     ("MAX_SLEEP_TICKS", |t, v| t.MAX_SLEEP_TICKS = v),
+    ("WEIGHT_RATE", |t, v| t.WEIGHT_RATE = clamp_u16(v)),
+    ("FEED_WEIGHT_GAIN", |t, v| t.FEED_WEIGHT_GAIN = clamp_u16(v)),
+    ("EXERCISE_WEIGHT_RELIEF", |t, v| {
+        t.EXERCISE_WEIGHT_RELIEF = clamp_u16(v)
+    }),
+    ("DIABETES_ONSET_TICKS", |t, v| {
+        t.DIABETES_ONSET_TICKS = v.max(1)
+    }),
+    ("MEDICATE_COOLDOWN", |t, v| {
+        t.MEDICATE_COOLDOWN = clamp_u16(v)
+    }),
 ];
 
 #[inline]

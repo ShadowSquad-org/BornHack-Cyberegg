@@ -42,6 +42,8 @@ pub enum DisplayAnim {
     Relaxing,
     Playing,
     Sleeping,
+    Exercising,
+    Medicating,
 
     // ── Group 3: leaving danger ─────────────────────────────────────
     /// Pet is about to leave.  `maxed_count` (1–4) indicates urgency.
@@ -49,11 +51,16 @@ pub enum DisplayAnim {
         maxed_count: u8,
     },
 
+    /// Diabetic and medication has lapsed — the single most actionable
+    /// alert, so it outranks the ordinary critical/warning stat ladder.
+    DiabetesUntreated,
+
     // ── Group 4: critical stats (needs immediate action) ────────────
     CriticalSick,
     CriticalTired,
     CriticalHungry,
     CriticalDrained,
+    CriticalOverweight,
 
     // ── Group 5: warning stats (attention needed soon) ──────────────
     WarningSick,
@@ -61,6 +68,7 @@ pub enum DisplayAnim {
     WarningHungry,
     WarningDrained,
     WarningMiserable,
+    WarningOverweight,
 
     // ── Group 6: content ────────────────────────────────────────────
     /// Pet is happy (all stats well below warning thresholds).
@@ -103,6 +111,8 @@ impl GameState {
                 Action::Heal => DisplayAnim::Healing,
                 Action::Relax => DisplayAnim::Relaxing,
                 Action::Play => DisplayAnim::Playing,
+                Action::Exercise => DisplayAnim::Exercising,
+                Action::Medicate => DisplayAnim::Medicating,
             };
         }
         if self.is_sleeping {
@@ -114,6 +124,12 @@ impl GameState {
             return DisplayAnim::Leaving {
                 maxed_count: count_maxed(self),
             };
+        }
+
+        // Diabetic and medication has lapsed — outranks the ordinary
+        // critical/warning stat ladder below.
+        if self.diabetic && self.cooldown_medicate == 0 {
+            return DisplayAnim::DiabetesUntreated;
         }
 
         // ── Group 4: critical stats ─────────────────────────────────
@@ -129,6 +145,9 @@ impl GameState {
         }
         if self.drained > SICK_TRIGGER_DRAINED() {
             return DisplayAnim::CriticalDrained;
+        }
+        if self.weight > OVERWEIGHT_TRIGGER() {
+            return DisplayAnim::CriticalOverweight;
         }
 
         // ── Group 5: warning stats ──────────────────────────────────
@@ -147,6 +166,9 @@ impl GameState {
         }
         if self.miserable > WARNING_MISERABLE() {
             return DisplayAnim::WarningMiserable;
+        }
+        if self.weight > WARNING_WEIGHT() {
+            return DisplayAnim::WarningOverweight;
         }
 
         // ── Group 6: content ────────────────────────────────────────

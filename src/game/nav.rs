@@ -1,7 +1,7 @@
 //! BornPets icon-grid navigation state.
 //!
 //! The game screen has a 2-row icon grid:
-//!   Top row:    2 icons (Stats, Hibernate) — cols 0–1
+//!   Top row:    3 icons (Stats, Hibernate, Exercise) — cols 0–2
 //!   Bottom row: 4 icons (Feed, Heal, Play, Rest) — cols 0–3
 //!
 //! `GameNav` tracks which icon is focused.  The state is stored globally
@@ -46,7 +46,7 @@ pub enum NavResult {
 // ───────────────────────────────────────────────────────
 
 /// Number of icons in each row.
-const TOP_COLS: u8 = 2;
+const TOP_COLS: u8 = 3;
 const BOT_COLS: u8 = 4;
 
 /// Packed nav: bit 2 = row, bits 1–0 = col.  Default = bottom row, col 0.
