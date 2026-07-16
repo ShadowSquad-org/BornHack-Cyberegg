@@ -66,6 +66,10 @@ enum InputState {
     SpaceBkspPick { cursor: u8 },
     SpecialPick { cursor: u8 },
     NumberPick { cursor: u8 },
+    /// Submit confirmation — reached from `Root` on Execute so a single
+    /// stray press at the start can't commit + exit (issue #126).  Execute
+    /// here commits; any other button returns to editing.
+    Confirm,
 }
 
 const MAX_TEXT_LEN: usize = 160;
@@ -250,8 +254,22 @@ impl TextEntry {
                 }
                 ButtonId::Cancel => return true,
                 ButtonId::Execute | ButtonId::Fire => {
+                    // Don't commit straight from Root — a single stray press
+                    // at the start would otherwise fix the name and exit with
+                    // no way back (issue #126).  Ask for confirmation first.
+                    self.state = InputState::Confirm;
+                }
+            },
+
+            InputState::Confirm => match btn {
+                ButtonId::Execute | ButtonId::Fire => {
                     (self.on_complete)(&self.text);
                     return true;
+                }
+                // Any other button (Cancel or a direction) backs out to
+                // editing rather than committing.
+                _ => {
+                    self.state = InputState::Root;
                 }
             },
 
@@ -503,9 +521,33 @@ where
             InputState::NumberPick { cursor } => {
                 draw_char_picker(display, NUMBER_CHARS, cursor)?;
             }
+            InputState::Confirm => draw_confirm(display, entry)?,
         }
     }
 
+    Ok(())
+}
+
+/// Submit-confirmation prompt shown when Execute is pressed from `Root`.
+/// Shows the pending text so the user can see what they're about to save.
+fn draw_confirm<D>(display: &mut D, entry: &TextEntry) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    let ts = TextStyleBuilder::new()
+        .baseline(Baseline::Middle)
+        .alignment(Alignment::Center)
+        .build();
+    let cx = DISPLAY_W / 2;
+    let text = core::str::from_utf8(&entry.text).unwrap_or("");
+    Text::with_text_style("Save name?", Point::new(cx, KB_Y + 16), FONT, ts).draw(display)?;
+    if text.is_empty() {
+        Text::with_text_style("(empty)", Point::new(cx, KB_Y + 34), FONT, ts).draw(display)?;
+    } else {
+        Text::with_text_style(text, Point::new(cx, KB_Y + 34), FONT, ts).draw(display)?;
+    }
+    Text::with_text_style("EXE = save", Point::new(cx, KB_Y + 54), FONT, ts).draw(display)?;
+    Text::with_text_style("any key = back", Point::new(cx, KB_Y + 70), FONT, ts).draw(display)?;
     Ok(())
 }
 
