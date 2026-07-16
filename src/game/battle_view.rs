@@ -78,8 +78,20 @@ fn cursor_down() {
 }
 
 /// Challenge the highlighted friend, if any. No-op (stays on the picker)
-/// if there are no friends yet or no pet is active.
+/// if there are no friends yet, no pet is active, or Battle is still on
+/// cooldown. That last check is normally already enforced by the Play
+/// menu (a disabled `Item::Battle` can't be activated to get here at
+/// all), but re-checking it here means this screen can never trigger a
+/// second challenge while already open, regardless of how it was
+/// reached.
 fn try_challenge() {
+    let Some(stats) = super::lifecycle::cycle() else {
+        return;
+    };
+    if !stats.can_battle {
+        return;
+    }
+
     let idx = CURSOR.load(Ordering::Relaxed) as usize;
     let Some(friend) = super::friends::get(idx) else {
         return;

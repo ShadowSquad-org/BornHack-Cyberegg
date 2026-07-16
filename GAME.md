@@ -251,7 +251,7 @@ screen under Stats > Friends). Both badges update the same
 head-to-head tally for every battle between them — win it as the
 challenger and your friend's copy shows the matching loss, and vice
 versa — so the record reads the same from either side. Battling has
-its own cooldown, same as every other action.
+its own cooldown (120 seconds), same as every other action.
 
 Like Friends, actually having your opponent's badge learn the outcome
 needs two physical badges in range of each other on SHDW — but you can
