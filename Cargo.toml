@@ -88,8 +88,8 @@ trouble-host = { version = "0.6", features = [
     "default-packet-pool-size-32",
 ], optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
-meshcore = { path = "./vendor/meshcore", optional = true }
-meshcore-companion = { path = "./vendor/meshcore-companion", optional = true }
+meshcore = { git = "https://codeberg.org/Ranzbak/meshcore-aegg-rust.git", rev = "8171d0048229a89723cc039f1506116c91b92a28", optional = true }
+meshcore-companion = { git = "https://codeberg.org/Ranzbak/meshcore-companion-aegg-rust.git", rev = "e526ab313af3367b30f67755450679408c2de23a", optional = true }
 # Direct dep on ed25519-compact (also pulled in via meshcore) so we can
 # add the `opt_size` feature.  Cargo unifies features across the dep
 # graph, so meshcore's required `x25519` stays enabled and our `opt_size`
