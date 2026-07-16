@@ -43,9 +43,6 @@ driver submodule (`Ranzbak/ssd1675`).
   let-chains, redundant unit bindings, …). No behavior change; 57 → 30
   warnings. `nfct.rs` deliberately excluded — clippy's auto-fix there
   would have moved a `#[cfg]` block out of scope and altered control flow.
-- **meshcore + companion → Cargo git deps** (#134) — dropped the two
-  in-tree submodules in favour of git dependencies pinned to the same
-  revs (build bit-identical). `ssd1675` stays a submodule.
 
 ---
 
