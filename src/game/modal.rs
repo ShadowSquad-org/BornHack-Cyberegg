@@ -93,6 +93,7 @@ impl ModalKind {
                 Item::ViewStats,
                 Item::RolledStats,
                 Item::HealthStatus,
+                Item::Friends,
                 Item::Cancel,
             ],
             Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Cancel],
@@ -173,6 +174,7 @@ enum Item {
     ViewStats,
     RolledStats,
     HealthStatus,
+    Friends,
     FeedFood(super::engine::FoodKind),
     GiveMedicine,
     GiveMedication,
@@ -212,6 +214,7 @@ impl Item {
             Self::ViewStats => "View stats",
             Self::RolledStats => "Rolled stats",
             Self::HealthStatus => "Health status",
+            Self::Friends => "Friends",
             Self::FeedFood(food) => food.label(),
             Self::GiveMedicine => "Give medicine",
             Self::GiveMedication => "Insulin",
@@ -272,6 +275,7 @@ impl Item {
             | Self::ViewStats
             | Self::RolledStats
             | Self::HealthStatus
+            | Self::Friends
             | Self::PlayMusic
             | Self::Song(_)
             | Self::CheatForceOverweight
@@ -351,6 +355,10 @@ impl Item {
             }
             Self::HealthStatus => {
                 super::health_view::open();
+                close();
+            }
+            Self::Friends => {
+                super::friends_view::open();
                 close();
             }
             Self::FeedFood(food) => {

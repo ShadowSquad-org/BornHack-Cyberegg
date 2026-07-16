@@ -708,6 +708,12 @@ where
         return game::health_view::draw(display);
     }
 
+    // Friends: full-screen list of pets met over the SHDW mesh channel.
+    #[cfg(feature = "game")]
+    if game::friends_view::is_active() {
+        return game::friends_view::draw(display);
+    }
+
     let active = with_display_state!(|state| state.active_screen());
     match active {
         #[cfg(feature = "game")]

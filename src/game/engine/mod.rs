@@ -1681,6 +1681,22 @@ impl GameState {
     pub fn request_save(&mut self) {
         self.save_pending = true;
     }
+
+    /// Reduce `miserable` from meeting (or spending time with) a mesh
+    /// friend over the SHDW channel — see `crate::game::friends`.
+    /// `big` is a bigger one-time bump for a brand-new friend; a smaller
+    /// bump applies to a cooldown-gated recurring reunion with someone
+    /// already known.  Just another `miserable` reduction, so it's
+    /// naturally re-clamped by `apply_miserable_floor()` on the next tick
+    /// if the pet is Leaving/critical, the same way `Play` already works.
+    pub fn friend_boost(&mut self, big: bool) {
+        let amount = if big {
+            STAT_MAX() * 2 / 5 // ~40%
+        } else {
+            STAT_MAX() / 10 // ~10%
+        };
+        self.miserable = self.miserable.saturating_sub(amount);
+    }
 }
 
 // ---------------------------------------------------------------------------

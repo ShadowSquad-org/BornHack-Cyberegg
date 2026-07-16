@@ -278,6 +278,7 @@
     <a href="#drinks">Drinks</a>
     <a href="#assets">Sprite assets</a>
     <a href="#health-status">Health status view</a>
+    <a href="#friends">Friends (SHDW mesh)</a>
     <a href="#cheats">Debug cheats</a>
     <a href="#changelog">Changelog</a>
   </nav>
@@ -420,6 +421,27 @@
     <p>Full-screen view, same pattern as the existing Rolled Stats screen — any button closes it.</p>
   </section>
 
+  <section class="entry" id="friends">
+    <div class="entry-head">
+      <span class="tag">mesh</span>
+      <h2>Friends (SHDW mesh channel)</h2>
+      <span class="pill ok">shipped</span>
+    </div>
+    <p class="lede">Every badge now auto-joins a private mesh channel called <b>SHDW</b> on boot — same deterministic key-derivation the built-in <code>#bornhack</code>/<code>#test</code> channels use, so every badge gets there with zero setup. While a pet is active, the badge broadcasts a small presence beacon on it every 15 minutes; when another SHDW badge is in LoRa range, the pets "meet".</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Event</th><th class="desc">Effect</th></tr></thead>
+        <tbody>
+          <tr><td>New friend</td><td class="desc">first time meeting that badge — a bigger one-time happiness boost</td></tr>
+          <tr><td>Reunion</td><td class="desc">known friend, cooldown (4h) elapsed — a smaller "spending time together" boost</td></tr>
+          <tr><td>Seen too soon</td><td class="desc">known friend, still on cooldown — no boost, just noted</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The beacon is sent as a <code>GrpData</code> packet with a private <code>data_type</code>, not <code>GrpTxt</code> — it never shows up in the channel-browser chat UI or gets forwarded to the companion app, it's picked up directly by the game layer. Friend records (up to 20) persist in their own KV namespace, independent of the main save. Check who's been met via <b>Stats &gt; Friends</b> — a scrollable list (Up/Down, any other button closes), mirroring the Unicorn Realm screen.</p>
+    <div class="callout"><b>Verification note —</b> unit-tested in isolation (friend list add/dedupe/ring-overflow, beacon round-trip, cooldown boundary) and built clean across all firmware variants including the standalone mesh-only and game-only builds. Actually meeting a friend requires two physical badges, both on this firmware, both in LoRa range — not something verifiable single-handed.</div>
+  </section>
+
   <section class="entry" id="cheats">
     <div class="entry-head">
       <span class="tag">tooling</span>
@@ -452,6 +474,7 @@
       <h2>Changelog</h2>
     </div>
     <ul class="notes">
+      <li><b>2026-07-16 (8)</b> — Mesh "Friends" feature: every badge auto-joins a private <b>SHDW</b> channel on boot (same deterministic key-derivation as <code>#bornhack</code>/<code>#test</code>), and broadcasts a small pet-presence beacon on it every 15 minutes while a pet is active. Meeting another SHDW badge for the first time gives a big happiness boost; meeting a known friend again after a few hours gives a smaller one. New <b>Stats &gt; Friends</b> screen lists everyone met so far. Beacon uses a private <code>GrpData</code> type so it never surfaces in the channel-chat UI or companion sync. Friend records persist in their own KV namespace, cap 20, ring-buffer-evicted like the Unicorn Realm.</li>
       <li><b>2026-07-16 (7)</b> — Second permanent-condition track: Drinks. New <b>Drink</b> icon (top row, 4th slot) offers Water/Cola/Beer/Wine/Whiskey, each scaling drunk-gain/drained-relief/weight-gain off a Beer=100% baseline. Unlike weight, <code>drunk</code> passively sobers up over hours — repeated heavy drinking (not one binge) is what sustains it long enough to trigger permanent <b>alcoholism</b>, managed via a new <b>Rehab</b> item under Heal. Drink/Rehab reuse the Feeding/Medicating animations rather than new anim IDs, deliberately avoiding the catalog-bounds class of bug hit earlier. Health Status view now shows Alcoholic alongside Diabetic/Overweight. Debug menu gained Force drunk / Trigger alcoholism / Clear alcoholism cheats, mirroring the diabetes ones.</li>
       <li><b>2026-07-16 (6)</b> — Three fixes/additions: (1) The Exercising/Medicating sprite files existed in the repo but had never actually been copied onto any physical badge's FAT12 storage — copied now, fixing the pet going invisible during Exercise. (2) Fixed a real layout bug: the 6-bar Stats view's last row ("Fit") overlapped the footer text drawn below it, making it look like it had no background — recomputed the bar height/spacing to restore the same proven bottom edge the original 5-bar layout used. (3) Added a "Health status" view under the Stats icon — Diabetic/Overweight/Fit% at a glance with a plain-language explanation of what triggers each.</li>
       <li><b>2026-07-16 (5)</b> — "Give medication" renamed to <b>Insulin</b> for clarity. Added <b>Ozempic</b> as a second, stronger weight-loss treatment under Heal — not gated on being diabetic, roughly double Exercise's relief per dose, balanced by a much longer cooldown.</li>
