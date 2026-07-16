@@ -433,8 +433,8 @@ pub fn next_wake_tick() -> u32 {
 // ---------------------------------------------------------------------------
 
 /// Execute a player action.  Returns true if the action was accepted.
-pub fn feed() -> bool {
-    with_state(|s| s.feed())
+pub fn feed(food: super::engine::FoodKind) -> bool {
+    with_state(|s| s.feed(food))
 }
 
 pub fn heal() -> bool {
@@ -447,6 +447,46 @@ pub fn relax() -> bool {
 
 pub fn play() -> bool {
     with_state(|s| s.play())
+}
+
+pub fn exercise() -> bool {
+    with_state(|s| s.exercise())
+}
+
+pub fn medicate() -> bool {
+    with_state(|s| s.medicate())
+}
+
+// ---------------------------------------------------------------------------
+// Debug cheats — see engine::GameState's debug_* methods for what each does.
+// ---------------------------------------------------------------------------
+
+pub fn debug_force_overweight() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_force_overweight();
+    }
+}
+
+pub fn debug_force_diabetic() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_force_diabetic();
+    }
+}
+
+pub fn debug_clear_diabetes() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_clear_diabetes();
+    }
+}
+
+pub fn debug_skip_ticks(ticks: u32) {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_skip_ticks(ticks);
+    }
 }
 
 pub fn sleep() -> bool {

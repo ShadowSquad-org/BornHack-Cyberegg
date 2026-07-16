@@ -16,6 +16,7 @@
 
 pub mod blackhole;
 pub mod bornjeweled;
+pub mod debug_cheats;
 pub mod engine;
 pub mod input;
 pub mod lifecycle;
@@ -67,6 +68,9 @@ pub enum Toast {
     /// Triple Born close-out bonus.  The score earned is read from
     /// `TRIPLEBORN_BONUS_SCORE` and formatted at draw time.
     TripleBornBonus = 14,
+    Exercise = 15,
+    Medicate = 16,
+    DebugCheat = 17,
 }
 
 impl Toast {
@@ -86,6 +90,9 @@ impl Toast {
             12 => Self::StationRest,
             13 => Self::StationCooldown,
             14 => Self::TripleBornBonus,
+            15 => Self::Exercise,
+            16 => Self::Medicate,
+            17 => Self::DebugCheat,
             _ => Self::None,
         }
     }
@@ -108,6 +115,9 @@ impl Toast {
             // Dynamic — handled in the renderer.
             Toast::StationCooldown => "",
             Toast::TripleBornBonus => "",
+            Toast::Exercise => "-weight",
+            Toast::Medicate => "+medicated",
+            Toast::DebugCheat => "cheat applied",
         }
     }
 }
@@ -369,10 +379,10 @@ where
     // resolve them here from `assets/to-badge/`.
     #[cfg(feature = "simulator")]
     for slot in 0..engine::anim_files::MENU_ICON_COUNT {
-        let (row_kind, col) = if slot < 2 {
-            (Row::Top, slot)
-        } else {
-            (Row::Bottom, slot - 2)
+        let (row_kind, col) = match slot {
+            0 | 1 => (Row::Top, slot),
+            6 => (Row::Top, 2), // Exercise — added after slots 0-5 shipped.
+            _ => (Row::Bottom, slot - 2),
         };
         let cy = if matches!(row_kind, Row::Top) {
             TOP_CY
@@ -509,10 +519,10 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
         // soft (cell stays whatever the EPD was cleared to).
         let nav = nav::get_nav();
         for slot in 0..anim_files::MENU_ICON_COUNT {
-            let (top_row, col) = if slot < 2 {
-                (true, slot)
-            } else {
-                (false, slot - 2)
+            let (top_row, col) = match slot {
+                0 | 1 => (true, slot),
+                6 => (true, 2), // Exercise — added after slots 0-5 shipped.
+                _ => (false, slot - 2),
             };
             let cy = if top_row { TOP_CY } else { BOT_CY };
             let cx = ICON_CX[col as usize];
@@ -542,16 +552,21 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Relaxing => "RELAXING",
             DisplayAnim::Playing => "PLAYING",
             DisplayAnim::Sleeping => "SLEEPING",
+            DisplayAnim::Exercising => "EXERCISING",
+            DisplayAnim::Medicating => "MEDICATING",
             DisplayAnim::Leaving { .. } => "LEAVING",
+            DisplayAnim::DiabetesUntreated => "DIABETIC",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
             DisplayAnim::CriticalHungry => "CRIT:HUNGRY",
             DisplayAnim::CriticalDrained => "CRIT:DRAINED",
+            DisplayAnim::CriticalOverweight => "CRIT:WEIGHT",
             DisplayAnim::WarningSick => "WARN:SICK",
             DisplayAnim::WarningTired => "WARN:TIRED",
             DisplayAnim::WarningHungry => "WARN:HUNGRY",
             DisplayAnim::WarningDrained => "WARN:DRAINED",
             DisplayAnim::WarningMiserable => "WARN:MISER",
+            DisplayAnim::WarningOverweight => "WARN:WEIGHT",
             DisplayAnim::Happy => "HAPPY",
             DisplayAnim::Idle => "IDLE",
         };

@@ -45,6 +45,17 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::Gone => 0x12,
         DisplayAnim::Hibernating => 0x13,
         DisplayAnim::Hatching { .. } => 0x14,
+        // 0x15-0x1F are reserved by assets/to-badge/MANIFEST.TXT for
+        // planned-but-unbuilt features (ENV_FOOD_ITEM, ICON_HUNGER,
+        // UI_ATTENTION, PLACEHOLDER_NOT_IMPLEMENTED, ...) across one or
+        // more pets — picking IDs in that range collided with those
+        // reserved (if currently uncoded) slots. 0x20+ is confirmed free
+        // for every pet.
+        DisplayAnim::DiabetesUntreated => 0x20,
+        DisplayAnim::CriticalOverweight => 0x21,
+        DisplayAnim::WarningOverweight => 0x22,
+        DisplayAnim::Exercising => 0x23,
+        DisplayAnim::Medicating => 0x24,
     }
 }
 
@@ -85,7 +96,7 @@ pub fn start_screen_filename() -> [u8; 11] {
     *b"000000  PCX"
 }
 
-/// Six menu icons live under prefix `0x04`, one sequence per icon:
+/// Seven menu icons live under prefix `0x04`, one sequence per icon:
 ///
 /// | slot | sequence | name           | row, col   |
 /// |------|----------|----------------|------------|
@@ -95,13 +106,16 @@ pub fn start_screen_filename() -> [u8; 11] {
 /// |   3  | `0x03`   | `MENU_HEAL`    | bottom, 1  |
 /// |   4  | `0x04`   | `MENU_PLAY`    | bottom, 2  |
 /// |   5  | `0x05`   | `MENU_REST`    | bottom, 3  |
+/// |   6  | `0x06`   | `MENU_EXERCISE`| top, 2     |
 ///
 /// `selected` selects between frame 0 (normal, drawn over the white
 /// background) and frame 1 (selected — replaces the firmware-drawn
 /// black selection circle entirely).
 ///
 /// Menu icons moved from prefix `03` to `04` when the slug pet
-/// (`02xx`) and sponsors (`03xx`) shifted up.
+/// (`02xx`) and sponsors (`03xx`) shifted up. Slot 6 (Exercise) was
+/// added after slots 0-5 already shipped, so it keeps its own slot
+/// number rather than renumbering the existing five icons' art.
 pub fn menu_icon_filename(slot: u8, selected: bool) -> [u8; 11] {
     let aa = slot;
     let ff: u8 = if selected { 1 } else { 0 };
@@ -120,15 +134,19 @@ pub fn menu_icon_filename(slot: u8, selected: bool) -> [u8; 11] {
     ]
 }
 
-/// Number of menu-icon slots (top-row 2 + bottom-row 4).
-pub const MENU_ICON_COUNT: u8 = 6;
+/// Number of menu-icon slots (top-row 3 + bottom-row 4).
+pub const MENU_ICON_COUNT: u8 = 7;
 
-/// Map (row=Top, col 0..1) and (row=Bottom, col 0..3) to the
+/// Map (row=Top, col 0..2) and (row=Bottom, col 0..3) to the
 /// `slot` argument of [`menu_icon_filename`].  Returns `None` for
-/// the empty top-row cells (cols 2, 3).
+/// the empty top-row cell (col 3).
 pub fn menu_icon_slot(top_row: bool, col: u8) -> Option<u8> {
     if top_row {
-        if col < 2 { Some(col) } else { None }
+        match col {
+            0 | 1 => Some(col),
+            2 => Some(6), // Exercise — added after slots 0-5 shipped.
+            _ => None,
+        }
     } else if col < 4 {
         Some(2 + col)
     } else {

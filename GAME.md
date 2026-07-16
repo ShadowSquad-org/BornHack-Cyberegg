@@ -24,7 +24,7 @@ power, your pet will be right where you left it.
 
 ```text
  ┌───────────────────────────────────────┐
- │  [Stats] [Hibernate]                  │  top icon row
+ │  [Stats] [Hibernate] [Exercise]        │  top icon row
  ├───────────────────────────────────────┤
  │                                       │
  │            [pet / egg]                │  pet area (animation)
@@ -39,7 +39,7 @@ an icon. Press **Fire** to open the action menu for the selected icon.
 
 ## Stats
 
-Your pet has five stats displayed as percentage bars (lower is better for
+Your pet has six stats displayed as percentage bars (lower is better for
 you — 0% means the pet is perfectly content):
 
 | Stat          | What happens when it's high                                      | How to fix        |
@@ -49,26 +49,34 @@ you — 0% means the pet is perfectly content):
 | **Drained**   | Pet lacks inspiration                                            | Relax, mini-games |
 | **Sick**      | Pet's health deteriorates                                        | Give medicine     |
 | **Miserable** | Pet is unhappy; speeds up drained decay and sick-condition decay | Play              |
+| **Weight**    | Pet gets overweight; sustained overweight leads to diabetes      | Exercise          |
 
 Stats interact: if multiple stats are bad, the pet becomes miserable
 faster, and miserable makes everything else worse too. Keep on top of
 things before they spiral!
 
 Select the **Stats** icon (top-left) and choose "View stats" to see all
-five stat bars at once.
+six stat bars at once (labeled "Fit" for weight — 100% = lean, 0% =
+obese).
 
 ## Actions
 
-| Icon     | Options       | What it does                              |
-| -------- | ------------- | ----------------------------------------- |
-| **Feed** | Feed now      | Reduces hunger (and a bit of drained)     |
-| **Heal** | Give medicine | Reduces sick                              |
-| **Play** | Play now      | Zeroes miserable (costs some energy)      |
-|          | Tic Tac Toe   | Mini-game: draw/win to boost inspiration  |
-|          | Lights Out    | Mini-game: solve to boost inspiration     |
-|          | Play music    | Play a melody on the buzzer               |
-| **Rest** | Sleep         | Pet sleeps until rested (reduces tired)   |
-|          | Relax         | Reduces drained (costs some hunger)       |
+| Icon         | Options          | What it does                                                    |
+| ------------ | ---------------- | ---------------------------------------------------------------- |
+| **Feed**     | Salad            | Healthiest — less filling, barely any weight gain               |
+|              | Apple             | Baseline hunger relief and weight gain                          |
+|              | Burger           | Filling, but a real weight hit                                  |
+|              | Pizza            | Very filling — but the biggest weight gain short of dessert      |
+|              | Cake             | Barely touches hunger, big mood boost, worst weight gain by far |
+| **Heal**     | Give medicine    | Reduces sick                                                     |
+|              | Give medication  | Only shown once diabetic — suppresses the diabetes sick-penalty for a while |
+| **Play**     | Play now         | Zeroes miserable (costs some energy)                             |
+|              | Tic Tac Toe      | Mini-game: draw/win to boost inspiration                         |
+|              | Lights Out       | Mini-game: solve to boost inspiration                            |
+|              | Play music       | Play a melody on the buzzer                                      |
+| **Rest**     | Sleep            | Pet sleeps until rested (reduces tired)                          |
+|              | Relax            | Reduces drained (costs some hunger)                              |
+| **Exercise** | Exercise now     | Reduces weight (costs some hunger and tired, small drained bonus) |
 
 Each action has a **cooldown** — you'll see "(wait)" next to items that
 aren't ready yet. Actions are mutually exclusive: the pet can only do one
@@ -115,6 +123,23 @@ The **Play** menu also lets you play melodies through the badge's buzzer:
 
 Playing music does **not** use the play action cooldown.
 
+## Weight & Diabetes
+
+Weight is a slow, multi-day stat — it isn't something you need to manage
+hour-to-hour like hunger. It drifts up gradually over time, and *what*
+you feed matters a lot: Salad barely moves it, Apple is the baseline,
+Burger and Pizza add real weight, and Cake is the worst offender by far
+(great mood boost, terrible for the waistline). Use the **Exercise** icon
+(top row) whenever you notice the Fit bar dropping to bring weight back
+down.
+
+If weight stays overweight (Fit below ~40%) for a sustained period —
+several days of neglecting exercise — your pet develops **type 2
+diabetes**. This is permanent: there's no cure, only management. Once
+diabetic, "Give medication" appears as a new option under the **Heal**
+icon. Skipping medication for too long makes sick decay faster; a dose
+protects the pet for a while before it needs another.
+
 ## Hibernate
 
 If you need to put the badge away for a while, select the **Hibernate**
@@ -159,8 +184,9 @@ One game tick = 10 seconds.
 | **Hunger**    | ~20 hours        | Time only                                       | Feed action                     |
 | **Tired**     | ~13 hours        | Time only                                       | Sleep (tiered recovery)         |
 | **Drained**   | Interval-based   | Activity; interval shortens 90→30 ticks when miserable ≥ 80 % | Relax action, sleep, mini-games |
-| **Sick**      | ~7.6 days (base) | Time + condition decay when other stats are bad | Heal action                     |
+| **Sick**      | ~7.6 days (base) | Time + condition decay when other stats are bad; extra penalty while diabetic and unmedicated | Heal / medicate action |
 | **Miserable** | Interval-based   | Multiple stats above 60%                        | Play action (zeroes it)         |
+| **Weight**    | Very slow (days) | Time (tiny passive rate) + a little extra on each Feed | Exercise action           |
 
 Stats interact through feedback loops: a bad miserable accelerates the
 drained interval and the sick condition rate, bad hunger/tired/drained
@@ -196,6 +222,8 @@ floor drops to 0 again and Play's reset works as before.
 | **Relax** | 2 ticks      | 24 ticks | Reduces drained (costs hunger)                                         |
 | **Play**  | 4 ticks      | 48 ticks | Resets miserable down to the active floor (costs hunger/tired/drained) |
 | **Sleep** | Until rested | —        | Tiered tired recovery, drained recovery                                |
+| **Exercise** | 3 ticks   | 36 ticks | Reduces weight (costs hunger/tired, small drained relief)              |
+| **Medicate** | 2 ticks   | 2-3 hours | Diabetic only — suppresses the diabetes sick-penalty until it lapses  |
 
 Actions are mutually exclusive. During an action and its cooldown, the
 corresponding stat's decay is suppressed.
@@ -214,6 +242,28 @@ maxed, the faster the pet leaves:
 
 If you reduce the maxed stats back to zero, the countdown resets and the
 pet returns to the Active phase.
+
+## Debug Cheats
+
+For testing the weight/diabetes arc without waiting several real days,
+there's a hidden cheat menu: from the main game screen (no modal or
+mini-game open), press **Up, Up, Down, Down, Left, Right, Left, Right,
+Fire** — a Konami-code-style sequence adapted to this badge's button
+set. A mistimed press just resets the tracker; arrow presses still move
+the nav cursor normally while you're attempting it.
+
+Opens a **Debug** menu with:
+
+- **Force overweight** — pushes weight just over the 60% trigger
+- **Trigger diabetes** — flips the pet diabetic immediately, skipping
+  the multi-day onset timer
+- **Clear diabetes** — resets diabetic status and overweight progress,
+  so the arc can be re-tested without starting a new pet
+- **Skip 1 hour** / **Skip 1 day** — fast-forwards the engine, useful
+  for any time-based mechanic, not just this one
+
+This is a developer tool, not part of normal play — no cooldowns, no
+gating beyond having an active pet.
 
 ## Pet Naming
 
