@@ -1,9 +1,3 @@
-[submodule "meshcore"]
-	path = vendor/meshcore
-	url = https://codeberg.org/Ranzbak/meshcore-aegg-rust.git
 [submodule "vendor/ssd1675"]
 	path = vendor/ssd1675
 	url = https://codeberg.org/Ranzbak/ssd1675.git
-[submodule "vendor/meshcore-companion"]
-	path = vendor/meshcore-companion
-	url = https://codeberg.org/Ranzbak/meshcore-companion-aegg-rust.git

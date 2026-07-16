@@ -1229,6 +1229,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "meshcore"
 version = "0.1.0"
+source = "git+https://codeberg.org/Ranzbak/meshcore-aegg-rust.git?rev=8171d0048229a89723cc039f1506116c91b92a28#8171d0048229a89723cc039f1506116c91b92a28"
 dependencies = [
  "aes",
  "ed25519-compact",
@@ -1240,6 +1241,7 @@ dependencies = [
 [[package]]
 name = "meshcore-companion"
 version = "0.1.0"
+source = "git+https://codeberg.org/Ranzbak/meshcore-companion-aegg-rust.git?rev=e526ab313af3367b30f67755450679408c2de23a#e526ab313af3367b30f67755450679408c2de23a"
 dependencies = [
  "heapless 0.9.3",
 ]
