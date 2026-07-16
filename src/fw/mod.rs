@@ -23,7 +23,6 @@ pub mod nfct;
 /// Game-only: it reads `crate::game` pet-registry types.
 #[cfg(feature = "game")]
 pub mod pets_cfg;
-pub mod sponsors;
 pub mod storage;
 pub mod temperature;
 
