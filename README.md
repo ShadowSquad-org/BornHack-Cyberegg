@@ -56,12 +56,60 @@ See [GAME.md](GAME.md) for full player-facing rules.
   and ~64 KB of PCX assets) to free up on-badge storage for the features
   above.
 
+### Corrections vs upstream
+
+Beyond new features, this fork has also fixed a number of real bugs —
+some in the BornPets code added here, others in shared firmware paths
+this fork inherited from upstream. Anyone comparing behavior against
+upstream should know about these:
+
+- **Duplicate mesh-packet delivery inflating Friends/Battle counts** —
+  the `GrpData` payload type had no duplicate-suppression (unlike
+  `GrpTxt` chat messages), so a beacon or battle result reaching a badge
+  via more than one mesh path got processed once per path.
+- **Misleading "+drunk" toast on non-alcoholic drinks** — Water/Cola
+  always showed the drunk-gain toast even though they never actually
+  raise `drunk`.
+- **In-progress action lost on reboot** — the save format's action byte
+  was only decoded for 4 of 9 possible actions; a reboot mid-Exercise/
+  Medicate/Ozempic/Drink/Rehab silently discarded it.
+- **`friend_boost()` integer overflow** — meeting a brand-new mesh friend
+  computed `STAT_MAX() * 2` in `u16` space, which overflows (panics in
+  debug builds, silently halves the boost in release).
+- **Diabetic/alcoholic pets could skip the Leaving warning entirely** —
+  the engine's "time until next boundary" estimate ignored the extra
+  sick-growth from untreated diabetes/alcoholism, so a long fast-forward
+  (including real elapsed time, not just the debug Skip-a-day cheat)
+  could jump a neglected pet straight from Active to Gone.
+- **FAT12 reserved cluster values treated as valid** — a corrupted FAT
+  chain entry of `0x001` (or `0xFF0`–`0xFF7`) aliased onto a real
+  cluster's address instead of being flagged as corrupt, risking silent
+  wrong-file reads from the on-badge USB storage.
+- **BornJeweled committed no-op swaps** — swapping two gems that formed
+  no match still spent one of the player's 30 moves instead of reverting,
+  as standard match-3 rules require.
+- **Mesh contact store had no locking around multi-step flash writes** —
+  two tasks adding/updating a contact concurrently (an auto-add from a
+  mesh advert vs. an add from the phone app) could race and silently
+  drop a contact or corrupt the stored count.
+- **Pending mesh request tags never expired** — if a peer never replied
+  to an admin-status/binary/telemetry/discovery request, the tag used to
+  match its response stayed valid indefinitely, leaving it eligible to
+  be coincidentally matched by unrelated later traffic.
+- **USB-MSC always erased the whole 4 KB sector before rewriting it** —
+  even when the new data only needed to clear bits already stored, risking
+  all 8 logical blocks in that sector on a power loss mid-write, not just
+  the one block actually being written.
+- A handful of smaller UI bugs: the Stats bar-graph view didn't block
+  Up/Down from silently moving the menu cursor underneath it, a long
+  cheat-menu label plus its cooldown suffix could overflow its display
+  buffer, and the wake-scheduler's cooldown list was missing Battle's.
+
 ### Full changelog
 
 [FEATURES.html](FEATURES.html) has a dated, detailed changelog of every
-change in this fork, including mesh protocol details and a couple of
-real bugs found and fixed along the way (duplicate mesh-packet delivery
-inflating Friends/Battle counts, in particular).
+change in this fork, including mesh protocol details and the full
+writeup of each fix above.
 
 ---
 

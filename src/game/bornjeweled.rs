@@ -318,10 +318,15 @@ fn fire() {
         || ((a / BOARD_W == b / BOARD_W) && (a as i32 - b as i32).abs() == 1);
     if adj {
         do_swap(a, b);
-        let moves = MOVE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = run_cascade();
-        if moves >= MOVES_LIMIT {
-            RESULT.store(RESULT_GAME_OVER, Ordering::Relaxed);
+        if run_cascade() == 0 {
+            // No match: standard match-3 rules revert a no-op swap instead
+            // of spending one of the player's limited moves on it.
+            do_swap(a, b);
+        } else {
+            let moves = MOVE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if moves >= MOVES_LIMIT {
+                RESULT.store(RESULT_GAME_OVER, Ordering::Relaxed);
+            }
         }
     }
     SWAP_START.store(SWAP_NONE, Ordering::Relaxed);

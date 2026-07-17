@@ -42,6 +42,23 @@
 //! |   6    |   2   | _(pad)_    |                                    |
 
 use crate::fw::kv;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
+
+/// Serializes the read-modify-write mutation methods below.
+///
+/// `ContactStore::new()` hands out cheap, independent handles with no
+/// shared state, and each mutation does several separately-awaited flash
+/// reads/writes (scan for a slot, read the incumbent, update indices,
+/// write the slot, write meta). Two tasks calling e.g. `add_or_update`
+/// concurrently — the MeshCore RX path auto-adding a contact from an
+/// advert, and the BLE companion task adding one from the phone — can
+/// interleave at any `.await` in that sequence: both could pick the same
+/// destination slot before either writes, silently dropping one contact
+/// and leaving its index entry dangling, or racing `meta.count` so the
+/// stored count drifts from reality. This lock makes each mutation atomic
+/// with respect to every other one.
+static MUTATION_LOCK: Mutex<CriticalSectionRawMutex, ()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -1007,6 +1024,7 @@ impl ContactStore {
         pub_key: &[u8; 32],
         timestamp: u32,
     ) -> Result<bool, kv::KvError> {
+        let _guard = MUTATION_LOCK.lock().await;
         let Some(slot) = self.index_lookup(pub_key).await else {
             return Ok(false);
         };
@@ -1045,6 +1063,7 @@ impl ContactStore {
         out_path_len: u8,
         out_path: &[u8; MAX_PATH_SIZE],
     ) -> Result<bool, kv::KvError> {
+        let _guard = MUTATION_LOCK.lock().await;
         let Some(slot) = self.index_lookup(pub_key).await else {
             return Ok(false);
         };
@@ -1075,6 +1094,7 @@ impl ContactStore {
         pub_key: &[u8; 32],
         favorite: bool,
     ) -> Result<bool, kv::KvError> {
+        let _guard = MUTATION_LOCK.lock().await;
         let Some(slot) = self.index_lookup(pub_key).await else {
             return Ok(false);
         };
@@ -1130,6 +1150,7 @@ impl ContactStore {
     ///
     /// The entire scan is a single pass over all slots.
     pub async fn add_or_update(&self, contact: &Contact) -> Result<AddResult, kv::KvError> {
+        let _guard = MUTATION_LOCK.lock().await;
         // --- Update path: contact already known via index ---
         if let Some(slot) = self.index_lookup(&contact.pub_key).await {
             let mut cbuf = [0u8; CONTACT_SIZE];
@@ -1278,6 +1299,7 @@ impl ContactStore {
     /// can be reused.  Returns `true` if the contact was found and deleted,
     /// `false` if no contact with that key exists.
     pub async fn delete(&self, pub_key: &[u8; 32]) -> Result<bool, kv::KvError> {
+        let _guard = MUTATION_LOCK.lock().await;
         // Look up the slot via the index.
         let Some(idx) = self.index_lookup(pub_key).await else {
             return Ok(false);

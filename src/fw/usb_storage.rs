@@ -72,8 +72,9 @@ impl BlockDevice for FatBlockDevice {
 
         let addr = flash::FAT_OFFSET + lba * 512;
 
-        // NOR flash requires erase before write.  We erase the containing
-        // 4 KiB sector, read-modify-write the 512-byte block within it.
+        // NOR flash program can only clear bits (1→0); setting a bit back to
+        // 1 requires an erase first. We read the containing 4 KiB sector to
+        // check which case this is.
         let sector_addr = addr & !(flash::PAGE_SIZE as u32 - 1);
         let offset_in_sector = (addr - sector_addr) as usize;
 
@@ -81,6 +82,24 @@ impl BlockDevice for FatBlockDevice {
         flash::read(sector_addr, &mut sector_buf)
             .await
             .map_err(|_| ())?;
+
+        let old_block = &sector_buf[offset_in_sector..offset_in_sector + 512];
+        let needs_erase = buf
+            .iter()
+            .zip(old_block)
+            .any(|(&new, &old)| new & !old != 0);
+
+        if !needs_erase {
+            // Every bit this write wants set is already set on flash — program
+            // directly over just this 512-byte block, no erase needed. Beyond
+            // saving an erase cycle, this also narrows the power-loss window:
+            // a cut mid-write can only leave *this* block partially
+            // programmed, unlike the erase-then-rewrite path below, where
+            // power loss between the erase and the write wipes all 8 logical
+            // blocks sharing the sector — not just the one being written.
+            return flash::write(addr, buf).await.map_err(|_| ());
+        }
+
         sector_buf[offset_in_sector..offset_in_sector + 512].copy_from_slice(buf);
         flash::erase(sector_addr).await.map_err(|_| ())?;
         flash::write(sector_addr, &sector_buf).await.map_err(|_| ())

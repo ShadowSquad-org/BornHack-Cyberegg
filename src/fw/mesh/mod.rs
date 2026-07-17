@@ -543,28 +543,81 @@ pub static PENDING_ACK: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<P
 // Pending request tags
 // ---------------------------------------------------------------------------
 
-pub static PENDING_DISCOVERY_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
-    Mutex::new(core::cell::Cell::new(None));
+/// How long a tag set by a `send_*_request` stays eligible to match an
+/// incoming response. If the peer never replies (offline, dropped packet,
+/// out of range) nothing else ever clears the tag — without this timeout it
+/// would sit there indefinitely, and some later, entirely unrelated
+/// Response/Path packet whose echoed tag/timestamp happens to coincide would
+/// get silently misrouted into this request's result channel instead of
+/// being handled as its own (or ignored). 30s comfortably covers a real
+/// mesh round-trip (several hops of LoRa airtime + processing) while still
+/// bounding how long a stale tag can misfire.
+const PENDING_REQUEST_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_secs(30);
+
+/// A single in-flight request tag, timestamped so it can expire.
+///
+/// `set()` right before TX, `take_if_match()` on every candidate response —
+/// it clears itself either when consumed by a real match or once it's past
+/// [`PENDING_REQUEST_TIMEOUT`], so a reply that never arrives can't leave a
+/// tag around to be coincidentally matched much later by unrelated traffic.
+pub struct PendingTag(Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<(u32, embassy_time::Instant)>>>);
+
+impl PendingTag {
+    pub const fn new() -> Self {
+        Self(Mutex::new(core::cell::Cell::new(None)))
+    }
+
+    /// Record a new in-flight request tag, timestamped now.
+    pub fn set(&self, tag: u32) {
+        self.0
+            .lock(|cell| cell.set(Some((tag, embassy_time::Instant::now()))));
+    }
+
+    /// Clear unconditionally (e.g. immediate TX failure — no response will
+    /// ever come for a request that was never sent).
+    pub fn clear(&self) {
+        self.0.lock(|cell| cell.set(None));
+    }
+
+    /// If a pending tag equals `candidate` and hasn't timed out, consume it
+    /// (clearing the slot) and return `true`. A value match against an
+    /// already-expired entry is treated as a non-match — and still clears
+    /// the stale entry, since its real request is long dead either way.
+    pub fn take_if_match(&self, candidate: u32) -> bool {
+        self.0.lock(|cell| match cell.get() {
+            Some((tag, sent_at)) if tag == candidate => {
+                cell.set(None);
+                sent_at.elapsed() <= PENDING_REQUEST_TIMEOUT
+            }
+            _ => false,
+        })
+    }
+}
+
+impl Default for PendingTag {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub static PENDING_DISCOVERY_TAG: PendingTag = PendingTag::new();
 
 pub static PENDING_STATUS_PUBKEY: Mutex<
     CriticalSectionRawMutex,
     core::cell::Cell<Option<[u8; ::meshcore::PUB_KEY_SIZE]>>,
 > = Mutex::new(core::cell::Cell::new(None));
 
-pub static PENDING_TELEM_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
-    Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_TELEM_TAG: PendingTag = PendingTag::new();
 
 /// Tag of the in-flight `REQ_TYPE_GET_STATUS` request. The repeater echoes
 /// this value as the first 4 bytes of its `PAYLOAD_TYPE_RESPONSE` plaintext,
 /// and we match it here to route the parsed `RepeaterStats` to the result
 /// channel.
-pub static PENDING_ADMIN_STATUS_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
-    Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_ADMIN_STATUS_TAG: PendingTag = PendingTag::new();
 
 /// Tag of the in-flight generic `CMD_SEND_BINARY_REQ` request. Tag-based
 /// routing delivers the echoed-timestamp response to `BINARY_RESULT_CHANNEL`.
-pub static PENDING_BINARY_REQ_TAG: Mutex<CriticalSectionRawMutex, core::cell::Cell<Option<u32>>> =
-    Mutex::new(core::cell::Cell::new(None));
+pub static PENDING_BINARY_REQ_TAG: PendingTag = PendingTag::new();
 
 /// Fast-path hint for the contact-scan loops in the receive handlers.
 ///

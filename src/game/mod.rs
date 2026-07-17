@@ -76,6 +76,7 @@ pub enum Toast {
     Exercise = 15,
     Medicate = 16,
     DebugCheat = 17,
+    /// Drank something alcoholic (Beer/Wine/Whiskey) — raises `drunk`.
     Drink = 18,
     Rehab = 19,
     NewFriend = 20,
@@ -84,6 +85,10 @@ pub enum Toast {
     /// challenge and it resolved in our favor — see `game::battle`.
     BattleWon = 22,
     BattleLost = 23,
+    /// Drank something non-alcoholic (Water/Cola) — never touches
+    /// `drunk`, unlike `Drink`. Kept as its own variant so the toast
+    /// after picking Water/Cola doesn't misleadingly say "+drunk".
+    Refreshed = 24,
 }
 
 impl Toast {
@@ -112,6 +117,7 @@ impl Toast {
             21 => Self::FriendReunion,
             22 => Self::BattleWon,
             23 => Self::BattleLost,
+            24 => Self::Refreshed,
             _ => Self::None,
         }
     }
@@ -143,6 +149,7 @@ impl Toast {
             Toast::FriendReunion => "+happy",
             Toast::BattleWon => "won a battle!",
             Toast::BattleLost => "lost a battle",
+            Toast::Refreshed => "-drained",
         }
     }
 }

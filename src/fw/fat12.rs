@@ -271,9 +271,15 @@ async fn next_cluster(params: &FatParams, cluster: u16) -> Result<Option<u16>, F
         u16::from_le_bytes(pair) >> 4
     };
 
-    // 0xFF8..=0xFFF = end of chain, 0x000 = free, 0xFF7 = bad sector.
+    // 0xFF8..=0xFFF = end of chain, 0x000 = free. 0x001 and 0xFF0..=0xFF7 are
+    // reserved/bad-sector markers and must never be followed as a real
+    // cluster pointer — cluster_addr()'s `- 2` would otherwise alias 0x001
+    // onto cluster 2's data (silently returning the wrong file's bytes
+    // instead of surfacing the corrupt chain).
     if val >= 0xFF8 || val == 0 {
         Ok(None)
+    } else if val < 2 || (0xFF0..=0xFF7).contains(&val) {
+        Err(FatError::Corrupt)
     } else {
         Ok(Some(val))
     }
