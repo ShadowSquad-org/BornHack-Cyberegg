@@ -987,29 +987,25 @@ async fn wait_display_event(
         #[cfg(not(feature = "game"))]
         let sprite_tick = core::future::pending::<()>();
 
-        // Compose button + TOAST_SIGNAL + TOKEN_SIGNAL into a single
-        // wakeup so the outer select shape stays unchanged.  All three
-        // result in a non-sprite (`return false`) wake-up.  TOKEN_SIGNAL
-        // fires when a new token value arrives over MeshCore or NFC —
-        // joining it here lets the token screen redraw immediately
-        // rather than waiting for the next minute tick.
+        // Compose button + TOAST_SIGNAL into a single wakeup so the outer
+        // select shape stays unchanged.  Both result in a non-sprite
+        // (`return false`) wake-up.
         let button_or_toast = async {
-            use embassy_futures::select::{Either4, select4};
+            use embassy_futures::select::{Either3, select3};
             // KBD_REDRAW fires when the I2C keyboard injects keys.  It is NOT
             // gated on `allow_sprite`, so a keystroke interrupts an in-flight
             // e-paper refresh and forces an immediate redraw with the new text
             // — the same way `button_rcvr.changed()` (joystick / buttons) does.
             // That mid-refresh interrupt is what makes typing feel responsive
             // instead of blocking on each ~500 ms whole-panel refresh.
-            match select4(
+            match select3(
                 button_rcvr.changed(),
                 bornhack_aegg::TOAST_SIGNAL.wait(),
-                bornhack_aegg::TOKEN_SIGNAL.wait(),
                 KBD_REDRAW.wait(),
             )
             .await
             {
-                Either4::First(_) | Either4::Second(_) | Either4::Third(_) | Either4::Fourth(_) => {}
+                Either3::First(_) | Either3::Second(_) | Either3::Third(_) => {}
             }
         };
 
@@ -1038,9 +1034,6 @@ async fn wait_display_event(
                     if active_screen == SCREEN_MAIN => return false,
                 Either::First(Either3::Third(_))                    // minute tick
                     if active_screen == SCREEN_WATCH => return false,
-                // Token screen holds its list until reboot (no expiry
-                // timer) and redraws only on TOKEN_SIGNAL / button input,
-                // so it is deliberately off the minute-tick redraw list.
                 // Calendar is intentionally left off the minute-tick
                 // redraw list.  The fast-LUT refresh path doesn't update
                 // the red plane (today highlight, event dots, day-view
