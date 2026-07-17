@@ -384,6 +384,9 @@ Opens a **Debug** menu with:
 - **Trigger alcoholism** — flips the pet alcoholic immediately, skipping
   the multi-day onset timer
 - **Clear alcoholism** — resets alcoholic status and drunk progress
+- **Reset battle record** — zeroes your own wins/losses and every
+  known friend's cached head-to-head record, useful for verifying
+  battle-sync fixes without waiting for old data to age out
 - **Skip 1 hour** / **Skip 1 day** — fast-forwards the engine, useful
   for any time-based mechanic, not just this one
 

@@ -38,6 +38,13 @@ impl DrinkKind {
         }
     }
 
+    /// Whether this drink raises `drunk` at all (Water/Cola never do —
+    /// see `multipliers()`). Used to pick an accurate post-drink toast
+    /// instead of always showing "+drunk".
+    pub fn is_alcoholic(self) -> bool {
+        !matches!(self, DrinkKind::Water | DrinkKind::Cola)
+    }
+
     /// (drunk_gain_pct, drained_relief_pct, weight_gain_pct) — applied
     /// as `base * pct / 100` against the DRINK_* thresholds.
     fn multipliers(self) -> (u32, u32, u32) {
@@ -63,5 +70,31 @@ impl DrinkKind {
     pub fn scale_weight_gain(self, base: u16) -> u16 {
         let (_, _, pct) = self.multipliers();
         ((base as u32 * pct) / 100).min(u16::MAX as u32) as u16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_water_and_cola_are_non_alcoholic() {
+        assert!(!DrinkKind::Water.is_alcoholic());
+        assert!(!DrinkKind::Cola.is_alcoholic());
+        assert!(DrinkKind::Beer.is_alcoholic());
+        assert!(DrinkKind::Wine.is_alcoholic());
+        assert!(DrinkKind::Whiskey.is_alcoholic());
+    }
+
+    #[test]
+    fn is_alcoholic_matches_zero_drunk_gain() {
+        for drink in DrinkKind::ALL {
+            let raises_drunk = drink.scale_drunk_gain(1000) > 0;
+            assert_eq!(
+                drink.is_alcoholic(),
+                raises_drunk,
+                "{drink:?}: is_alcoholic() disagrees with scale_drunk_gain()"
+            );
+        }
     }
 }

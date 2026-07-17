@@ -2370,10 +2370,10 @@ async fn send_telem_request(
     let mut frame = [0u8; MAX_TRANS_UNIT];
     match meshcore::packet::serialize(&msg, &mut frame) {
         Ok(len) => {
-            crate::PENDING_TELEM_TAG.lock(|cell| cell.set(Some(req.tag)));
+            crate::PENDING_TELEM_TAG.set(req.tag);
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_telem_req: TX failed: {:?}", e);
-                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
+                crate::PENDING_TELEM_TAG.clear();
             } else {
                 defmt::info!(
                     "Telem req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B)",
@@ -2541,10 +2541,10 @@ async fn send_admin_status_request(
     let mut frame = [0u8; MAX_TRANS_UNIT];
     match meshcore::packet::serialize(&msg, &mut frame) {
         Ok(len) => {
-            crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(Some(req.tag)));
+            crate::PENDING_ADMIN_STATUS_TAG.set(req.tag);
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_admin_status_req: TX failed: {:?}", e);
-                crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
+                crate::PENDING_ADMIN_STATUS_TAG.clear();
             } else {
                 defmt::info!(
                     "Admin status req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B) frame={=[u8]:02x}",
@@ -2669,10 +2669,10 @@ async fn send_binary_request(
     let mut frame = [0u8; MAX_TRANS_UNIT];
     match meshcore::packet::serialize(&msg, &mut frame) {
         Ok(len) => {
-            crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(Some(req.tag)));
+            crate::PENDING_BINARY_REQ_TAG.set(req.tag);
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_binary_req: TX failed: {:?}", e);
-                crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
+                crate::PENDING_BINARY_REQ_TAG.clear();
             } else {
                 defmt::info!(
                     "Binary req sent to {=[u8]:02x} tag={=u32:#010x} req_type={=u8:#04x} params={=usize}B ({=usize}B) frame={=[u8]:02x}",
@@ -2777,10 +2777,10 @@ async fn send_discovery_request(
     let mut frame = [0u8; MAX_TRANS_UNIT];
     match meshcore::packet::serialize(&msg, &mut frame) {
         Ok(len) => {
-            crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(Some(req.tag)));
+            crate::PENDING_DISCOVERY_TAG.set(req.tag);
             if let Err(e) = lora.send_message(&frame[..len]).await {
                 defmt::warn!("send_discovery_req: TX failed: {:?}", e);
-                crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
+                crate::PENDING_DISCOVERY_TAG.clear();
             } else {
                 defmt::info!(
                     "Discovery req sent to {=[u8]:02x} tag={=u32:#010x} ({=usize}B) [flood]",
@@ -3051,12 +3051,7 @@ async fn try_dispatch_response_by_pk(
     // that becomes dec.timestamp = ts, dec.flags = stats[0], dec.text =
     // stats[1..] (with trailing zero bytes stripped). We reassemble the full
     // 56-byte blob and parse it manually.
-    let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
-    if let Some(admin_tag) = pending_admin_status
-        && dec.timestamp == admin_tag
-    {
-        crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
-
+    if crate::PENDING_ADMIN_STATUS_TAG.take_if_match(dec.timestamp) {
         let mut stats = [0u8; 56];
         stats[0] = dec.flags;
         let tail_len = dec.text.len().min(55);
@@ -3090,12 +3085,8 @@ async fn try_dispatch_response_by_pk(
     // dec.text (rest, trailing zeros stripped). We reassemble the padded body
     // up to the AES block boundary so neighbours/ACL entries that happen to end
     // in zero bytes aren't truncated.
-    let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
-    if let Some(binary_tag) = pending_binary
-        && dec.timestamp == binary_tag
-    {
-        crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
-
+    if crate::PENDING_BINARY_REQ_TAG.take_if_match(dec.timestamp) {
+        let binary_tag = dec.timestamp;
         // msg.data is the raw ciphertext; length is a multiple of AES block size.
         // Body length = total plaintext - timestamp(4) = msg.data.len() - 4.
         let body_len = msg.data.len().saturating_sub(4);
@@ -3127,12 +3118,7 @@ async fn try_dispatch_response_by_pk(
     }
 
     // Pending telemetry request (tag-based match).
-    let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
-    if let Some(telem_tag) = pending_telem
-        && dec.timestamp == telem_tag
-    {
-        crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
-
+    if crate::PENDING_TELEM_TAG.take_if_match(dec.timestamp) {
         // CayenneLPP = flags_byte (= data[4]) followed by dec.text (= data[5..]).
         let mut lpp: heapless::Vec<u8, 176> = heapless::Vec::new();
         let _ = lpp.push(dec.flags);
@@ -3360,13 +3346,11 @@ async fn try_dispatch_path_by_pk(
     if dec.extra_type == 1 {
         // Pending admin status request (tag = extra[0..4]). Path-decrypted
         // extras preserve trailing zero bytes, so we can parse stats directly.
-        let pending_admin_status = crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.get());
-        if let (Some(admin_tag), true) = (pending_admin_status, dec.extra.len() >= 4) {
+        if dec.extra.len() >= 4 {
             let resp_tag =
                 u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-            if resp_tag == admin_tag {
-                crate::PENDING_ADMIN_STATUS_TAG.lock(|cell| cell.set(None));
-
+            if crate::PENDING_ADMIN_STATUS_TAG.take_if_match(resp_tag) {
+                let admin_tag = resp_tag;
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
                 pub_key.copy_from_slice(sender_pk);
 
@@ -3399,13 +3383,11 @@ async fn try_dispatch_path_by_pk(
 
         // Pending generic binary request (CMD_SEND_BINARY_REQ). Path-decrypted
         // extras preserve trailing zero bytes, so we can forward the body verbatim.
-        let pending_binary = crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.get());
-        if let (Some(binary_tag), true) = (pending_binary, dec.extra.len() >= 4) {
+        if dec.extra.len() >= 4 {
             let resp_tag =
                 u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-            if resp_tag == binary_tag {
-                crate::PENDING_BINARY_REQ_TAG.lock(|cell| cell.set(None));
-
+            if crate::PENDING_BINARY_REQ_TAG.take_if_match(resp_tag) {
+                let binary_tag = resp_tag;
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
                 pub_key.copy_from_slice(sender_pk);
 
@@ -3431,13 +3413,11 @@ async fn try_dispatch_path_by_pk(
         }
 
         // Pending telemetry request (tag = extra[0..4]). Body is CayenneLPP.
-        let pending_telem = crate::PENDING_TELEM_TAG.lock(|cell| cell.get());
-        if let (Some(telem_tag), true) = (pending_telem, dec.extra.len() >= 4) {
+        if dec.extra.len() >= 4 {
             let resp_tag =
                 u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-            if resp_tag == telem_tag {
-                crate::PENDING_TELEM_TAG.lock(|cell| cell.set(None));
-
+            if crate::PENDING_TELEM_TAG.take_if_match(resp_tag) {
+                let telem_tag = resp_tag;
                 let mut pub_key = [0u8; meshcore::PUB_KEY_SIZE];
                 pub_key.copy_from_slice(sender_pk);
 
@@ -3458,15 +3438,11 @@ async fn try_dispatch_path_by_pk(
         }
 
         // Pending discovery request (tag = extra[0..4]).
-        let pending_disc = crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.get());
-        if let Some(disc_tag) = pending_disc
-            && dec.extra.len() >= 4
-        {
+        if dec.extra.len() >= 4 {
             let resp_tag =
                 u32::from_le_bytes([dec.extra[0], dec.extra[1], dec.extra[2], dec.extra[3]]);
-            if resp_tag == disc_tag {
-                crate::PENDING_DISCOVERY_TAG.lock(|cell| cell.set(None));
-
+            if crate::PENDING_DISCOVERY_TAG.take_if_match(resp_tag) {
+                let disc_tag = resp_tag;
                 let mut out_path: heapless::Vec<u8, { meshcore::MAX_PATH_SIZE }> =
                     heapless::Vec::new();
                 let _ = out_path.extend_from_slice(&dec.path);

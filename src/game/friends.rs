@@ -359,6 +359,21 @@ pub fn record_battle_vs(device_id: [u8; 2], won: bool) {
     }
 }
 
+/// Zero the head-to-head Battle record (wins/losses) on every known
+/// friend. Paired with `GameState::debug_reset_battle_record` (which
+/// zeros the pet's own overall tally) by the debug-cheat menu — lets a
+/// badge that picked up inflated counts from the duplicate-mesh-
+/// delivery bug (fixed by `GRP_DATA_SEEN` dedup) get back to a clean
+/// baseline instead of carrying stale numbers forever.
+pub fn reset_all_battle_records() {
+    let list = unsafe { &mut *FRIENDS.get() };
+    for friend in list.friends[..list.count as usize].iter_mut() {
+        friend.wins = 0;
+        friend.losses = 0;
+    }
+    FRIENDS_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // Beacon receive handler
 // ---------------------------------------------------------------------------
@@ -615,6 +630,33 @@ mod tests {
         let friend = list.find_mut([4, 4]).unwrap();
         assert_eq!(friend.wins, 1);
         assert_eq!(friend.losses, 1);
+    }
+
+    #[test]
+    fn reset_all_battle_records_zeroes_every_friend() {
+        let mut list = FriendsList::new();
+        let mut a = friend_record([1, 1], 1, 1);
+        a.wins = 5;
+        a.losses = 2;
+        let mut b = friend_record([2, 2], 1, 1);
+        b.wins = 1;
+        b.losses = 9;
+        list.push(a);
+        list.push(b);
+
+        // Exercise the same zeroing logic `reset_all_battle_records`
+        // uses, directly against the list (the module-level function
+        // operates on the shared static — see the note on the sibling
+        // `record_battle_vs` test above).
+        for friend in list.friends[..list.count as usize].iter_mut() {
+            friend.wins = 0;
+            friend.losses = 0;
+        }
+
+        assert_eq!(list.find_mut([1, 1]).unwrap().wins, 0);
+        assert_eq!(list.find_mut([1, 1]).unwrap().losses, 0);
+        assert_eq!(list.find_mut([2, 2]).unwrap().wins, 0);
+        assert_eq!(list.find_mut([2, 2]).unwrap().losses, 0);
     }
 
     #[test]

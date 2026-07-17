@@ -120,6 +120,7 @@ impl ModalKind {
                 Item::CheatForceDrunk,
                 Item::CheatForceAlcoholic,
                 Item::CheatClearAlcoholism,
+                Item::CheatResetBattleRecord,
                 Item::CheatSkipHour,
                 Item::CheatSkipDay,
                 Item::Cancel,
@@ -190,6 +191,7 @@ enum Item {
     CheatForceDrunk,
     CheatForceAlcoholic,
     CheatClearAlcoholism,
+    CheatResetBattleRecord,
     DrinkChoice(super::engine::DrinkKind),
     Rehab,
     Sleep,
@@ -231,6 +233,7 @@ impl Item {
             Self::CheatForceDrunk => "Force drunk",
             Self::CheatForceAlcoholic => "Trigger alcoholism",
             Self::CheatClearAlcoholism => "Clear alcoholism",
+            Self::CheatResetBattleRecord => "Reset battle record",
             Self::DrinkChoice(drink) => drink.label(),
             Self::Rehab => "Rehab",
             Self::Sleep => "Sleep",
@@ -288,7 +291,8 @@ impl Item {
             | Self::CheatSkipDay
             | Self::CheatForceDrunk
             | Self::CheatForceAlcoholic
-            | Self::CheatClearAlcoholism => true,
+            | Self::CheatClearAlcoholism
+            | Self::CheatResetBattleRecord => true,
             Self::DrinkChoice(_) => stats.can_drink,
             Self::Rehab => stats.can_rehab,
             Self::Battle => stats.can_battle,
@@ -435,9 +439,18 @@ impl Item {
                 super::show_toast(super::Toast::DebugCheat);
                 close();
             }
+            Self::CheatResetBattleRecord => {
+                lifecycle::debug_reset_battle_record();
+                super::show_toast(super::Toast::DebugCheat);
+                close();
+            }
             Self::DrinkChoice(drink) => {
                 lifecycle::drink(drink);
-                super::show_toast(super::Toast::Drink);
+                super::show_toast(if drink.is_alcoholic() {
+                    super::Toast::Drink
+                } else {
+                    super::Toast::Refreshed
+                });
                 close();
             }
             Self::Rehab => {
@@ -577,6 +590,13 @@ pub fn is_open() -> bool {
 // ─────────────────────────────────────────────────────────
 
 pub fn cursor_up() {
+    // While the stats-bar sub-view is showing there's no item list on
+    // screen to move a cursor through — ignore Up/Down so it doesn't
+    // silently advance MODAL_POS underneath the bars (surfacing as a
+    // seemingly random row when the view is later dismissed back to the list).
+    if STATS_VIEW.load(Ordering::Relaxed) {
+        return;
+    }
     let pos = MODAL_POS.load(Ordering::Relaxed);
     if pos > 0 {
         MODAL_POS.store(pos - 1, Ordering::Relaxed);
@@ -584,6 +604,9 @@ pub fn cursor_up() {
 }
 
 pub fn cursor_down() {
+    if STATS_VIEW.load(Ordering::Relaxed) {
+        return;
+    }
     let kind = ModalKind::from_u8(MODAL_KIND.load(Ordering::Relaxed));
     let len = kind.items().len() as u8;
     let pos = MODAL_POS.load(Ordering::Relaxed);
@@ -726,7 +749,12 @@ where
         // Build display text: append " (Ns)" with the remaining
         // cooldown seconds when the item has a known cooldown source,
         // " (wait)" for anything else that's just disabled.
-        let mut display_label: heapless::String<24> = heapless::String::new();
+        // 32 covers the longest label ("Reset battle record"/"Trigger
+        // alcoholism", 19 bytes) plus the longest cooldown suffix
+        // (" (65535s)", 9 bytes) with room to spare — heapless::push_str
+        // silently no-ops past capacity instead of truncating, so this
+        // must comfortably exceed the worst case, not just the common one.
+        let mut display_label: heapless::String<32> = heapless::String::new();
         let _ = display_label.push_str(item.label());
         if !available {
             let suffix = stats

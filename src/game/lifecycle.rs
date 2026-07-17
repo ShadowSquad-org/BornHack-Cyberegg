@@ -571,6 +571,17 @@ pub fn debug_clear_alcoholism() {
     }
 }
 
+/// Reset both halves of the mesh Battle record — this pet's own
+/// lifetime tally and every known friend's head-to-head numbers — back
+/// to zero. See `GameState::debug_reset_battle_record`.
+pub fn debug_reset_battle_record() {
+    let state = unsafe { (*GAME.get()).as_mut() };
+    if let Some(s) = state {
+        s.debug_reset_battle_record();
+    }
+    super::friends::reset_all_battle_records();
+}
+
 pub fn sleep() -> bool {
     let started = with_state(|s| s.sleep());
     if started {

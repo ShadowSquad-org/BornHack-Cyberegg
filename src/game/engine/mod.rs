@@ -107,6 +107,44 @@ pub enum Action {
     Rehab,
 }
 
+impl Action {
+    /// Persisted discriminant. Explicit (not a bare `as u8` cast) and
+    /// paired 1:1 with `from_u8` right below so adding a new variant is
+    /// a visible two-place edit — `to_bytes`/`from_bytes` previously
+    /// used an `as u8` cast on the write side but a hand-written match
+    /// on the read side that only covered the first 4 variants,
+    /// silently discarding an in-progress Exercise/Medicate/Ozempic/
+    /// Drink/Rehab action on every reboot that landed mid-action.
+    fn to_u8(self) -> u8 {
+        match self {
+            Action::Feed => 0,
+            Action::Heal => 1,
+            Action::Relax => 2,
+            Action::Play => 3,
+            Action::Exercise => 4,
+            Action::Medicate => 5,
+            Action::Ozempic => 6,
+            Action::Drink => 7,
+            Action::Rehab => 8,
+        }
+    }
+
+    fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Action::Feed),
+            1 => Some(Action::Heal),
+            2 => Some(Action::Relax),
+            3 => Some(Action::Play),
+            4 => Some(Action::Exercise),
+            5 => Some(Action::Medicate),
+            6 => Some(Action::Ozempic),
+            7 => Some(Action::Drink),
+            8 => Some(Action::Rehab),
+            _ => None,
+        }
+    }
+}
+
 /// Mini-games each track their own post-win cooldown so winning one
 /// doesn't lock the player out of the others — nudges variety.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -634,9 +672,20 @@ impl GameState {
             DRAINED_AMOUNT(),
             drained_interval,
         ));
-        // sick rate is complex (base + condition); use base rate as lower bound.
-        let sick_rate_approx = SICK_RATE()
-            + if sick_condition_active(self) {
+        // Sick rate mirrors apply_awake_decay/apply_sleep_decay's sick term
+        // exactly (base + condition + diabetes + alcoholism, suppressed
+        // during Heal) so the boundary estimate can't undershoot the real
+        // rate. Omitting diabetes/alcoholism here previously made this an
+        // underestimate for diabetic-unmedicated/alcoholic-untreated pets,
+        // which oversized the piecewise segment and let check_leaving()
+        // charge a whole oversized segment as "maxed" in one shot — enough
+        // to jump straight past the Leaving phase into Gone on a long
+        // fast-forward (e.g. the Skip 1 day cheat).
+        let sick_rate_approx = if self.cooldown_heal > 0 || self.active_action == Some(Action::Heal)
+        {
+            0
+        } else {
+            let condition = if sick_condition_active(self) {
                 if miserable_high {
                     SICK_CONDITION_MISERABLE_RATE()
                 } else {
@@ -645,6 +694,35 @@ impl GameState {
             } else {
                 0
             };
+            let diabetes = if self.diabetic
+                && self.cooldown_medicate == 0
+                && self.active_action != Some(Action::Medicate)
+            {
+                if miserable_high {
+                    DIABETES_SICK_MISERABLE_RATE()
+                } else {
+                    DIABETES_SICK_RATE()
+                }
+            } else {
+                0
+            };
+            let alcoholism = if self.alcoholic
+                && self.cooldown_rehab == 0
+                && self.active_action != Some(Action::Rehab)
+            {
+                if miserable_high {
+                    ALCOHOLIC_SICK_MISERABLE_RATE()
+                } else {
+                    ALCOHOLIC_SICK_RATE()
+                }
+            } else {
+                0
+            };
+            SICK_RATE()
+                .saturating_add(condition)
+                .saturating_add(diabetes)
+                .saturating_add(alcoholism)
+        };
         m = m.min(ticks_up(self.sick, t60, sick_rate_approx));
 
         // ── Boundaries that change sick condition decay ──
@@ -1341,6 +1419,18 @@ impl GameState {
         self.alcoholic = false;
         self.drunk_ticks = 0;
     }
+
+    /// Zero this pet's lifetime mesh Battle record and cooldown. Paired
+    /// with `crate::game::friends::reset_all_battle_records` (which
+    /// zeros the per-friend head-to-head numbers) by the
+    /// `lifecycle::debug_reset_battle_record` wrapper — a badge that
+    /// picked up inflated counts from a duplicate-delivery bug before it
+    /// was fixed has no other way to get back to a clean baseline.
+    pub fn debug_reset_battle_record(&mut self) {
+        self.wins = 0;
+        self.losses = 0;
+        self.cooldown_battle = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,6 +1487,9 @@ impl GameState {
         }
         if self.cooldown_rehab > 0 {
             earliest = earliest.min(now + self.cooldown_rehab as u32);
+        }
+        if self.cooldown_battle > 0 {
+            earliest = earliest.min(now + self.cooldown_battle as u32);
         }
 
         // Stat boundary crossings.
@@ -1719,8 +1812,10 @@ impl GameState {
     /// naturally re-clamped by `apply_miserable_floor()` on the next tick
     /// if the pet is Leaving/critical, the same way `Play` already works.
     pub fn friend_boost(&mut self, big: bool) {
+        // STAT_MAX() is 65535, so `* 2` overflows u16 before the `/ 5` can
+        // bring it back down — widen to u32 for the multiply.
         let amount = if big {
-            STAT_MAX() * 2 / 5 // ~40%
+            (STAT_MAX() as u32 * 2 / 5) as u16 // ~40%
         } else {
             STAT_MAX() / 10 // ~10%
         };
@@ -1797,7 +1892,7 @@ impl GameState {
         w32!(self.leaving_countdown);
         w16!(self.generation);
         // Action state (10 bytes).
-        w8!(self.active_action.map_or(0xFF, |a| a as u8));
+        w8!(self.active_action.map_or(0xFF, Action::to_u8));
         w8!(self.action_ticks_remaining);
         w16!(self.cooldown_feed);
         w16!(self.cooldown_heal);
@@ -1891,13 +1986,7 @@ impl GameState {
         let leaving_countdown = r32!();
         let generation = r16!();
         let action_byte = r8!();
-        let active_action = match action_byte {
-            0 => Some(Action::Feed),
-            1 => Some(Action::Heal),
-            2 => Some(Action::Relax),
-            3 => Some(Action::Play),
-            _ => None,
-        };
+        let active_action = Action::from_u8(action_byte);
         let action_ticks_remaining = r8!();
         let cooldown_feed = r16!();
         let cooldown_heal = r16!();
@@ -2190,6 +2279,52 @@ mod overweight_diabetes_tests {
         assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
     }
 
+    /// Every `Action` variant must round-trip through the persisted byte
+    /// exactly. Regression test for a real bug: `to_bytes` wrote the
+    /// discriminant via a bare `as u8` cast, but `from_bytes`'s
+    /// hand-written match only recognized Feed/Heal/Relax/Play (0-3) —
+    /// Exercise/Medicate/Ozempic/Drink/Rehab (4-8) all silently came
+    /// back as `None`, discarding an in-progress action (and, for
+    /// Drink specifically, dropping `active_drink` context too, so the
+    /// remainder of the action would have applied under the wrong
+    /// drink's multipliers had the match not dropped the action
+    /// entirely first).
+    #[test]
+    fn every_action_round_trips_through_save() {
+        let all = [
+            Action::Feed,
+            Action::Heal,
+            Action::Relax,
+            Action::Play,
+            Action::Exercise,
+            Action::Medicate,
+            Action::Ozempic,
+            Action::Drink,
+            Action::Rehab,
+        ];
+        for action in all {
+            let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
+            state.active_action = Some(action);
+            state.action_ticks_remaining = 3;
+
+            let bytes = state.to_bytes();
+            let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
+            assert_eq!(
+                restored.active_action,
+                Some(action),
+                "{action:?} did not survive a save/restore round-trip"
+            );
+            assert_eq!(restored.action_ticks_remaining, 3);
+        }
+
+        // No action in progress still round-trips as None, not some
+        // stray Some(_).
+        let mut state = GameState::new_egg(6, PetKind::Bartholomeus);
+        state.active_action = None;
+        let restored = GameState::from_bytes(&state.to_bytes()).unwrap();
+        assert_eq!(restored.active_action, None);
+    }
+
     /// `record_battle` bumps the right counter and always sets the
     /// cooldown, regardless of win/loss.
     #[test]
@@ -2345,5 +2480,90 @@ mod overweight_diabetes_tests {
         state.drunk = 0;
         state.check_alcoholism(10);
         assert!(state.alcoholic, "alcoholism should be permanent");
+    }
+
+    /// `friend_boost(true)` used to compute `STAT_MAX() * 2 / 5` with the
+    /// multiply in u16 space — since STAT_MAX() is 65535, that overflows
+    /// before the divide ever runs (panics under overflow-checks, silently
+    /// wraps to roughly half the intended ~40% otherwise). Meeting a brand
+    /// new mesh friend must not panic and must actually apply a bigger cut
+    /// than the "already-known friend" ~10% boost.
+    #[test]
+    fn friend_boost_does_not_overflow_and_scales_with_big() {
+        let mut state = GameState::new_egg(17, PetKind::Bartholomeus);
+        state.miserable = STAT_MAX();
+
+        state.friend_boost(true);
+        let after_big = state.miserable;
+        assert!(
+            after_big < STAT_MAX(),
+            "a big friend boost should reduce miserable"
+        );
+
+        state.miserable = STAT_MAX();
+        state.friend_boost(false);
+        let after_small = state.miserable;
+
+        let big_drop = STAT_MAX() - after_big;
+        let small_drop = STAT_MAX() - after_small;
+        assert!(
+            big_drop > small_drop,
+            "meeting a new friend (big={big_drop}) should relieve more misery than an already-known one (small={small_drop})"
+        );
+    }
+
+    /// `ticks_to_next_rate_change()`'s sick-boundary estimate used to omit
+    /// the diabetes/alcoholism penalty entirely, treating a diabetic pet's
+    /// `sick` growth as if it were only the ~1/tick base rate. That made
+    /// the piecewise update loop size a segment far larger than reality,
+    /// so `check_leaving()` could charge the whole oversized segment as
+    /// "maxed" in one shot — enough to jump straight from Active to Gone
+    /// on a long fast-forward (e.g. Skip 1 day), skipping Leaving
+    /// entirely. With the penalty folded in, the boundary should be close
+    /// (tens to low hundreds of ticks), not tens of thousands.
+    #[test]
+    fn sick_rate_estimate_includes_diabetes_penalty() {
+        let mut state = GameState::new_egg(23, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.diabetic = true;
+        state.cooldown_medicate = 0;
+        state.active_action = None;
+        state.cooldown_heal = 0;
+        state.sick = 0;
+        // Keep every other boundary far away so sick's own crossing is the
+        // one this test's estimate is exercising.
+        state.hunger = 0;
+        state.tired = 0;
+        state.drained = 0;
+        state.cooldown_feed = 0;
+        state.cooldown_relax = 0;
+        state.cooldown_play = 0;
+
+        let ticks = state.ticks_to_next_rate_change();
+        assert!(
+            ticks < 10_000,
+            "sick boundary estimate ({ticks} ticks) should reflect the diabetes penalty rate, not just the ~1/tick base rate"
+        );
+    }
+
+    /// `next_wake_tick()` must account for every cooldown that can gate an
+    /// action, including Battle's — otherwise the scheduler never wakes the
+    /// CPU specifically for a battle cooldown expiring (it self-corrects on
+    /// the next unrelated wake, but the omission was a real gap relative to
+    /// every other action cooldown this function tracks).
+    #[test]
+    fn next_wake_tick_accounts_for_battle_cooldown() {
+        let mut state = GameState::new_egg(19, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.last_update_tick = 1000;
+        state.cooldown_battle = 42;
+
+        // No other cooldown/action pending shorter than this, so the
+        // battle cooldown should be the binding constraint.
+        let wake = state.next_wake_tick();
+        assert!(
+            wake <= 1000 + 42,
+            "next_wake_tick ({wake}) should wake no later than the battle cooldown expiring at 1042"
+        );
     }
 }
