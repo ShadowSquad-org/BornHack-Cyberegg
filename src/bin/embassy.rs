@@ -1176,7 +1176,11 @@ async fn pet_beacon_ticker_task() {
                     bornhack_aegg::fw::mesh::TxChannelData {
                         channel_idx: bornhack_aegg::fw::mesh::channels::SHDW_SLOT,
                         data_type: friends::PET_BEACON_TYPE,
-                        path_len: bornhack_aegg::fw::mesh::contacts::OUT_PATH_UNKNOWN,
+                        // Zero-hop (RouteType::Direct, empty path): friends are
+                        // discovered only among badges in direct radio range, and
+                        // beacons never flood the wider mesh. Not OUT_PATH_UNKNOWN
+                        // (0xFF), which would select flood routing.
+                        path_len: 0,
                         path: heapless::Vec::new(),
                         data,
                     },
