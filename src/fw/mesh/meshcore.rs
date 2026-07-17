@@ -58,6 +58,16 @@ fn update_cached_channels(loaded: &heapless::Vec<LoadedChannel, { channels::NUM_
         let mut list = cell.borrow_mut();
         list.clear();
         for ch in loaded {
+            // Hide the private "SHDW" game channel from the on-screen channel
+            // browser — it carries only BornPets friend beacons / battle
+            // results (see `crate::game::friends` / `crate::game::battle`),
+            // never human chat, so it has no place in the user-facing list.
+            // It stays fully live for TX/RX: crypto uses `loaded_channels`,
+            // not this UI mirror. Same "present but not shown" idea as the
+            // `#blinkme` easter-egg channel, which is never a stored slot.
+            if ch.slot_idx == channels::SHDW_SLOT {
+                continue;
+            }
             let name_str = core::str::from_utf8(&ch.name)
                 .unwrap_or("?")
                 .trim_end_matches('\0');
