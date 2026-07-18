@@ -50,6 +50,8 @@ pub enum DisplayAnim {
     Ozempic,
     /// Rehab / sobering-up treatment.
     Rehab,
+    /// "Only pets" work/hobby action.
+    OnlyPets,
 
     // ── Group 3: leaving danger ─────────────────────────────────────
     /// Pet is about to leave.  `maxed_count` (1–4) indicates urgency.
@@ -116,6 +118,7 @@ impl GameState {
                 Action::Ozempic => DisplayAnim::Ozempic,
                 Action::Rehab => DisplayAnim::Rehab,
                 Action::Drink => DisplayAnim::Drinking,
+                Action::OnlyPets => DisplayAnim::OnlyPets,
             };
         }
         if self.is_sleeping {

@@ -56,6 +56,7 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::Drinking => 0x25,
         DisplayAnim::Ozempic => 0x26,
         DisplayAnim::Rehab => 0x27,
+        DisplayAnim::OnlyPets => 0x28,
     }
 }
 

@@ -88,6 +88,15 @@ pub enum Phase {
     Gone,
 }
 
+/// HEX earned by the "Only pets" hobby (non-broke) branch.
+pub const ONLYPETS_HOBBY_REWARD: u32 = 20;
+/// HEX earned for winning a mini-game.
+pub const MINIGAME_HEX_REWARD: u32 = 15;
+/// HEX earned for winning a mesh Battle.
+pub const BATTLE_HEX_REWARD: u32 = 20;
+/// Happiness change per Play / Only-pets completion = 30% of STAT_MAX (65535).
+pub const HAPPINESS_STEP: u16 = 19660;
+
 /// Active user action (mutually exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "embassy-base", derive(defmt::Format))]
@@ -105,6 +114,9 @@ pub enum Action {
     /// Treatment for alcoholism — gated on `alcoholic`, mirrors
     /// `Medicate`'s relationship to diabetic.
     Rehab,
+    /// "Only pets" work/hobby action — earns HEX. Only reachable when
+    /// `money_enabled`. See `GameState::only_pets`.
+    OnlyPets,
 }
 
 impl Action {
@@ -126,6 +138,7 @@ impl Action {
             Action::Ozempic => 6,
             Action::Drink => 7,
             Action::Rehab => 8,
+            Action::OnlyPets => 9,
         }
     }
 
@@ -140,6 +153,7 @@ impl Action {
             6 => Some(Action::Ozempic),
             7 => Some(Action::Drink),
             8 => Some(Action::Rehab),
+            9 => Some(Action::OnlyPets),
             _ => None,
         }
     }
@@ -252,6 +266,10 @@ pub struct GameState {
     pub cooldown_blackhole: u16,
     pub cooldown_nim: u16,
     pub cooldown_bornjeweled: u16,
+    /// Cooldown after completing "Only pets". Transient (not persisted),
+    /// same policy as the mini-game cooldowns above — rebooting mid-cooldown
+    /// just makes the action available again a little early.
+    pub cooldown_onlypets: u16,
 
     // Interval counters (track ticks since last interval fire).
     drained_interval_counter: u32,
@@ -361,6 +379,7 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_bornjeweled: 0,
+            cooldown_onlypets: 0,
 
             drained_interval_counter: 0,
             miserable_interval_counter: 0,
@@ -877,6 +896,7 @@ impl GameState {
                     self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Rehab => {}
+                Action::OnlyPets => {}
             }
 
             if self.action_ticks_remaining == 0 {
@@ -894,6 +914,15 @@ impl GameState {
                     Action::Ozempic => self.cooldown_ozempic = OZEMPIC_COOLDOWN(),
                     Action::Drink => self.cooldown_drink = DRINK_COOLDOWN(),
                     Action::Rehab => self.cooldown_rehab = REHAB_COOLDOWN(),
+                    Action::OnlyPets => {
+                        // Stage 2: non-broke "hobby" branch only — earn HEX + happiness up.
+                        // (broke branch = +100 HEX / happiness down lands in Stage 5.)
+                        if self.money_enabled {
+                            self.add_money(ONLYPETS_HOBBY_REWARD);
+                        }
+                        self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
+                        self.cooldown_onlypets = PLAY_COOLDOWN();
+                    }
                 }
                 self.active_action = None;
                 self.active_food = None;
@@ -921,6 +950,7 @@ impl GameState {
         self.cooldown_blackhole = self.cooldown_blackhole.saturating_sub(d);
         self.cooldown_nim = self.cooldown_nim.saturating_sub(d);
         self.cooldown_bornjeweled = self.cooldown_bornjeweled.saturating_sub(d);
+        self.cooldown_onlypets = self.cooldown_onlypets.saturating_sub(d);
     }
 
     /// Apply stat decay while awake for `delta` ticks.
@@ -1212,6 +1242,19 @@ impl GameState {
         true
     }
 
+    /// Send the pet to "Only pets" to earn HEX. Timed action like Play.
+    pub fn only_pets(&mut self) -> bool {
+        if !self.is_alive() || self.is_sleeping {
+            return false;
+        }
+        if self.active_action.is_some() || self.cooldown_onlypets > 0 {
+            return false;
+        }
+        self.active_action = Some(Action::OnlyPets);
+        self.action_ticks_remaining = PLAY_DURATION();
+        true
+    }
+
     /// Start the exercise action — the primary relief valve for `weight`.
     pub fn exercise(&mut self) -> bool {
         if !self.is_alive() || self.is_sleeping {
@@ -1351,6 +1394,9 @@ impl GameState {
             MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN(),
             MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN(),
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
+        }
+        if self.money_enabled {
+            self.add_money(MINIGAME_HEX_REWARD);
         }
     }
 
@@ -1825,6 +1871,9 @@ impl GameState {
             self.losses = self.losses.saturating_add(1);
         }
         self.cooldown_battle = BATTLE_COOLDOWN();
+        if won && self.money_enabled {
+            self.add_money(BATTLE_HEX_REWARD);
+        }
     }
 
     /// Credit `delta` HEX, saturating at `u32::MAX`. Immediately flags the
@@ -2088,6 +2137,8 @@ impl GameState {
             cooldown_blackhole: 0,
             cooldown_nim: 0,
             cooldown_bornjeweled: 0,
+            // Not persisted — see the field doc on `cooldown_onlypets`.
+            cooldown_onlypets: 0,
             drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,
@@ -2388,6 +2439,7 @@ mod overweight_diabetes_tests {
             Action::Ozempic,
             Action::Drink,
             Action::Rehab,
+            Action::OnlyPets,
         ];
         for action in all {
             let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
@@ -2652,5 +2704,82 @@ mod overweight_diabetes_tests {
             wake <= 1000 + 42,
             "next_wake_tick ({wake}) should wake no later than the battle cooldown expiring at 1042"
         );
+    }
+
+    // ── Stage 2: "user can make money" ──────────────────────────────────
+
+    /// Winning a mini-game credits `MINIGAME_HEX_REWARD` HEX when money
+    /// mode is on, and grants nothing (but still runs the existing
+    /// cooldown/hunger-cost path) when money mode is off.
+    #[test]
+    fn minigame_win_awards_hex_when_money_enabled() {
+        let mut state = GameState::new_egg(30, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money = 0;
+        state.money_enabled = true;
+
+        state.award_inspiration(MiniGame::Nim);
+        assert_eq!(state.money, MINIGAME_HEX_REWARD);
+
+        state.money = 0;
+        state.money_enabled = false;
+        state.cooldown_nim = 0;
+        state.award_inspiration(MiniGame::Nim);
+        assert_eq!(state.money, 0, "money off should grant no HEX");
+    }
+
+    /// A mesh Battle win credits `BATTLE_HEX_REWARD` HEX; a loss grants
+    /// nothing. With money mode off, even a win grants nothing.
+    #[test]
+    fn battle_win_awards_hex_winner_only() {
+        let mut state = GameState::new_egg(31, PetKind::Bartholomeus);
+        state.money_enabled = true;
+        state.money = 0;
+
+        state.record_battle(true);
+        assert_eq!(state.money, BATTLE_HEX_REWARD);
+
+        state.money = 0;
+        state.record_battle(false);
+        assert_eq!(state.money, 0, "a loss should not award HEX");
+
+        state.money = 0;
+        state.money_enabled = false;
+        state.record_battle(true);
+        assert_eq!(state.money, 0, "money off should grant no HEX even on a win");
+    }
+
+    /// `only_pets()` starts the action like `play()`; a second call while
+    /// the action is still in progress is rejected.
+    #[test]
+    fn only_pets_starts_action() {
+        let mut state = GameState::new_egg(32, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+
+        assert!(state.only_pets());
+        assert_eq!(state.active_action, Some(Action::OnlyPets));
+        assert!(!state.only_pets(), "action already in progress");
+    }
+
+    /// Driving the Only-pets action to completion (via the same public
+    /// `update()` path real time would use — mirrors how Feed/Drink
+    /// completion is exercised elsewhere in this test module) awards the
+    /// Stage-2 "hobby" branch: +HEX and a happiness bump, plus its own
+    /// cooldown.
+    #[test]
+    fn only_pets_hobby_completion_awards_hex_and_happiness() {
+        let mut state = GameState::new_egg(33, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 0;
+        state.miserable = STAT_MAX();
+
+        assert!(state.only_pets());
+        state.update(state.last_update_tick + PLAY_DURATION() as u32);
+
+        assert_eq!(state.money, ONLYPETS_HOBBY_REWARD);
+        assert_eq!(state.miserable, STAT_MAX() - HAPPINESS_STEP);
+        assert!(state.cooldown_onlypets > 0);
+        assert_eq!(state.active_action, None);
     }
 }
