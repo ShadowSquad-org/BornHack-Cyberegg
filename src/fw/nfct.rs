@@ -444,8 +444,8 @@ fn handle_signed(session: &mut Session, body: &[u8], out: &mut HVec<u8, 256>) {
 /// transient — everything else you write becomes your persisted broadcast
 /// profile.** So a URL tag, a vCard business card, a Wi-Fi record, or any
 /// other NDEF message sticks (stored verbatim and re-broadcast until
-/// changed), while a pushed token just lands on the token screen and the
-/// broadcast reverts after [`REVERT_SECS`].
+/// changed), while a pushed token never persists — the buffer just
+/// reverts after [`REVERT_SECS`].
 ///
 /// Special case: a Well-Known text record `set:<url>` is rewritten into a
 /// clean URI record before persisting, so you can set a vanity URL from a

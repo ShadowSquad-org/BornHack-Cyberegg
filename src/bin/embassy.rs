@@ -1066,8 +1066,6 @@ async fn wait_display_event(
                 if active_screen == SCREEN_MAIN => return false,
             Either::First(Either3::Third(_))                    // minute tick
                 if active_screen == SCREEN_WATCH => return false,
-            // Token screen holds its list until reboot — off the
-            // minute-tick redraw list (see mesh branch above).
             // Calendar deliberately ignores the minute tick — see the
             // matching arm in the mesh-feature branch above for why.
             _ => {}

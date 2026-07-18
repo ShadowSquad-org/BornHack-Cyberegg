@@ -273,7 +273,7 @@ becomes your persisted broadcast profile.**
 
 | Written record | Effect | Persistence |
 |---|---|---|
-| Text `token:<v>` | Collected into the token screen | Transient |
+| Text `token:<v>` | Reverts without persisting (no on-badge display) | Transient |
 | Station phrase (opt-in `nfc-plaintext-station`) | Applies the buff | Transient |
 | Text `set:<url>` | Rebuilt into a clean URI record, then broadcast | **Persisted** to KV (`nfc/profile`) |
 | A URL / URI record | Broadcast verbatim | **Persisted** |
