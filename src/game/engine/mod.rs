@@ -88,38 +88,38 @@ pub enum Phase {
     Gone,
 }
 
-/// HEX earned by the "Only pets" hobby (non-broke) branch.
+/// HAX earned by the "Only pets" hobby (non-broke) branch.
 pub const ONLYPETS_HOBBY_REWARD: u32 = 20;
-/// HEX earned for winning a mini-game.
-pub const MINIGAME_HEX_REWARD: u32 = 15;
-/// HEX earned for winning a mesh Battle.
-pub const BATTLE_HEX_REWARD: u32 = 20;
+/// HAX earned for winning a mini-game.
+pub const MINIGAME_HAX_REWARD: u32 = 15;
+/// HAX earned for winning a mesh Battle.
+pub const BATTLE_HAX_REWARD: u32 = 20;
 /// Happiness change per Play / Only-pets completion = 30% of STAT_MAX (65535).
 pub const HAPPINESS_STEP: u16 = 19660;
-/// HEX cost of the basic Play action.
-pub const PLAY_HEX_COST: u32 = 10;
-/// HEX cost of a drug dose (Ozempic / Medicate / Rehab).
-pub const DRUG_HEX_COST: u32 = 15;
-/// HEX cost of an Aspirine (the Heal action).
-pub const ASPIRINE_HEX_COST: u32 = 1;
+/// HAX cost of the basic Play action.
+pub const PLAY_HAX_COST: u32 = 10;
+/// HAX cost of a drug dose (Ozempic / Medicate / Rehab).
+pub const DRUG_HAX_COST: u32 = 15;
+/// HAX cost of an Aspirine (the Heal action).
+pub const ASPIRINE_HAX_COST: u32 = 1;
 /// Hard-mode multiplier on medication (Insulin / Ozempic).
 pub const MEDICATION_HARD_MULT: u32 = 3;
 /// Hard-mode multiplier on Rehab.
 pub const REHAB_HARD_MULT: u32 = 5;
 
-/// HEX cost of a medication dose (Insulin / Ozempic) in the current mode.
+/// HAX cost of a medication dose (Insulin / Ozempic) in the current mode.
 pub fn medication_price(hard: bool) -> u32 {
-    DRUG_HEX_COST * if hard { MEDICATION_HARD_MULT } else { 1 }
+    DRUG_HAX_COST * if hard { MEDICATION_HARD_MULT } else { 1 }
 }
 
-/// HEX cost of Rehab in the current mode.
+/// HAX cost of Rehab in the current mode.
 pub fn rehab_price(hard: bool) -> u32 {
-    DRUG_HEX_COST * if hard { REHAB_HARD_MULT } else { 1 }
+    DRUG_HAX_COST * if hard { REHAB_HARD_MULT } else { 1 }
 }
 /// Below this balance the pet is "broke" — Only-pets forces the low-pay,
 /// happiness-draining work branch instead of the hobby branch.
 pub const BROKE_THRESHOLD: u32 = 20;
-/// HEX from the Only-pets BROKE (forced-work) branch.
+/// HAX from the Only-pets BROKE (forced-work) branch.
 pub const ONLYPETS_BROKE_REWARD: u32 = 100;
 
 /// Active user action (mutually exclusive).
@@ -138,7 +138,7 @@ pub enum Action {
     /// Treatment for alcoholism — gated on `alcoholic`, mirrors
     /// `Medicate`'s relationship to diabetic.
     Rehab,
-    /// "Only pets" work/hobby action — earns HEX. Only reachable when
+    /// "Only pets" work/hobby action — earns HAX. Only reachable when
     /// `money_enabled`. See `GameState::only_pets`.
     OnlyPets,
 }
@@ -246,11 +246,11 @@ pub struct GameState {
     pub wins: u16,
     pub losses: u16,
 
-    // HEX currency — belongs to the current pet, resets with a new egg.
-    /// HEX balance. New egg starts at 100.
+    // HAX currency — belongs to the current pet, resets with a new egg.
+    /// HAX balance. New egg starts at 100.
     pub money: u32,
     /// Chosen at pet creation, persisted. When `false` the whole money
-    /// layer is inert: no HEX display, no prices, no rewards.
+    /// layer is inert: no HAX display, no prices, no rewards.
     pub money_enabled: bool,
     /// Chosen at pet creation, persisted. Only meaningful when
     /// `money_enabled` is true (hard mode implies money is on) — changes
@@ -1171,7 +1171,7 @@ impl GameState {
         }
         // Affordability gate: reject the action outright when unaffordable
         // rather than letting it proceed for free (see `spend_money`).
-        if self.money_enabled && !self.spend_money(food.hex_price(self.hard_mode)) {
+        if self.money_enabled && !self.spend_money(food.hax_price(self.hard_mode)) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Feed);
@@ -1188,8 +1188,8 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_heal > 0 {
             return false;
         }
-        // Aspirine costs HEX; Stage 5 affordability gate (reject if broke).
-        if self.money_enabled && !self.spend_money(ASPIRINE_HEX_COST) {
+        // Aspirine costs HAX; Stage 5 affordability gate (reject if broke).
+        if self.money_enabled && !self.spend_money(ASPIRINE_HAX_COST) {
             return false;
         }
         self.active_action = Some(Action::Heal);
@@ -1206,7 +1206,7 @@ impl GameState {
             return false;
         }
         // Affordability gate — see the comment in `feed()`.
-        if self.money_enabled && !self.spend_money(PLAY_HEX_COST) {
+        if self.money_enabled && !self.spend_money(PLAY_HAX_COST) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Play);
@@ -1214,7 +1214,7 @@ impl GameState {
         true
     }
 
-    /// Send the pet to "Only pets" to earn HEX. Timed action like Play.
+    /// Send the pet to "Only pets" to earn HAX. Timed action like Play.
     pub fn only_pets(&mut self) -> bool {
         if !self.is_alive() || self.is_sleeping {
             return false;
@@ -1292,7 +1292,7 @@ impl GameState {
             return false;
         }
         // Affordability gate — see the comment in `feed()`.
-        if self.money_enabled && !self.spend_money(drink.hex_price()) {
+        if self.money_enabled && !self.spend_money(drink.hax_price()) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Drink);
@@ -1363,7 +1363,7 @@ impl GameState {
         true
     }
 
-    /// Award the mini-game win reward: HEX (when `money_enabled`) plus the
+    /// Award the mini-game win reward: HAX (when `money_enabled`) plus the
     /// per-game cooldown.  Starts only that game's cooldown so other
     /// mini-games stay available — encourages variety.  Also bumps
     /// hunger: playing burns calories.
@@ -1380,7 +1380,7 @@ impl GameState {
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
         if self.money_enabled {
-            self.add_money(MINIGAME_HEX_REWARD);
+            self.add_money(MINIGAME_HAX_REWARD);
         }
     }
 
@@ -1635,10 +1635,10 @@ pub struct PetStats {
     pub wins: u16,
     pub losses: u16,
 
-    /// Current HEX balance. Only meaningful (displayed/priced) when
+    /// Current HAX balance. Only meaningful (displayed/priced) when
     /// `money_enabled`.
     pub money: u32,
-    /// Whether the money layer is active for this pet — gates HEX display,
+    /// Whether the money layer is active for this pet — gates HAX display,
     /// pricing, and menu affordability checks.
     pub money_enabled: bool,
     /// Whether Hard (US) prices are in effect. Only meaningful when
@@ -1859,21 +1859,21 @@ impl GameState {
         }
         self.cooldown_battle = BATTLE_COOLDOWN();
         if won && self.money_enabled {
-            self.add_money(BATTLE_HEX_REWARD);
+            self.add_money(BATTLE_HAX_REWARD);
         }
     }
 
-    /// Credit `delta` HEX, saturating at `u32::MAX`. Immediately flags the
+    /// Credit `delta` HAX, saturating at `u32::MAX`. Immediately flags the
     /// state for save (see `request_save`) rather than waiting for the
     /// next 15-minute save interval — same immediate-persist pattern as
-    /// pet name / hibernate, since a HEX balance is worth protecting from
+    /// pet name / hibernate, since a HAX balance is worth protecting from
     /// an unlucky reboot right after being earned.
     pub fn add_money(&mut self, delta: u32) {
         self.money = self.money.saturating_add(delta);
         self.request_save();
     }
 
-    /// Debit `price` HEX if affordable. Returns `true` and flags the state
+    /// Debit `price` HAX if affordable. Returns `true` and flags the state
     /// for immediate save on success; returns `false` and leaves `money`
     /// unchanged (no save) if the balance is insufficient. Callers are
     /// expected to have already gated the action on `can_afford()` so this
@@ -1903,7 +1903,7 @@ impl GameState {
 /// the field layout below changes so an old-layout blob from a prior
 /// firmware fails the guard in `from_bytes` (→ clean fresh egg) instead
 /// of being silently reinterpreted with the new offsets. v1 was the
-/// original unversioned 96-byte layout; v2 adds this byte + HEX money.
+/// original unversioned 96-byte layout; v2 adds this byte + HAX money.
 pub const SAVE_FORMAT_VERSION: u8 = 2;
 
 /// Serialized size of GameState in bytes (1 version byte + 96 fields).
@@ -1993,7 +1993,7 @@ impl GameState {
         w16!(self.wins);
         w16!(self.losses);
         w16!(self.cooldown_battle);
-        // HEX money (5 bytes).
+        // HAX money (5 bytes).
         w32!(self.money);
         w8!(self.money_enabled as u8);
         // Hard mode (1 byte).
@@ -2383,10 +2383,10 @@ mod overweight_diabetes_tests {
         assert!(GameState::from_bytes(&wrong_ver).is_none());
     }
 
-    /// A fresh egg starts with the Stage-1 HEX default: 100 balance, money
+    /// A fresh egg starts with the Stage-1 HAX default: 100 balance, money
     /// mode enabled.
     #[test]
-    fn new_egg_starts_with_100_hex_and_money_enabled() {
+    fn new_egg_starts_with_100_hax_and_money_enabled() {
         let state = GameState::new_egg(1, PetKind::Bartholomeus);
         assert_eq!(state.money, 100);
         assert!(state.money_enabled);
@@ -2429,7 +2429,7 @@ mod overweight_diabetes_tests {
     }
 
     /// `can_afford` reports the exact threshold: affordable at the price,
-    /// not affordable one HEX above it.
+    /// not affordable one HAX above it.
     #[test]
     fn can_afford_reports_threshold() {
         let mut state = GameState::new_egg(5, PetKind::Bartholomeus);
@@ -2728,45 +2728,45 @@ mod overweight_diabetes_tests {
 
     // ── Stage 2: "user can make money" ──────────────────────────────────
 
-    /// Winning a mini-game credits `MINIGAME_HEX_REWARD` HEX when money
+    /// Winning a mini-game credits `MINIGAME_HAX_REWARD` HAX when money
     /// mode is on, and grants nothing (but still runs the existing
     /// cooldown/hunger-cost path) when money mode is off.
     #[test]
-    fn minigame_win_awards_hex_when_money_enabled() {
+    fn minigame_win_awards_hax_when_money_enabled() {
         let mut state = GameState::new_egg(30, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
         state.money = 0;
         state.money_enabled = true;
 
         state.award_inspiration(MiniGame::Nim);
-        assert_eq!(state.money, MINIGAME_HEX_REWARD);
+        assert_eq!(state.money, MINIGAME_HAX_REWARD);
 
         state.money = 0;
         state.money_enabled = false;
         state.cooldown_nim = 0;
         state.award_inspiration(MiniGame::Nim);
-        assert_eq!(state.money, 0, "money off should grant no HEX");
+        assert_eq!(state.money, 0, "money off should grant no HAX");
     }
 
-    /// A mesh Battle win credits `BATTLE_HEX_REWARD` HEX; a loss grants
+    /// A mesh Battle win credits `BATTLE_HAX_REWARD` HAX; a loss grants
     /// nothing. With money mode off, even a win grants nothing.
     #[test]
-    fn battle_win_awards_hex_winner_only() {
+    fn battle_win_awards_hax_winner_only() {
         let mut state = GameState::new_egg(31, PetKind::Bartholomeus);
         state.money_enabled = true;
         state.money = 0;
 
         state.record_battle(true);
-        assert_eq!(state.money, BATTLE_HEX_REWARD);
+        assert_eq!(state.money, BATTLE_HAX_REWARD);
 
         state.money = 0;
         state.record_battle(false);
-        assert_eq!(state.money, 0, "a loss should not award HEX");
+        assert_eq!(state.money, 0, "a loss should not award HAX");
 
         state.money = 0;
         state.money_enabled = false;
         state.record_battle(true);
-        assert_eq!(state.money, 0, "money off should grant no HEX even on a win");
+        assert_eq!(state.money, 0, "money off should grant no HAX even on a win");
     }
 
     /// `only_pets()` starts the action like `play()`; a second call while
@@ -2784,10 +2784,10 @@ mod overweight_diabetes_tests {
     /// Driving the Only-pets action to completion (via the same public
     /// `update()` path real time would use — mirrors how Feed/Drink
     /// completion is exercised elsewhere in this test module), starting
-    /// above `BROKE_THRESHOLD`, awards the "hobby" branch: +HEX and a
+    /// above `BROKE_THRESHOLD`, awards the "hobby" branch: +HAX and a
     /// happiness bump, plus its own cooldown.
     #[test]
-    fn only_pets_hobby_completion_awards_hex_and_happiness() {
+    fn only_pets_hobby_completion_awards_hax_and_happiness() {
         let mut state = GameState::new_egg(33, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
         state.money_enabled = true;
@@ -2826,7 +2826,7 @@ mod overweight_diabetes_tests {
     // ── Stage 3: "things cost money" ────────────────────────────────────
 
     /// Feeding charges by the food's health tier — healthy (Salad) costs
-    /// more than unhealthy (Burger), mirroring `FoodKind::hex_price`.
+    /// more than unhealthy (Burger), mirroring `FoodKind::hax_price`.
     #[test]
     fn feed_charges_by_food_health() {
         let mut state = GameState::new_egg(40, PetKind::Bartholomeus);
@@ -2835,7 +2835,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.feed(FoodKind::Salad));
-        assert_eq!(state.money, 85, "healthy food (Salad) should cost 15 HEX");
+        assert_eq!(state.money, 85, "healthy food (Salad) should cost 15 HAX");
 
         // Fresh egg so the cooldown from the first feed doesn't reject this one.
         let mut state = GameState::new_egg(41, PetKind::Bartholomeus);
@@ -2844,11 +2844,11 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.feed(FoodKind::Frikandel));
-        assert_eq!(state.money, 90, "unhealthy food (Frikandel) should cost 10 HEX");
+        assert_eq!(state.money, 90, "unhealthy food (Frikandel) should cost 10 HAX");
     }
 
     /// Drinking charges by the drink's health tier — healthy (Water) costs
-    /// more than unhealthy (Cola), mirroring `DrinkKind::hex_price`.
+    /// more than unhealthy (Cola), mirroring `DrinkKind::hax_price`.
     #[test]
     fn drink_charges_by_health() {
         let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
@@ -2857,7 +2857,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.drink(DrinkKind::Water));
-        assert_eq!(state.money, 85, "healthy drink (Water) should cost 15 HEX");
+        assert_eq!(state.money, 85, "healthy drink (Water) should cost 15 HAX");
 
         let mut state = GameState::new_egg(43, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
@@ -2865,10 +2865,10 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.drink(DrinkKind::Cola));
-        assert_eq!(state.money, 90, "unhealthy drink (Cola) should cost 10 HEX");
+        assert_eq!(state.money, 90, "unhealthy drink (Cola) should cost 10 HAX");
     }
 
-    /// The basic Play action costs a flat `PLAY_HEX_COST` (10 HEX).
+    /// The basic Play action costs a flat `PLAY_HAX_COST` (10 HAX).
     #[test]
     fn play_costs_10() {
         let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
@@ -2880,10 +2880,10 @@ mod overweight_diabetes_tests {
         assert_eq!(state.money, 90);
     }
 
-    /// Aspirine (the Heal action) costs a flat `ASPIRINE_HEX_COST` (1 HEX),
+    /// Aspirine (the Heal action) costs a flat `ASPIRINE_HAX_COST` (1 HAX),
     /// and is rejected when the pet can't afford it.
     #[test]
-    fn aspirine_costs_1_hex() {
+    fn aspirine_costs_1_hax() {
         let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
         state.money_enabled = true;
@@ -2891,7 +2891,7 @@ mod overweight_diabetes_tests {
         assert!(state.heal());
         assert_eq!(state.money, 99);
 
-        // Broke (0 HEX): heal is rejected, no charge, no action started.
+        // Broke (0 HAX): heal is rejected, no charge, no action started.
         let mut broke = GameState::new_egg(45, PetKind::Bartholomeus);
         broke.update(HATCHING_TICKS() as u32);
         broke.money_enabled = true;
@@ -2902,7 +2902,7 @@ mod overweight_diabetes_tests {
     }
 
     /// Each drug action (Ozempic, Medicate, Rehab) costs a flat
-    /// `DRUG_HEX_COST` (15 HEX). Medicate/Rehab are gated on
+    /// `DRUG_HAX_COST` (15 HAX). Medicate/Rehab are gated on
     /// diabetic/alcoholic respectively, so those flags are set first.
     #[test]
     fn drug_costs_15() {
@@ -2911,7 +2911,7 @@ mod overweight_diabetes_tests {
         state.money_enabled = true;
         state.money = 100;
         assert!(state.ozempic());
-        assert_eq!(state.money, 85, "ozempic should cost 15 HEX");
+        assert_eq!(state.money, 85, "ozempic should cost 15 HAX");
 
         let mut state = GameState::new_egg(46, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
@@ -2919,7 +2919,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
         state.diabetic = true;
         assert!(state.medicate());
-        assert_eq!(state.money, 85, "medicate should cost 15 HEX");
+        assert_eq!(state.money, 85, "medicate should cost 15 HAX");
 
         let mut state = GameState::new_egg(47, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
@@ -2927,7 +2927,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
         state.alcoholic = true;
         assert!(state.rehab());
-        assert_eq!(state.money, 85, "rehab should cost 15 HEX");
+        assert_eq!(state.money, 85, "rehab should cost 15 HAX");
     }
 
     /// With `money_enabled = false`, priced actions proceed but charge
@@ -3040,7 +3040,7 @@ mod overweight_diabetes_tests {
 
     // ── Hard (US) mode: pricier healthy food / medication / rehab ──────
 
-    /// In Hard mode, healthy food (Salad) costs 20 HEX instead of the
+    /// In Hard mode, healthy food (Salad) costs 20 HAX instead of the
     /// normal 15. Normal (non-hard) mode is unaffected — regression check.
     #[test]
     fn hard_mode_healthy_food_costs_20() {
@@ -3051,7 +3051,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.feed(FoodKind::Salad));
-        assert_eq!(state.money, 80, "hard-mode healthy food should cost 20 HEX");
+        assert_eq!(state.money, 80, "hard-mode healthy food should cost 20 HAX");
 
         let mut normal = GameState::new_egg(71, PetKind::Bartholomeus);
         normal.update(HATCHING_TICKS() as u32);
@@ -3060,10 +3060,10 @@ mod overweight_diabetes_tests {
         normal.money = 100;
 
         assert!(normal.feed(FoodKind::Salad));
-        assert_eq!(normal.money, 85, "normal-mode healthy food should still cost 15 HEX");
+        assert_eq!(normal.money, 85, "normal-mode healthy food should still cost 15 HAX");
     }
 
-    /// In Hard mode, medication (Ozempic / Insulin) costs 45 HEX — 3x the
+    /// In Hard mode, medication (Ozempic / Insulin) costs 45 HAX — 3x the
     /// normal 15. Normal mode is unaffected.
     #[test]
     fn hard_mode_medication_costs_45() {
@@ -3074,7 +3074,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.ozempic());
-        assert_eq!(state.money, 55, "hard-mode ozempic should cost 45 HEX");
+        assert_eq!(state.money, 55, "hard-mode ozempic should cost 45 HAX");
 
         let mut normal = GameState::new_egg(73, PetKind::Bartholomeus);
         normal.update(HATCHING_TICKS() as u32);
@@ -3083,10 +3083,10 @@ mod overweight_diabetes_tests {
         normal.money = 100;
 
         assert!(normal.ozempic());
-        assert_eq!(normal.money, 85, "normal-mode ozempic should still cost 15 HEX");
+        assert_eq!(normal.money, 85, "normal-mode ozempic should still cost 15 HAX");
     }
 
-    /// In Hard mode, Rehab costs 75 HEX — 5x the normal 15. Normal mode
+    /// In Hard mode, Rehab costs 75 HAX — 5x the normal 15. Normal mode
     /// is unaffected.
     #[test]
     fn hard_mode_rehab_costs_75() {
@@ -3098,7 +3098,7 @@ mod overweight_diabetes_tests {
         state.money = 100;
 
         assert!(state.rehab());
-        assert_eq!(state.money, 25, "hard-mode rehab should cost 75 HEX");
+        assert_eq!(state.money, 25, "hard-mode rehab should cost 75 HAX");
 
         let mut normal = GameState::new_egg(75, PetKind::Bartholomeus);
         normal.update(HATCHING_TICKS() as u32);
@@ -3108,7 +3108,7 @@ mod overweight_diabetes_tests {
         normal.money = 100;
 
         assert!(normal.rehab());
-        assert_eq!(normal.money, 85, "normal-mode rehab should still cost 15 HEX");
+        assert_eq!(normal.money, 85, "normal-mode rehab should still cost 15 HAX");
     }
 
     /// Hard mode only raises healthy food / medication / rehab — unhealthy

@@ -533,7 +533,7 @@ pub fn play() -> bool {
     with_state(|s| s.play())
 }
 
-/// Send the pet to "Only pets" to earn HEX. Timed action like Play; only
+/// Send the pet to "Only pets" to earn HAX. Timed action like Play; only
 /// meaningful (and only surfaced in the menu) when `money_enabled()`.
 pub fn only_pets() -> bool {
     with_state(|s| s.only_pets())
@@ -663,7 +663,7 @@ pub fn is_hibernating() -> bool {
     state.is_some_and(|s| s.hibernating)
 }
 
-/// Award the mini-game win reward (HEX + cooldown + hunger cost).
+/// Award the mini-game win reward (HAX + cooldown + hunger cost).
 /// Starts only the matching game's cooldown so other games stay playable.
 pub fn award_inspiration(game: super::engine::MiniGame) {
     let state = unsafe { (*GAME.get()).as_mut() };
@@ -774,7 +774,7 @@ pub fn pet_generation() -> u16 {
     }
 }
 
-/// Get the current HEX balance (defaults to 0 if no game).
+/// Get the current HAX balance (defaults to 0 if no game).
 pub fn money() -> u32 {
     let state = unsafe { (*GAME.get()).as_ref() };
     match state {
@@ -783,7 +783,7 @@ pub fn money() -> u32 {
     }
 }
 
-/// Whether HEX money mode is enabled for the current pet (defaults to
+/// Whether HAX money mode is enabled for the current pet (defaults to
 /// false if no game).
 pub fn money_enabled() -> bool {
     let state = unsafe { (*GAME.get()).as_ref() };

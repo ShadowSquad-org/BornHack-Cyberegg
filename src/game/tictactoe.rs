@@ -1,7 +1,7 @@
 //! Tic-tac-toe mini-game.
 //!
 //! The player (X, red) plays against a simple AI (O, black).
-//! Winning awards HEX (when money mode is on) plus this game's cooldown.
+//! Winning awards HAX (when money mode is on) plus this game's cooldown.
 //!
 //! State is held in module-level atomics so it integrates with the
 //! existing single-threaded game loop without allocations.

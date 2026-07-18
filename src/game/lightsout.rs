@@ -4,7 +4,7 @@
 //! Toggling a cell also toggles its orthogonal neighbours.
 //! Goal: turn all lights off.
 //!
-//! Winning awards HEX (when money mode is on) plus this game's cooldown.
+//! Winning awards HAX (when money mode is on) plus this game's cooldown.
 //!
 //! State is held in module-level atomics — no heap, no alloc.
 

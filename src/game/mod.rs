@@ -395,7 +395,7 @@ where
         crate::draw_battery_icon(display, 128, 2, pct)?;
     }
 
-    // HEX balance — top-right, below the battery icon + menu icon row
+    // HAX balance — top-right, below the battery icon + menu icon row
     // (y=33 clears the icons; y=16 overlapped them). Larger bold font.
     // Hidden entirely when money mode is disabled for this pet.
     if lifecycle::money_enabled() {

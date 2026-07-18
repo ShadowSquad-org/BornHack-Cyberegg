@@ -11,7 +11,7 @@
 //! Money mode is chosen fresh every time (new game and new generation
 //! alike), defaulting to "With money" (money on, normal prices).
 //! "Hard (US)" plays with money on but some prices higher — see
-//! `engine::medication_price`/`engine::rehab_price`/`FoodKind::hex_price`.
+//! `engine::medication_price`/`engine::rehab_price`/`FoodKind::hax_price`.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -352,7 +352,7 @@ mod tests {
 
     /// Full flow leaving the money-phase default ("With money") in place:
     /// the game should start with money mode on, hard mode off, and the
-    /// starting 100 HEX.
+    /// starting 100 HAX.
     #[test]
     fn full_flow_money_on_starts_game_with_money() {
         let _guard = TEST_LOCK.lock().unwrap();
