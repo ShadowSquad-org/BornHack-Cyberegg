@@ -100,6 +100,11 @@ pub const HAPPINESS_STEP: u16 = 19660;
 pub const PLAY_HEX_COST: u32 = 10;
 /// HEX cost of a drug dose (Ozempic / Medicate / Rehab).
 pub const DRUG_HEX_COST: u32 = 15;
+/// Below this balance the pet is "broke" — Only-pets forces the low-pay,
+/// happiness-draining work branch instead of the hobby branch.
+pub const BROKE_THRESHOLD: u32 = 20;
+/// HEX from the Only-pets BROKE (forced-work) branch.
+pub const ONLYPETS_BROKE_REWARD: u32 = 100;
 
 /// Active user action (mutually exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -868,12 +873,21 @@ impl GameState {
                     Action::Drink => self.cooldown_drink = DRINK_COOLDOWN(),
                     Action::Rehab => self.cooldown_rehab = REHAB_COOLDOWN(),
                     Action::OnlyPets => {
-                        // Stage 2: non-broke "hobby" branch only — earn HEX + happiness up.
-                        // (broke branch = +100 HEX / happiness down lands in Stage 5.)
+                        // Only reachable when `money_enabled` (see `only_pets()`
+                        // doc comment) — balance is unchanged during the
+                        // animation, so checking it here is equivalent to
+                        // checking it at start time.
                         if self.money_enabled {
-                            self.add_money(ONLYPETS_HOBBY_REWARD);
+                            if self.money < BROKE_THRESHOLD {
+                                // Broke: forced work — big pay, but happiness drops.
+                                self.add_money(ONLYPETS_BROKE_REWARD);
+                                self.miserable = sat_add(self.miserable, HAPPINESS_STEP);
+                            } else {
+                                // Has money: hobby — small pay, happiness rises.
+                                self.add_money(ONLYPETS_HOBBY_REWARD);
+                                self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
+                            }
                         }
-                        self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
                         self.cooldown_onlypets = PLAY_COOLDOWN();
                     }
                 }
@@ -2690,22 +2704,42 @@ mod overweight_diabetes_tests {
 
     /// Driving the Only-pets action to completion (via the same public
     /// `update()` path real time would use — mirrors how Feed/Drink
-    /// completion is exercised elsewhere in this test module) awards the
-    /// Stage-2 "hobby" branch: +HEX and a happiness bump, plus its own
-    /// cooldown.
+    /// completion is exercised elsewhere in this test module), starting
+    /// above `BROKE_THRESHOLD`, awards the "hobby" branch: +HEX and a
+    /// happiness bump, plus its own cooldown.
     #[test]
     fn only_pets_hobby_completion_awards_hex_and_happiness() {
         let mut state = GameState::new_egg(33, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
         state.money_enabled = true;
-        state.money = 0;
+        state.money = 50; // >= BROKE_THRESHOLD, so this exercises the hobby branch.
         state.miserable = STAT_MAX();
 
         assert!(state.only_pets());
         state.update(state.last_update_tick + PLAY_DURATION() as u32);
 
-        assert_eq!(state.money, ONLYPETS_HOBBY_REWARD);
+        assert_eq!(state.money, 50 + ONLYPETS_HOBBY_REWARD);
         assert_eq!(state.miserable, STAT_MAX() - HAPPINESS_STEP);
+        assert!(state.cooldown_onlypets > 0);
+        assert_eq!(state.active_action, None);
+    }
+
+    /// Stage 5: below `BROKE_THRESHOLD`, Only-pets completion forces the
+    /// "broke" branch instead — big pay, but happiness *drops* rather than
+    /// rises.
+    #[test]
+    fn only_pets_broke_branch_pays_100_and_drops_happiness() {
+        let mut state = GameState::new_egg(34, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5; // < BROKE_THRESHOLD
+        state.miserable = 1000;
+
+        assert!(state.only_pets());
+        state.update(state.last_update_tick + PLAY_DURATION() as u32);
+
+        assert_eq!(state.money, 5 + ONLYPETS_BROKE_REWARD);
+        assert_eq!(state.miserable, 1000 + HAPPINESS_STEP);
         assert!(state.cooldown_onlypets > 0);
         assert_eq!(state.active_action, None);
     }
