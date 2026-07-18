@@ -273,6 +273,21 @@ impl Item {
         }
     }
 
+    /// HEX price of this item, if it costs money. Shown as a " NNH"
+    /// suffix in the menu (only when money mode is on). Only-pets earns
+    /// HEX rather than costing it, so it has no price.
+    fn hex_price(self) -> Option<u32> {
+        match self {
+            Self::FeedFood(food) => Some(food.hex_price()),
+            Self::DrinkChoice(drink) => Some(drink.hex_price()),
+            Self::PlayNow => Some(super::engine::PLAY_HEX_COST),
+            Self::GiveMedication | Self::Ozempic | Self::Rehab => {
+                Some(super::engine::DRUG_HEX_COST)
+            }
+            _ => None,
+        }
+    }
+
     /// Is the action currently available?  Cooldown-gated items
     /// return false until the cooldown decays to 0.
     ///
@@ -777,13 +792,21 @@ where
         // Build display text: append " (Ns)" with the remaining
         // cooldown seconds when the item has a known cooldown source,
         // " (wait)" for anything else that's just disabled.
-        // 32 covers the longest label ("Reset battle record"/"Trigger
-        // alcoholism", 19 bytes) plus the longest cooldown suffix
-        // (" (65535s)", 9 bytes) with room to spare — heapless::push_str
+        // 40 covers the longest label ("Reset battle record"/"Trigger
+        // alcoholism", 19 bytes) plus an optional price suffix (" 15H",
+        // 4 bytes) plus the longest cooldown suffix (" (65535s)", 9
+        // bytes) with room to spare — heapless::push_str
         // silently no-ops past capacity instead of truncating, so this
         // must comfortably exceed the worst case, not just the common one.
-        let mut display_label: heapless::String<32> = heapless::String::new();
+        let mut display_label: heapless::String<40> = heapless::String::new();
         let _ = display_label.push_str(item.label());
+        // Price suffix (" NNH") for priced items, only in money mode.
+        if let (Some(price), Some(s)) = (item.hex_price(), stats.as_ref())
+            && s.money_enabled
+        {
+            let _ =
+                core::fmt::Write::write_fmt(&mut display_label, format_args!(" {price}H"));
+        }
         if !available {
             let suffix = stats
                 .as_ref()
