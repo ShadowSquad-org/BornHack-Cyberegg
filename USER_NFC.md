@@ -44,7 +44,8 @@ You can replace the default `badge.team` URL with **anything you want the
 badge to hand out** — a vanity URL, a vCard business card, a Wi-Fi record,
 whatever. Use any NFC-writer app on your phone (e.g. "NFC Tools") and
 write to the badge. The rule is simple: **anything you write sticks,
-except a `token:` (those just land on your Tokens screen).**
+except a `token:` (that one is transient — it doesn't become your
+persisted broadcast profile).**
 
 - **Vanity URL** — write a **URL / URI** record (e.g. `annejan.com`). The
   badge starts serving it. A **Text** record `set:https://your.link` also
