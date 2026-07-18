@@ -102,6 +102,20 @@ pub const PLAY_HEX_COST: u32 = 10;
 pub const DRUG_HEX_COST: u32 = 15;
 /// HEX cost of an Aspirine (the Heal action).
 pub const ASPIRINE_HEX_COST: u32 = 1;
+/// Hard-mode multiplier on medication (Insulin / Ozempic).
+pub const MEDICATION_HARD_MULT: u32 = 3;
+/// Hard-mode multiplier on Rehab.
+pub const REHAB_HARD_MULT: u32 = 5;
+
+/// HEX cost of a medication dose (Insulin / Ozempic) in the current mode.
+pub fn medication_price(hard: bool) -> u32 {
+    DRUG_HEX_COST * if hard { MEDICATION_HARD_MULT } else { 1 }
+}
+
+/// HEX cost of Rehab in the current mode.
+pub fn rehab_price(hard: bool) -> u32 {
+    DRUG_HEX_COST * if hard { REHAB_HARD_MULT } else { 1 }
+}
 /// Below this balance the pet is "broke" — Only-pets forces the low-pay,
 /// happiness-draining work branch instead of the hobby branch.
 pub const BROKE_THRESHOLD: u32 = 20;
@@ -1157,7 +1171,7 @@ impl GameState {
         }
         // Affordability gate: reject the action outright when unaffordable
         // rather than letting it proceed for free (see `spend_money`).
-        if self.money_enabled && !self.spend_money(food.hex_price()) {
+        if self.money_enabled && !self.spend_money(food.hex_price(self.hard_mode)) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Feed);
@@ -1241,7 +1255,7 @@ impl GameState {
             return false;
         }
         // Affordability gate — see the comment in `feed()`.
-        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+        if self.money_enabled && !self.spend_money(medication_price(self.hard_mode)) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Medicate);
@@ -1260,7 +1274,7 @@ impl GameState {
             return false;
         }
         // Affordability gate — see the comment in `feed()`.
-        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+        if self.money_enabled && !self.spend_money(medication_price(self.hard_mode)) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Ozempic);
@@ -1300,7 +1314,7 @@ impl GameState {
             return false;
         }
         // Affordability gate — see the comment in `feed()`.
-        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+        if self.money_enabled && !self.spend_money(rehab_price(self.hard_mode)) {
             return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Rehab);
@@ -2988,5 +3002,101 @@ mod overweight_diabetes_tests {
         state.money = 0;
 
         assert!(state.only_pets());
+    }
+
+    // ── Hard (US) mode: pricier healthy food / medication / rehab ──────
+
+    /// In Hard mode, healthy food (Salad) costs 20 HEX instead of the
+    /// normal 15. Normal (non-hard) mode is unaffected — regression check.
+    #[test]
+    fn hard_mode_healthy_food_costs_20() {
+        let mut state = GameState::new_egg(70, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 80, "hard-mode healthy food should cost 20 HEX");
+
+        let mut normal = GameState::new_egg(71, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.money = 100;
+
+        assert!(normal.feed(FoodKind::Salad));
+        assert_eq!(normal.money, 85, "normal-mode healthy food should still cost 15 HEX");
+    }
+
+    /// In Hard mode, medication (Ozempic / Insulin) costs 45 HEX — 3x the
+    /// normal 15. Normal mode is unaffected.
+    #[test]
+    fn hard_mode_medication_costs_45() {
+        let mut state = GameState::new_egg(72, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.ozempic());
+        assert_eq!(state.money, 55, "hard-mode ozempic should cost 45 HEX");
+
+        let mut normal = GameState::new_egg(73, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.money = 100;
+
+        assert!(normal.ozempic());
+        assert_eq!(normal.money, 85, "normal-mode ozempic should still cost 15 HEX");
+    }
+
+    /// In Hard mode, Rehab costs 75 HEX — 5x the normal 15. Normal mode
+    /// is unaffected.
+    #[test]
+    fn hard_mode_rehab_costs_75() {
+        let mut state = GameState::new_egg(74, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.alcoholic = true;
+        state.money = 100;
+
+        assert!(state.rehab());
+        assert_eq!(state.money, 25, "hard-mode rehab should cost 75 HEX");
+
+        let mut normal = GameState::new_egg(75, PetKind::Bartholomeus);
+        normal.update(HATCHING_TICKS() as u32);
+        normal.money_enabled = true;
+        normal.hard_mode = false;
+        normal.alcoholic = true;
+        normal.money = 100;
+
+        assert!(normal.rehab());
+        assert_eq!(normal.money, 85, "normal-mode rehab should still cost 15 HEX");
+    }
+
+    /// Hard mode only raises healthy food / medication / rehab — unhealthy
+    /// food and the flat Play cost are untouched.
+    #[test]
+    fn hard_mode_unhealthy_food_and_play_unchanged() {
+        let mut state = GameState::new_egg(76, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Burger));
+        assert_eq!(state.money, 90, "hard mode should not touch unhealthy food price");
+
+        let mut state = GameState::new_egg(77, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.hard_mode = true;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 90, "hard mode should not touch the flat Play price");
     }
 }
