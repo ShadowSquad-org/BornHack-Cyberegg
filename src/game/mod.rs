@@ -86,6 +86,8 @@ pub enum Toast {
     /// `drunk`, unlike `Drink`. Kept as its own variant so the toast
     /// after picking Water/Cola doesn't misleadingly say "+drunk".
     Refreshed = 24,
+    /// Sent the pet to "Only pets" — see `game::engine::Action::OnlyPets`.
+    OnlyPets = 25,
 }
 
 impl Toast {
@@ -114,6 +116,7 @@ impl Toast {
             22 => Self::BattleWon,
             23 => Self::BattleLost,
             24 => Self::Refreshed,
+            25 => Self::OnlyPets,
             _ => Self::None,
         }
     }
@@ -145,6 +148,7 @@ impl Toast {
             Toast::BattleWon => "won a battle!",
             Toast::BattleLost => "lost a battle",
             Toast::Refreshed => "-drained",
+            Toast::OnlyPets => "Only pets!",
         }
     }
 }

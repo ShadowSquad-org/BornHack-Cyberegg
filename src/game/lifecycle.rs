@@ -489,6 +489,12 @@ pub fn play() -> bool {
     with_state(|s| s.play())
 }
 
+/// Send the pet to "Only pets" to earn HEX. Timed action like Play; only
+/// meaningful (and only surfaced in the menu) when `money_enabled()`.
+pub fn only_pets() -> bool {
+    with_state(|s| s.only_pets())
+}
+
 pub fn exercise() -> bool {
     with_state(|s| s.exercise())
 }

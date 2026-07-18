@@ -133,17 +133,34 @@ impl ModalKind {
                 Item::DrinkChoice(super::engine::DrinkKind::Whiskey),
                 Item::Cancel,
             ],
-            Self::Play => &[
-                Item::Battle,
-                Item::PlayNow,
-                Item::PlayMusic,
-                Item::TicTacToe,
-                Item::LightsOut,
-                Item::BlackHole,
-                Item::Nim,
-                Item::BornJeweled,
-                Item::Cancel,
-            ],
+            Self::Play => {
+                if super::lifecycle::money_enabled() {
+                    &[
+                        Item::Battle,
+                        Item::PlayNow,
+                        Item::OnlyPets,
+                        Item::PlayMusic,
+                        Item::TicTacToe,
+                        Item::LightsOut,
+                        Item::BlackHole,
+                        Item::Nim,
+                        Item::BornJeweled,
+                        Item::Cancel,
+                    ]
+                } else {
+                    &[
+                        Item::Battle,
+                        Item::PlayNow,
+                        Item::PlayMusic,
+                        Item::TicTacToe,
+                        Item::LightsOut,
+                        Item::BlackHole,
+                        Item::Nim,
+                        Item::BornJeweled,
+                        Item::Cancel,
+                    ]
+                }
+            }
             Self::Music => &[
                 Item::Song(crate::SONG_STARTUP_INDEX),
                 Item::Song(crate::SONG_RICKROLL_INDEX),
@@ -195,6 +212,7 @@ enum Item {
     Sleep,
     Relax,
     PlayNow,
+    OnlyPets,
     TicTacToe,
     LightsOut,
     BlackHole,
@@ -235,6 +253,7 @@ impl Item {
             Self::Sleep => "Sleep",
             Self::Relax => "Relax",
             Self::PlayNow => "Play now",
+            Self::OnlyPets => "Only pets",
             Self::TicTacToe => "Tic Tac Toe",
             Self::LightsOut => "Lights Out",
             Self::BlackHole => "Black Hole",
@@ -298,6 +317,7 @@ impl Item {
             Self::Sleep => stats.can_sleep,
             Self::Relax => stats.can_relax,
             Self::PlayNow => stats.can_play,
+            Self::OnlyPets => stats.can_only_pets,
             Self::TicTacToe => stats.can_play_tictactoe,
             Self::LightsOut => stats.can_play_lightsout,
             Self::BlackHole => stats.can_play_blackhole,
@@ -334,6 +354,9 @@ impl Item {
             Self::Battle => stats.cooldown_battle,
             Self::Relax => action_remaining(Action::Relax).max(stats.cooldown_relax),
             Self::PlayNow => action_remaining(Action::Play).max(stats.cooldown_play),
+            Self::OnlyPets => {
+                action_remaining(Action::OnlyPets).max(stats.cooldown_onlypets)
+            }
             Self::TicTacToe => stats.cooldown_tictactoe,
             Self::LightsOut => stats.cooldown_lightsout,
             Self::BlackHole => stats.cooldown_blackhole,
@@ -461,6 +484,11 @@ impl Item {
             Self::PlayNow => {
                 lifecycle::play();
                 super::show_toast(super::Toast::Play);
+                close();
+            }
+            Self::OnlyPets => {
+                lifecycle::only_pets();
+                super::show_toast(super::Toast::OnlyPets);
                 close();
             }
             Self::TicTacToe => {

@@ -1674,6 +1674,10 @@ pub struct PetStats {
     pub can_heal: bool,
     pub can_relax: bool,
     pub can_play: bool,
+    /// "Only pets" — same in-progress-action/cooldown gating as Play.
+    /// Only ever surfaced in the menu when `money_enabled`, but this flag
+    /// itself doesn't know about money — the menu gates visibility.
+    pub can_only_pets: bool,
     pub can_exercise: bool,
     /// Only true once `diabetic` is set — administering medication to a
     /// non-diabetic pet is a no-op.
@@ -1705,6 +1709,7 @@ pub struct PetStats {
     pub cooldown_heal: u16,
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
+    pub cooldown_onlypets: u16,
     pub cooldown_exercise: u16,
     pub cooldown_medicate: u16,
     pub cooldown_ozempic: u16,
@@ -1773,6 +1778,7 @@ impl GameState {
             can_heal: awake_active && action_idle && self.cooldown_heal == 0,
             can_relax: awake_active && action_idle && self.cooldown_relax == 0,
             can_play: awake_active && action_idle && self.cooldown_play == 0,
+            can_only_pets: awake_active && action_idle && self.cooldown_onlypets == 0,
             can_exercise: awake_active && action_idle && self.cooldown_exercise == 0,
             can_medicate: awake_active
                 && action_idle
@@ -1794,6 +1800,7 @@ impl GameState {
             cooldown_heal: self.cooldown_heal,
             cooldown_relax: self.cooldown_relax,
             cooldown_play: self.cooldown_play,
+            cooldown_onlypets: self.cooldown_onlypets,
             cooldown_exercise: self.cooldown_exercise,
             cooldown_medicate: self.cooldown_medicate,
             cooldown_ozempic: self.cooldown_ozempic,
