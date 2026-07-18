@@ -4,11 +4,14 @@
 //! generation, in two phases:
 //!   1. `PHASE_PET`   — Up/Down cycles through available pet kinds, Fire
 //!                      advances to the money phase.
-//!   2. `PHASE_MONEY` — Up/Down toggles "With Hacks" / "Without Hacks",
-//!                      Fire starts the game with the chosen pet kind and
+//!   2. `PHASE_MONEY` — Up/Down cycles the three money modes ("With
+//!                      money" / "Without money" / "Hard (US)"), Fire
+//!                      starts the game with the chosen pet kind and
 //!                      money mode, then closes the screen.
 //! Money mode is chosen fresh every time (new game and new generation
-//! alike), defaulting to "With Hacks" (money on).
+//! alike), defaulting to "With money" (money on, normal prices).
+//! "Hard (US)" plays with money on but some prices higher — see
+//! `engine::medication_price`/`engine::rehab_price`/`FoodKind::hex_price`.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -25,9 +28,12 @@ use crate::{BLACK, TriColor, WHITE};
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Cursor within the current phase's list. In `PHASE_PET` this indexes
-/// `PetKind::roster()`; in `PHASE_MONEY` it's 0 ("With Hacks") or
-/// 1 ("Without Hacks").
+/// `PetKind::roster()`; in `PHASE_MONEY` it's 0 ("With money"), 1
+/// ("Without money") or 2 ("Hard (US)").
 static SELECTION: AtomicU8 = AtomicU8::new(0);
+
+/// Number of rows in the money phase — see `MONEY_LABELS`.
+const MONEY_OPTION_COUNT: u8 = 3;
 
 /// What to do after selection: 0 = new game, 1 = new generation.
 static MODE: AtomicU8 = AtomicU8::new(0);
@@ -75,9 +81,10 @@ pub fn close() {
 
 pub fn cursor_up() {
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
-        // Two-item wrapping cursor: toggles between 0 and 1.
+        // Three-item wrapping cursor over 0/1/2.
         let s = SELECTION.load(Ordering::Relaxed);
-        SELECTION.store(if s == 0 { 1 } else { 0 }, Ordering::Relaxed);
+        let prev = if s == 0 { MONEY_OPTION_COUNT - 1 } else { s - 1 };
+        SELECTION.store(prev, Ordering::Relaxed);
         return;
     }
 
@@ -95,9 +102,10 @@ pub fn cursor_up() {
 
 pub fn cursor_down() {
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
-        // Two-item wrapping cursor: toggles between 0 and 1.
+        // Three-item wrapping cursor over 0/1/2.
         let s = SELECTION.load(Ordering::Relaxed);
-        SELECTION.store(if s == 0 { 1 } else { 0 }, Ordering::Relaxed);
+        let next = if s + 1 >= MONEY_OPTION_COUNT { 0 } else { s + 1 };
+        SELECTION.store(next, Ordering::Relaxed);
         return;
     }
 
@@ -114,20 +122,28 @@ pub fn cursor_down() {
 /// Confirm the current phase.
 ///
 /// In `PHASE_PET`, stashes the chosen roster index and advances to
-/// `PHASE_MONEY` (defaulting to "With Hacks") without closing the screen.
+/// `PHASE_MONEY` (defaulting to "With money") without closing the screen.
 /// In `PHASE_MONEY`, resolves the pet kind chosen earlier plus the money
-/// flag, starts the game (dispatching on `MODE`), resets back to
+/// mode, starts the game (dispatching on `MODE`), resets back to
 /// `PHASE_PET` for next time, and closes the screen.
 pub fn confirm() {
     if PHASE.load(Ordering::Relaxed) == PHASE_PET {
         let idx = SELECTION.load(Ordering::Relaxed);
         CHOSEN_KIND_IDX.store(idx, Ordering::Relaxed);
         PHASE.store(PHASE_MONEY, Ordering::Relaxed);
-        SELECTION.store(0, Ordering::Relaxed); // default: With Hacks
+        SELECTION.store(0, Ordering::Relaxed); // default: With money
         return;
     }
 
-    let money_enabled = SELECTION.load(Ordering::Relaxed) == 0;
+    // Resolve (money_enabled, hard_mode) from the selected row:
+    //   0 = With money    -> (true, false)
+    //   1 = Without money  -> (false, false)
+    //   2 = Hard (US)      -> (true, true)  — money on, higher prices
+    let (money_enabled, hard_mode) = match SELECTION.load(Ordering::Relaxed) {
+        1 => (false, false),
+        2 => (true, true),
+        _ => (true, false),
+    };
     let idx = CHOSEN_KIND_IDX.load(Ordering::Relaxed) as usize;
     let kind = PetKind::roster()
         .get(idx)
@@ -136,8 +152,8 @@ pub fn confirm() {
     let mode = MODE.load(Ordering::Relaxed);
 
     match mode {
-        MODE_NEW_GAME => super::lifecycle::start_new_game(kind, money_enabled),
-        MODE_NEW_GEN => super::lifecycle::new_generation(kind, money_enabled),
+        MODE_NEW_GAME => super::lifecycle::start_new_game(kind, money_enabled, hard_mode),
+        MODE_NEW_GEN => super::lifecycle::new_generation(kind, money_enabled, hard_mode),
         _ => {}
     }
 
@@ -195,8 +211,8 @@ where
 
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
         // Money list — same row layout/idiom as the pet list, just a
-        // fixed 2-item roster.
-        const MONEY_LABELS: [&str; 2] = ["With money", "Without money"];
+        // fixed 3-item roster.
+        const MONEY_LABELS: [&str; 3] = ["With money", "Without money", "Hard (US)"];
         for (i, label) in MONEY_LABELS.iter().enumerate() {
             draw_row(display, i, label, i == selection)?;
         }
@@ -257,11 +273,11 @@ mod tests {
         SELECTION.store(0, Ordering::Relaxed);
     }
 
-    /// In `PHASE_MONEY` there are only two rows ("With Hacks" / "Without
-    /// Hacks"), so Up/Down should just toggle between 0 and 1 rather than
-    /// walking the pet roster.
+    /// In `PHASE_MONEY` there are three rows ("With money" / "Without
+    /// money" / "Hard (US)"), so Up/Down should wrap over 0/1/2 rather
+    /// than walking the pet roster.
     #[test]
-    fn money_phase_cursor_toggles_between_two_options() {
+    fn money_phase_cursor_wraps_over_three_options() {
         let _guard = TEST_LOCK.lock().unwrap();
         PHASE.store(PHASE_MONEY, Ordering::Relaxed);
         SELECTION.store(0, Ordering::Relaxed);
@@ -270,7 +286,15 @@ mod tests {
         assert_eq!(SELECTION.load(Ordering::Relaxed), 1);
 
         cursor_down();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 2);
+
+        // Wraps back to 0 past the last option.
+        cursor_down();
         assert_eq!(SELECTION.load(Ordering::Relaxed), 0);
+
+        // Wraps to the last option (2) going up from 0.
+        cursor_up();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 2);
 
         cursor_up();
         assert_eq!(SELECTION.load(Ordering::Relaxed), 1);
@@ -301,8 +325,8 @@ mod tests {
         SELECTION.store(0, Ordering::Relaxed);
     }
 
-    /// Full flow with "Without Hacks" selected in the money phase: the
-    /// game should start with money mode off.
+    /// Full flow with "Without money" selected in the money phase: the
+    /// game should start with money mode off (and hard mode off).
     #[test]
     fn full_flow_money_off_starts_game_without_money() {
         let _guard = TEST_LOCK.lock().unwrap();
@@ -310,11 +334,12 @@ mod tests {
         confirm(); // pet phase (SELECTION=0) -> money phase
 
         assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
-        SELECTION.store(1, Ordering::Relaxed); // "Without Hacks"
+        SELECTION.store(1, Ordering::Relaxed); // "Without money"
         confirm();
 
         assert!(crate::game::lifecycle::is_started());
         assert!(!crate::game::lifecycle::money_enabled());
+        assert!(!crate::game::lifecycle::hard_mode());
 
         // Reset statics for any other test.
         close();
@@ -322,8 +347,9 @@ mod tests {
         SELECTION.store(0, Ordering::Relaxed);
     }
 
-    /// Full flow leaving the money-phase default ("With Hacks") in place:
-    /// the game should start with money mode on and the starting 100 HEX.
+    /// Full flow leaving the money-phase default ("With money") in place:
+    /// the game should start with money mode on, hard mode off, and the
+    /// starting 100 HEX.
     #[test]
     fn full_flow_money_on_starts_game_with_money() {
         let _guard = TEST_LOCK.lock().unwrap();
@@ -331,11 +357,34 @@ mod tests {
         confirm(); // pet phase (SELECTION=0) -> money phase, default SELECTION=0
 
         assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
-        assert_eq!(SELECTION.load(Ordering::Relaxed), 0); // "With Hacks" default
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 0); // "With money" default
         confirm();
 
         assert!(crate::game::lifecycle::money_enabled());
+        assert!(!crate::game::lifecycle::hard_mode());
         assert_eq!(crate::game::lifecycle::money(), 100);
+
+        // Reset statics for any other test.
+        close();
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
+        SELECTION.store(0, Ordering::Relaxed);
+    }
+
+    /// Full flow with "Hard (US)" (SELECTION=2) selected in the money
+    /// phase: the game should start with money mode on AND hard mode on.
+    #[test]
+    fn full_flow_hard_mode_starts_hard() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        open_new_game();
+        confirm(); // pet phase (SELECTION=0) -> money phase
+
+        assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
+        SELECTION.store(2, Ordering::Relaxed); // "Hard (US)"
+        confirm();
+
+        assert!(crate::game::lifecycle::is_started());
+        assert!(crate::game::lifecycle::money_enabled());
+        assert!(crate::game::lifecycle::hard_mode());
 
         // Reset statics for any other test.
         close();
