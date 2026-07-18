@@ -362,11 +362,9 @@ where
             &mut money_buf,
             format_args!("{} HEX", lifecycle::money()),
         );
-        let hex_font = MonoTextStyle::new(
-            &embedded_graphics::mono_font::iso_8859_1::FONT_9X15_BOLD,
-            BLACK,
-        );
-        Text::with_text_style(money_buf.as_str(), Point::new(150, 33), hex_font, right_style)
+        // Reuse the already-linked bold font (FONT_7X13_BOLD via `font`) —
+        // pulling in a second glyph table (9x15) overflowed FLASH by ~12 KB.
+        Text::with_text_style(money_buf.as_str(), Point::new(150, 33), font, right_style)
             .draw(display)?;
     }
 
@@ -661,6 +659,7 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Drinking => "DRINKING",
             DisplayAnim::Ozempic => "OZEMPIC",
             DisplayAnim::Rehab => "REHAB",
+            DisplayAnim::OnlyPets => "ONLYPETS",
             DisplayAnim::Leaving { .. } => "LEAVING",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
