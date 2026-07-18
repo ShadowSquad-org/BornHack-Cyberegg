@@ -88,6 +88,10 @@ pub enum Toast {
     Refreshed = 24,
     /// Sent the pet to "Only pets" — see `game::engine::Action::OnlyPets`.
     OnlyPets = 25,
+    /// Won (or drew) a mini-game — see `GameState::award_inspiration`.
+    /// Neutral flavor toast; replaced the old `Inspired` ("+inspired")
+    /// toast when the `drained`/inspired stat was removed.
+    MinigameWin = 26,
 }
 
 impl Toast {
@@ -117,6 +121,7 @@ impl Toast {
             23 => Self::BattleLost,
             24 => Self::Refreshed,
             25 => Self::OnlyPets,
+            26 => Self::MinigameWin,
             _ => Self::None,
         }
     }
@@ -147,8 +152,9 @@ impl Toast {
             Toast::FriendReunion => "+happy",
             Toast::BattleWon => "won a battle!",
             Toast::BattleLost => "lost a battle",
-            Toast::Refreshed => "-drained",
+            Toast::Refreshed => "refreshed!",
             Toast::OnlyPets => "Only pets!",
+            Toast::MinigameWin => "nice game!",
         }
     }
 }
@@ -651,7 +657,6 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::Hatching { .. } => "HATCHING",
             DisplayAnim::Feeding => "FEEDING",
             DisplayAnim::Healing => "HEALING",
-            DisplayAnim::Relaxing => "RELAXING",
             DisplayAnim::Playing => "PLAYING",
             DisplayAnim::Sleeping => "SLEEPING",
             DisplayAnim::Exercising => "EXERCISING",
@@ -664,11 +669,9 @@ pub async fn render(display: &mut crate::fw::epd::EpdGfx<'_>, sprite_frame: u8) 
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
             DisplayAnim::CriticalHungry => "CRIT:HUNGRY",
-            DisplayAnim::CriticalDrained => "CRIT:DRAINED",
             DisplayAnim::WarningSick => "WARN:SICK",
             DisplayAnim::WarningTired => "WARN:TIRED",
             DisplayAnim::WarningHungry => "WARN:HUNGRY",
-            DisplayAnim::WarningDrained => "WARN:DRAINED",
             DisplayAnim::WarningMiserable => "WARN:MISER",
             DisplayAnim::Happy => "HAPPY",
             DisplayAnim::Idle => "IDLE",
