@@ -2809,8 +2809,8 @@ mod overweight_diabetes_tests {
         state.money_enabled = true;
         state.money = 100;
 
-        assert!(state.feed(FoodKind::Burger));
-        assert_eq!(state.money, 90, "unhealthy food (Burger) should cost 10 HEX");
+        assert!(state.feed(FoodKind::Frikandel));
+        assert_eq!(state.money, 90, "unhealthy food (Frikandel) should cost 10 HEX");
     }
 
     /// Drinking charges by the drink's health tier — healthy (Water) costs
@@ -2945,7 +2945,7 @@ mod overweight_diabetes_tests {
         assert!(state.feed(FoodKind::Salad));
         state.money = 100; // reset after the first (accepted) charge
 
-        assert!(!state.feed(FoodKind::Burger), "feed should be rejected while busy");
+        assert!(!state.feed(FoodKind::Frikandel), "feed should be rejected while busy");
         assert_eq!(state.money, 100, "a rejected action must not charge");
     }
 
@@ -3087,7 +3087,7 @@ mod overweight_diabetes_tests {
         state.hard_mode = true;
         state.money = 100;
 
-        assert!(state.feed(FoodKind::Burger));
+        assert!(state.feed(FoodKind::Frikandel));
         assert_eq!(state.money, 90, "hard mode should not touch unhealthy food price");
 
         let mut state = GameState::new_egg(77, PetKind::Bartholomeus);

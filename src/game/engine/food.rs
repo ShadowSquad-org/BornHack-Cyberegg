@@ -14,7 +14,7 @@
 pub enum FoodKind {
     Salad,
     Apple,
-    Burger,
+    Frikandel,
     Pizza,
     Cake,
 }
@@ -23,7 +23,7 @@ impl FoodKind {
     pub const ALL: [FoodKind; 5] = [
         FoodKind::Salad,
         FoodKind::Apple,
-        FoodKind::Burger,
+        FoodKind::Frikandel,
         FoodKind::Pizza,
         FoodKind::Cake,
     ];
@@ -32,7 +32,7 @@ impl FoodKind {
         match self {
             FoodKind::Salad => "Salad",
             FoodKind::Apple => "Apple",
-            FoodKind::Burger => "Burger",
+            FoodKind::Frikandel => "Frikandel spec",
             FoodKind::Pizza => "Pizza",
             FoodKind::Cake => "Cake",
         }
@@ -44,7 +44,10 @@ impl FoodKind {
         match self {
             FoodKind::Salad => (70, 30),
             FoodKind::Apple => (100, 100),
-            FoodKind::Burger => (150, 250),
+            // Frikandel speciaal — deep-fried, mayo/curry/onions. Greasy:
+            // fills you up fast and piles on weight (a touch more than a
+            // plain burger's old 250 to earn the "speciaal").
+            FoodKind::Frikandel => (155, 275),
             FoodKind::Pizza => (170, 300),
             FoodKind::Cake => (60, 350),
         }
@@ -74,7 +77,7 @@ impl FoodKind {
                     15
                 }
             }
-            FoodKind::Burger | FoodKind::Pizza | FoodKind::Cake => 10,
+            FoodKind::Frikandel | FoodKind::Pizza | FoodKind::Cake => 10,
         }
     }
 }
@@ -89,7 +92,7 @@ mod tests {
     fn hex_price_matches_health_tier() {
         assert_eq!(FoodKind::Salad.hex_price(false), 15);
         assert_eq!(FoodKind::Apple.hex_price(false), 15);
-        assert_eq!(FoodKind::Burger.hex_price(false), 10);
+        assert_eq!(FoodKind::Frikandel.hex_price(false), 10);
         assert_eq!(FoodKind::Pizza.hex_price(false), 10);
         assert_eq!(FoodKind::Cake.hex_price(false), 10);
     }
@@ -101,7 +104,7 @@ mod tests {
     fn hex_price_hard_mode_raises_healthy_food_only() {
         assert_eq!(FoodKind::Salad.hex_price(true), 20);
         assert_eq!(FoodKind::Apple.hex_price(true), 20);
-        assert_eq!(FoodKind::Burger.hex_price(true), 10);
+        assert_eq!(FoodKind::Frikandel.hex_price(true), 10);
         assert_eq!(FoodKind::Pizza.hex_price(true), 10);
         assert_eq!(FoodKind::Cake.hex_price(true), 10);
     }

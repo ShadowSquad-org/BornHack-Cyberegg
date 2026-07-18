@@ -95,13 +95,15 @@ pub mod fw {
     /// but the `*_DIRTY` persist signals are `embassy-base`-gated in the real
     /// `fw::epd`, so nothing is written. Values MUST mirror `src/fw/epd.rs`.
     pub mod epd {
-        use core::sync::atomic::{AtomicI8, AtomicU8};
+        use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU8};
         pub const EPD_LUT_SPEED_MIN: u8 = 30;
         pub static EPD_LUT_SPEED: AtomicU8 = AtomicU8::new(100);
         pub const EPD_TEMP_BIAS_MIN: i8 = -50;
         pub const EPD_TEMP_BIAS_MAX: i8 = 50;
         pub const EPD_TEMP_BIAS_STEP: i8 = 5;
         pub static EPD_TEMP_BIAS_C10: AtomicI8 = AtomicI8::new(0);
+        pub static EPD_VARIANT_IS_B: AtomicBool = AtomicBool::new(false);
+        pub static EPD_CUSTOM_LUT_ACTIVE: AtomicBool = AtomicBool::new(false);
     }
 
     /// Host-simulator stub: no Qwiic I2C bus off-badge, so the scan overlay is
@@ -228,6 +230,8 @@ pub const ALARM_INDEX: usize = 8;
 pub const SONG_DAISY_BELL_INDEX: u8 = 9;
 pub const SONG_NOKIA_INDEX: u8 = 10;
 pub const SONG_OVER_THE_HORIZON_INDEX: u8 = 11;
+/// Mini-game victory jingle — system-only, not exposed in the music menu.
+pub const MINIGAME_WIN_INDEX: usize = 12;
 
 /// Boosted RX gain toggle (0x96 vs 0x94 in register 0x08AC). Default: on,
 /// matching MeshCore 1.15.0 (upstream commit `ff5aad71`).  Boot path

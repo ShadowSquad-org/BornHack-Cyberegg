@@ -52,7 +52,7 @@ The badge is a carousel. Left/Right cycles through ten screens:
 Per-app user guides:
 
 - [USER_WATCH.md](USER_WATCH.md) — watch face, alarms, calendar, time sync
-- [USER_GAMES.md](USER_GAMES.md) — BornPets and the seven mini-games
+- [USER_GAMES.md](USER_GAMES.md) — BornPets and the five mini-games
 - [USER_MESH.md](USER_MESH.md) — LoRa mesh, adverts, channels, PMs
 - [USER_CONTACTS.md](USER_CONTACTS.md) — contacts list, saving, blocking
 - [USER_NFC.md](USER_NFC.md) — NFC tap interactions with BadgeCtl

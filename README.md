@@ -15,7 +15,7 @@ here's what changed:
 - **Weight & Type 2 Diabetes** — a slow, multi-day weight stat. Sustained
   neglect (skipping Exercise) triggers permanent diabetes, managed with
   a new **Insulin** treatment.
-- **Food choice** — Feed now offers five options (Salad/Apple/Burger/
+- **Food choice** — Feed now offers five options (Salad/Apple/Frikandel/
   Pizza/Cake) with different hunger-relief-vs-weight-gain tradeoffs.
 - **Exercise** — a new action that burns off weight.
 - **Ozempic** — a stronger, longer-cooldown weight-loss treatment, usable
@@ -141,7 +141,7 @@ If you just got a badge, start here:
 | **[POCKET_CARD.md](POCKET_CARD.md)** | One-page printable reference — buttons, LEDs, combos |
 | **[FAQ.md](FAQ.md)** | Why the red LED blinks, which screen saves battery, inverted/ghosted screen, DFU |
 | **[USER_WATCH.md](USER_WATCH.md)** | Watch face, alarms, calendar, time sync |
-| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + seven mini-games |
+| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + five mini-games |
 | **[USER_MESH.md](USER_MESH.md)** | LoRa mesh: adverts, PMs, channels, identity QR |
 | **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking |
 | **[USER_NFC.md](USER_NFC.md)** | NFC station taps via the BadgeCtl app |
@@ -187,7 +187,7 @@ All project documentation is in markdown files at the repository root and in `ve
 | -------- | ----------- |
 | **[README.md](README.md)** | This file — project overview, hardware, build instructions, known issues |
 | **[GAME.md](GAME.md)** | Player-facing game instructions, controls, stats, mini-games |
-| **[GAMES.md](GAMES.md)** | Developer reference for all seven mini-games, controls, scoring |
+| **[GAMES.md](GAMES.md)** | Developer reference for all five mini-games, controls, scoring |
 | **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
 | **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
 | **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
@@ -273,8 +273,7 @@ see **[NFC_README.md](NFC_README.md)**.
 
 The NFC tag also serves a plaintext, user-settable NDEF broadcast profile
 for phone-side tag readers — a vanity URL, vCard, Wi-Fi record, or any
-NDEF message you write to it, defaulting to `https://badge.team/docs/badges/bornhack-2026/`. Writing
-a `token:` record instead collects a token on the Tokens screen. See
+NDEF message you write to it, defaulting to `https://badge.team/docs/badges/bornhack-2026/`. See
 [NFC_README.md](NFC_README.md) §5.
 
 ## MeshCore Companion Protocol
@@ -525,12 +524,18 @@ sudo apt install build-essential gcc-arm-none-eabi libsdl2-dev dfu-util libudev-
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
 
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
+
 # probe-rs
 cargo install probe-rs-tools
 
 # udev rules for SWD debug probes (J-Link, ST-Link, CMSIS-DAP, etc.)
+# and the Cyber Ægg Bootloader
 curl -o /tmp/69-probe-rs.rules https://probe.rs/files/69-probe-rs.rules
 sudo cp /tmp/69-probe-rs.rules /etc/udev/rules.d/
+echo 'ATTRS{idVendor}=="1915", ATTRS{idProduct}=="521f", MODE="660", GROUP="plugdev", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/69-cyberaegg.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -540,6 +545,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo pacman -S base-devel arm-none-eabi-gcc sdl2 dfu-util
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+cargo install flip-link      # the firmware's linker — build fails without it
 cargo install probe-rs-tools
 ```
 
@@ -555,6 +561,10 @@ brew install arm-none-eabi-binutils sdl2 dfu-util
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
 
 # probe-rs
 cargo install probe-rs-tools
@@ -576,6 +586,12 @@ Install the following:
    ```
 
 1. **ARM toolchain**: download the GNU Arm Embedded Toolchain from <https://developer.arm.com/downloads/-/gnu-rm> and add it to your PATH.
+
+1. **flip-link** — the firmware's linker (`.cargo/config.toml`); the build fails with `linker 'flip-link' not found` without it:
+
+   ```powershell
+   cargo install flip-link
+   ```
 
 1. **probe-rs**:
 
