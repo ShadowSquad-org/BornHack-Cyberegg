@@ -273,18 +273,21 @@ impl Item {
         }
     }
 
-    /// HEX price of this item, if it costs money. Shown as a " NNH"
-    /// suffix in the menu (only when money mode is on). Only-pets earns
-    /// HEX rather than costing it, so it has no price.
-    fn hex_price(self) -> Option<u32> {
+    /// HEX price of this item in the current mode, if it costs money.
+    /// Shown as a " NNH" suffix in the menu (only when money mode is
+    /// on). Only-pets earns HEX rather than costing it, so it has no
+    /// price. Takes `stats` so Hard (US) mode can report the actual
+    /// effective price rather than the normal-mode base.
+    fn hex_price(self, stats: &super::engine::PetStats) -> Option<u32> {
         match self {
-            Self::FeedFood(food) => Some(food.hex_price()),
+            Self::FeedFood(food) => Some(food.hex_price(stats.hard_mode)),
             Self::DrinkChoice(drink) => Some(drink.hex_price()),
             Self::GiveMedicine => Some(super::engine::ASPIRINE_HEX_COST),
             Self::PlayNow => Some(super::engine::PLAY_HEX_COST),
-            Self::GiveMedication | Self::Ozempic | Self::Rehab => {
-                Some(super::engine::DRUG_HEX_COST)
+            Self::GiveMedication | Self::Ozempic => {
+                Some(super::engine::medication_price(stats.hard_mode))
             }
+            Self::Rehab => Some(super::engine::rehab_price(stats.hard_mode)),
             _ => None,
         }
     }
@@ -325,11 +328,13 @@ impl Item {
             }
             Self::Rehab => {
                 stats.can_rehab
-                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::rehab_price(stats.hard_mode))
             }
             Self::Battle => stats.can_battle,
             Self::FeedFood(food) => {
-                stats.can_feed && (!stats.money_enabled || stats.money >= food.hex_price())
+                stats.can_feed
+                    && (!stats.money_enabled || stats.money >= food.hex_price(stats.hard_mode))
             }
             Self::GiveMedicine => {
                 stats.can_heal
@@ -337,11 +342,13 @@ impl Item {
             }
             Self::GiveMedication => {
                 stats.can_medicate
-                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::medication_price(stats.hard_mode))
             }
             Self::Ozempic => {
                 stats.can_ozempic
-                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+                    && (!stats.money_enabled
+                        || stats.money >= super::engine::medication_price(stats.hard_mode))
             }
             Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
@@ -805,7 +812,8 @@ where
         let mut display_label: heapless::String<40> = heapless::String::new();
         let _ = display_label.push_str(item.label());
         // Price suffix (" NNH") for priced items, only in money mode.
-        if let (Some(price), Some(s)) = (item.hex_price(), stats.as_ref())
+        if let Some(s) = stats.as_ref()
+            && let Some(price) = item.hex_price(s)
             && s.money_enabled
         {
             let _ =
