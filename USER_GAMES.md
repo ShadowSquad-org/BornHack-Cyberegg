@@ -1,6 +1,6 @@
 # BornPets & Mini-Games — User Guide
 
-The **Game** screen runs BornPets — a virtual pet inspired by Tamagotchi — plus seven mini-games you can launch from the pet's **Play** menu.
+The **Game** screen runs BornPets — a virtual pet inspired by Tamagotchi — plus five mini-games you can launch from the pet's **Play** menu.
 
 ## BornPets
 
