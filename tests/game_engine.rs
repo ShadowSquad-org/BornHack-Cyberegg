@@ -165,6 +165,12 @@ fn run_sim(policy: &dyn Policy, seed: u64, max_days: u32) -> f64 {
     let max_ticks = max_days * ticks_per_day;
 
     let mut state = GameState::new_egg(seed, PetKind::Bartholomeus);
+    // These survival-curve tests exercise the core stat-decay/action
+    // mechanics, not the money layer — none of the `Policy` impls below earn
+    // HEX, so the Stage-5 affordability gate would otherwise starve the pet
+    // of feed/play long before its stats do. Disable money so the gate never
+    // fires here.
+    state.money_enabled = false;
     let mut tick: u32 = 0;
 
     while tick < max_ticks && state.phase != Phase::Gone {
@@ -189,6 +195,9 @@ fn run_sim_with_interval(
     let max_ticks = max_days * ticks_per_day;
 
     let mut state = GameState::new_egg(seed, PetKind::Bartholomeus);
+    // See the comment in `run_sim` — money is irrelevant to these tests and
+    // would otherwise starve the pet of affordable actions.
+    state.money_enabled = false;
     let mut tick: u32 = 0;
 
     while tick < max_ticks && state.phase != Phase::Gone {
@@ -352,6 +361,8 @@ fn diagnostic_attentive_hourly_dump() {
     let max_ticks = ticks_per_day * 3;
 
     let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
+    // See the comment in `run_sim` — money is irrelevant to this diagnostic.
+    state.money_enabled = false;
     let mut tick: u32 = 0;
     let mut last_print: u32 = 0;
 

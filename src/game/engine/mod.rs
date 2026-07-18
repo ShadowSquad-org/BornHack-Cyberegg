@@ -1146,11 +1146,10 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_feed > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — deducts if affordable, otherwise
-        // the action still proceeds for free. Stage 5 will turn this into
-        // an affordability gate that blocks the action instead.
-        if self.money_enabled {
-            let _ = self.spend_money(food.hex_price());
+        // Affordability gate: reject the action outright when unaffordable
+        // rather than letting it proceed for free (see `spend_money`).
+        if self.money_enabled && !self.spend_money(food.hex_price()) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Feed);
         self.active_food = Some(food);
@@ -1179,9 +1178,9 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_play > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — see the comment in `feed()`.
-        if self.money_enabled {
-            let _ = self.spend_money(PLAY_HEX_COST);
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(PLAY_HEX_COST) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Play);
         self.action_ticks_remaining = PLAY_DURATION();
@@ -1228,9 +1227,9 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_medicate > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — see the comment in `feed()`.
-        if self.money_enabled {
-            let _ = self.spend_money(DRUG_HEX_COST);
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Medicate);
         self.action_ticks_remaining = MEDICATE_DURATION();
@@ -1247,9 +1246,9 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_ozempic > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — see the comment in `feed()`.
-        if self.money_enabled {
-            let _ = self.spend_money(DRUG_HEX_COST);
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Ozempic);
         self.action_ticks_remaining = OZEMPIC_DURATION();
@@ -1265,9 +1264,9 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_drink > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — see the comment in `feed()`.
-        if self.money_enabled {
-            let _ = self.spend_money(drink.hex_price());
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(drink.hex_price()) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Drink);
         self.active_drink = Some(drink);
@@ -1287,9 +1286,9 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_rehab > 0 {
             return false;
         }
-        // Stage 3: best-effort charge — see the comment in `feed()`.
-        if self.money_enabled {
-            let _ = self.spend_money(DRUG_HEX_COST);
+        // Affordability gate — see the comment in `feed()`.
+        if self.money_enabled && !self.spend_money(DRUG_HEX_COST) {
+            return false; // can't afford — action rejected
         }
         self.active_action = Some(Action::Rehab);
         self.action_ticks_remaining = REHAB_DURATION();
@@ -2851,19 +2850,19 @@ mod overweight_diabetes_tests {
         assert_eq!(state.money, 100, "play should not charge when money is off");
     }
 
-    /// Stage 3 charges best-effort: an unaffordable action still proceeds
-    /// (Stage 5 will add the affordability gate), but `spend_money`
-    /// declines and leaves the balance untouched.
+    /// Stage 5 reverses the Stage-3 best-effort contract: an unaffordable
+    /// action is now REJECTED outright rather than proceeding for free —
+    /// `feed()` returns false, the balance is untouched, and no action starts.
     #[test]
-    fn broke_action_still_proceeds_without_charge() {
+    fn broke_action_is_now_rejected() {
         let mut state = GameState::new_egg(50, PetKind::Bartholomeus);
         state.update(HATCHING_TICKS() as u32);
         state.money_enabled = true;
         state.money = 5;
 
-        assert!(state.feed(FoodKind::Salad), "action should still start when broke");
-        assert_eq!(state.money, 5, "an unaffordable charge should not touch the balance");
-        assert_eq!(state.active_action, Some(Action::Feed));
+        assert!(!state.feed(FoodKind::Salad), "unaffordable action should be rejected");
+        assert_eq!(state.money, 5, "a rejected charge should not touch the balance");
+        assert_eq!(state.active_action, None);
     }
 
     /// A rejected action (already busy) must never charge — the charge
@@ -2881,5 +2880,60 @@ mod overweight_diabetes_tests {
 
         assert!(!state.feed(FoodKind::Burger), "feed should be rejected while busy");
         assert_eq!(state.money, 100, "a rejected action must not charge");
+    }
+
+    // ── Stage 5: "broke" branch + affordability gating ─────────────────
+
+    /// An unaffordable priced action (Salad costs 15, balance is 5) is
+    /// rejected: `feed()` returns false, the balance is untouched, and no
+    /// action starts.
+    #[test]
+    fn unaffordable_action_is_rejected() {
+        let mut state = GameState::new_egg(60, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5;
+
+        assert!(!state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 5);
+        assert_eq!(state.active_action, None);
+    }
+
+    /// An affordable priced action charges its price and starts normally.
+    #[test]
+    fn affordable_action_charges_and_starts() {
+        let mut state = GameState::new_egg(61, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 85);
+        assert_eq!(state.active_action, Some(Action::Feed));
+    }
+
+    /// With `money_enabled = false`, the affordability gate never applies —
+    /// the action proceeds free even at 0 balance.
+    #[test]
+    fn money_disabled_ignores_affordability() {
+        let mut state = GameState::new_egg(62, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 0;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 0);
+    }
+
+    /// Only-pets is the escape hatch when broke and must never be gated on
+    /// affordability — it starts even at `money == 0`.
+    #[test]
+    fn only_pets_never_gated_when_broke() {
+        let mut state = GameState::new_egg(63, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 0;
+
+        assert!(state.only_pets());
     }
 }
