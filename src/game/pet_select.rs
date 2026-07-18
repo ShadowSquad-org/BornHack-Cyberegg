@@ -173,24 +173,25 @@ where
     let start_y = 40;
     let row_h = 24i32;
 
-    let draw_row = |display: &mut D, i: usize, label: &str, is_selected: bool| -> Result<(), D::Error> {
-        let y = start_y + i as i32 * row_h;
-        if is_selected {
-            Rectangle::new(
-                Point::new(10, y - row_h / 2 + 1),
-                Size::new(132, row_h as u32 - 2),
-            )
-            .into_styled(PrimitiveStyle::with_fill(BLACK))
-            .draw(display)?;
-        }
-        let f = if is_selected {
-            TEXT_BOLD_WHITE
-        } else {
-            TEXT_BLACK
+    let draw_row =
+        |display: &mut D, i: usize, label: &str, is_selected: bool| -> Result<(), D::Error> {
+            let y = start_y + i as i32 * row_h;
+            if is_selected {
+                Rectangle::new(
+                    Point::new(10, y - row_h / 2 + 1),
+                    Size::new(132, row_h as u32 - 2),
+                )
+                .into_styled(PrimitiveStyle::with_fill(BLACK))
+                .draw(display)?;
+            }
+            let f = if is_selected {
+                TEXT_BOLD_WHITE
+            } else {
+                TEXT_BLACK
+            };
+            Text::with_text_style(label, Point::new(76, y), f, centered).draw(display)?;
+            Ok(())
         };
-        Text::with_text_style(label, Point::new(76, y), f, centered).draw(display)?;
-        Ok(())
-    };
 
     if PHASE.load(Ordering::Relaxed) == PHASE_MONEY {
         // Money list — same row layout/idiom as the pet list, just a
@@ -225,6 +226,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// All tests in this module poke the same process-wide statics
+    /// (`SELECTION`/`PHASE`/`ACTIVE`/`MODE`/`CHOSEN_KIND_IDX`, plus, for
+    /// the full-flow tests, `lifecycle`'s global `GAME`). `cargo test`
+    /// runs test functions on multiple threads by default, so without
+    /// serialization these would race each other. Every test takes this
+    /// lock first and resets the statics it touches before returning it.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Up at the top of the roster used to be a no-op; it should now wrap
     /// to the last pet, and Down at the bottom should wrap back to the
@@ -232,7 +242,9 @@ mod tests {
     /// every scrollable menu on the badge.
     #[test]
     fn cursor_wraps_at_both_ends() {
+        let _guard = TEST_LOCK.lock().unwrap();
         let max = PetKind::roster().len() as u8;
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
         SELECTION.store(0, Ordering::Relaxed);
 
         cursor_up();
@@ -242,6 +254,92 @@ mod tests {
         assert_eq!(SELECTION.load(Ordering::Relaxed), 0);
 
         // Leave global state clean for any other test touching SELECTION.
+        SELECTION.store(0, Ordering::Relaxed);
+    }
+
+    /// In `PHASE_MONEY` there are only two rows ("With Hacks" / "Without
+    /// Hacks"), so Up/Down should just toggle between 0 and 1 rather than
+    /// walking the pet roster.
+    #[test]
+    fn money_phase_cursor_toggles_between_two_options() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        PHASE.store(PHASE_MONEY, Ordering::Relaxed);
+        SELECTION.store(0, Ordering::Relaxed);
+
+        cursor_down();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 1);
+
+        cursor_down();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 0);
+
+        cursor_up();
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 1);
+
+        // Reset statics for any other test.
+        SELECTION.store(0, Ordering::Relaxed);
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
+    }
+
+    /// Fire on the pet-kind phase must not close the screen — it should
+    /// advance straight into the money phase so the player picks a money
+    /// mode before the game actually starts.
+    #[test]
+    fn confirm_advances_pet_phase_to_money_phase() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        open_new_game();
+        assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_PET);
+        assert!(is_active());
+
+        confirm();
+
+        assert!(is_active());
+        assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
+
+        // Reset statics for any other test.
+        close();
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
+        SELECTION.store(0, Ordering::Relaxed);
+    }
+
+    /// Full flow with "Without Hacks" selected in the money phase: the
+    /// game should start with money mode off.
+    #[test]
+    fn full_flow_money_off_starts_game_without_money() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        open_new_game();
+        confirm(); // pet phase (SELECTION=0) -> money phase
+
+        assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
+        SELECTION.store(1, Ordering::Relaxed); // "Without Hacks"
+        confirm();
+
+        assert!(crate::game::lifecycle::is_started());
+        assert!(!crate::game::lifecycle::money_enabled());
+
+        // Reset statics for any other test.
+        close();
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
+        SELECTION.store(0, Ordering::Relaxed);
+    }
+
+    /// Full flow leaving the money-phase default ("With Hacks") in place:
+    /// the game should start with money mode on and the starting 100 HEX.
+    #[test]
+    fn full_flow_money_on_starts_game_with_money() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        open_new_game();
+        confirm(); // pet phase (SELECTION=0) -> money phase, default SELECTION=0
+
+        assert_eq!(PHASE.load(Ordering::Relaxed), PHASE_MONEY);
+        assert_eq!(SELECTION.load(Ordering::Relaxed), 0); // "With Hacks" default
+        confirm();
+
+        assert!(crate::game::lifecycle::money_enabled());
+        assert_eq!(crate::game::lifecycle::money(), 100);
+
+        // Reset statics for any other test.
+        close();
+        PHASE.store(PHASE_PET, Ordering::Relaxed);
         SELECTION.store(0, Ordering::Relaxed);
     }
 }
