@@ -338,8 +338,8 @@ static REALM_DIRTY: AtomicBool = AtomicBool::new(false);
 fn current_severity(state: &GameState) -> Severity {
     use super::engine::Phase;
     use super::engine::thresholds::{
-        SICK_TRIGGER_DRAINED, SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED, WARNING_DRAINED,
-        WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK, WARNING_TIRED,
+        SICK_TRIGGER_HUNGER, SICK_TRIGGER_TIRED, WARNING_HUNGER, WARNING_MISERABLE, WARNING_SICK,
+        WARNING_TIRED,
     };
 
     if state.phase == Phase::Gone {
@@ -354,15 +354,13 @@ fn current_severity(state: &GameState) -> Severity {
     // the action ends.
     let severe = state.sick > SICK_TRIGGER_TIRED()
         || state.tired > SICK_TRIGGER_TIRED()
-        || state.hunger > SICK_TRIGGER_HUNGER()
-        || state.drained > SICK_TRIGGER_DRAINED();
+        || state.hunger > SICK_TRIGGER_HUNGER();
     if severe {
         return Severity::Severe;
     }
     let warning = state.sick > WARNING_SICK()
         || state.tired > WARNING_TIRED()
         || state.hunger > WARNING_HUNGER()
-        || state.drained > WARNING_DRAINED()
         || state.miserable > WARNING_MISERABLE();
     if warning {
         return Severity::Warning;
@@ -450,7 +448,6 @@ pub fn display_anim() -> DisplayAnim {
             | DisplayAnim::WarningTired
             | DisplayAnim::WarningSick
             | DisplayAnim::WarningHungry
-            | DisplayAnim::WarningDrained
             | DisplayAnim::WarningMiserable
     ) && now_tick() < SLEEP_ANIM_UNTIL_TICK.load(Ordering::Relaxed)
     {
@@ -479,10 +476,6 @@ pub fn feed(food: super::engine::FoodKind) -> bool {
 
 pub fn heal() -> bool {
     with_state(|s| s.heal())
-}
-
-pub fn relax() -> bool {
-    with_state(|s| s.relax())
 }
 
 pub fn play() -> bool {
@@ -619,23 +612,12 @@ pub fn is_hibernating() -> bool {
     state.is_some_and(|s| s.hibernating)
 }
 
-/// Award inspiration for winning a mini-game.  Starts only the
-/// matching game's cooldown so other games stay playable.
+/// Award the mini-game win reward (HEX + cooldown + hunger cost).
+/// Starts only the matching game's cooldown so other games stay playable.
 pub fn award_inspiration(game: super::engine::MiniGame) {
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
         s.award_inspiration(game);
-    }
-}
-
-/// Apply a variable-magnitude `drained` reduction.  Used by Triple
-/// Born to scale the on-close bonus by the score earned in the
-/// just-finished game (paired with `award_inspiration` for the
-/// fixed cooldown + hunger cost).
-pub fn add_drained_relief(amount: u16) {
-    let state = unsafe { (*GAME.get()).as_mut() };
-    if let Some(s) = state {
-        s.add_drained_relief(amount);
     }
 }
 

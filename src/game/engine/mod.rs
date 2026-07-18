@@ -107,7 +107,6 @@ pub const DRUG_HEX_COST: u32 = 15;
 pub enum Action {
     Feed,
     Heal,
-    Relax,
     Play,
     Exercise,
     Medicate,
@@ -131,11 +130,15 @@ impl Action {
     /// on the read side that only covered the first 4 variants,
     /// silently discarding an in-progress Exercise/Medicate/Ozempic/
     /// Drink/Rehab action on every reboot that landed mid-action.
+    ///
+    /// `2` is a deliberate gap — it used to be `Relax`, removed along
+    /// with the `drained` stat it existed to relieve. Left unassigned
+    /// (rather than renumbering Play onward) so old persisted bytes for
+    /// the other actions keep meaning across the removal.
     fn to_u8(self) -> u8 {
         match self {
             Action::Feed => 0,
             Action::Heal => 1,
-            Action::Relax => 2,
             Action::Play => 3,
             Action::Exercise => 4,
             Action::Medicate => 5,
@@ -150,7 +153,7 @@ impl Action {
         match v {
             0 => Some(Action::Feed),
             1 => Some(Action::Heal),
-            2 => Some(Action::Relax),
+            2 => None, // formerly Relax — see `to_u8`.
             3 => Some(Action::Play),
             4 => Some(Action::Exercise),
             5 => Some(Action::Medicate),
@@ -184,7 +187,6 @@ pub struct GameState {
     // Primary stats (0 = best, STAT_MAX() = worst).
     pub hunger: u16,
     pub tired: u16,
-    pub drained: u16,
     pub sick: u16,
     pub miserable: u16,
     pub weight: u16,
@@ -243,6 +245,10 @@ pub struct GameState {
     pub action_ticks_remaining: u8,
     pub cooldown_feed: u16,
     pub cooldown_heal: u16,
+    /// No longer settable by anything (the `Relax` action it gated was
+    /// removed along with the `drained` stat it existed to relieve) —
+    /// kept purely so the persisted save layout doesn't shift. Always
+    /// 0 for any pet created after this change.
     pub cooldown_relax: u16,
     pub cooldown_play: u16,
     pub cooldown_exercise: u16,
@@ -276,7 +282,6 @@ pub struct GameState {
     pub cooldown_onlypets: u16,
 
     // Interval counters (track ticks since last interval fire).
-    drained_interval_counter: u32,
     miserable_interval_counter: u32,
     tired_passive_counter: u32,
 
@@ -334,7 +339,6 @@ impl GameState {
 
             hunger: 0,
             tired: 0,
-            drained: 0,
             sick: (STAT_MAX() - vitality) / 4,
             miserable: 0,
             weight: 0,
@@ -385,7 +389,6 @@ impl GameState {
             cooldown_bornjeweled: 0,
             cooldown_onlypets: 0,
 
-            drained_interval_counter: 0,
             miserable_interval_counter: 0,
             tired_passive_counter: 0,
 
@@ -439,20 +442,15 @@ fn interval_fires(delta: u32, counter: u32, interval: u32) -> (u32, u32) {
     (fires, new_counter)
 }
 
-/// Count how many of the four primary stats exceed the 60% threshold.
+/// Count how many of the three primary stats exceed the 60% threshold.
 fn count_above_60(state: &GameState) -> u32 {
     let t = MISERABLE_STAT_THRESHOLD();
-    (state.hunger > t) as u32
-        + (state.tired > t) as u32
-        + (state.drained > t) as u32
-        + (state.sick > t) as u32
+    (state.hunger > t) as u32 + (state.tired > t) as u32 + (state.sick > t) as u32
 }
 
 /// Check if any stat triggers sick condition decay.
 fn sick_condition_active(state: &GameState) -> bool {
-    state.hunger > SICK_TRIGGER_HUNGER()
-        || state.tired > SICK_TRIGGER_TIRED()
-        || state.drained > SICK_TRIGGER_DRAINED()
+    state.hunger > SICK_TRIGGER_HUNGER() || state.tired > SICK_TRIGGER_TIRED()
 }
 
 /// Extra `sick` accrual for `delta` ticks while diabetic and unmedicated.
@@ -496,7 +494,6 @@ fn curiosity_modifier(curiosity: u16) -> u16 {
 fn count_maxed(state: &GameState) -> usize {
     (state.hunger == STAT_MAX()) as usize
         + (state.tired == STAT_MAX()) as usize
-        + (state.drained == STAT_MAX()) as usize
         + (state.sick == STAT_MAX()) as usize
 }
 
@@ -588,8 +585,8 @@ impl GameState {
     ///   50 %).  This is a flat cap and does *not* add to the per-stat severe
     ///   penalties.
     /// * Each primary stat above its critical threshold → an additional −20 %
-    ///   cap on Happy (= +20 % miserable per critical stat).  Up to 4 stats can
-    ///   be critical, so the severe path can push miserable to 80 %.
+    ///   cap on Happy (= +20 % miserable per critical stat).  Up to 3 stats can
+    ///   be critical, so the severe path can push miserable to 60 %.
     /// * The two rules are evaluated independently and the **higher** floor
     ///   wins (= lower Happy displayed).
     ///
@@ -601,7 +598,6 @@ impl GameState {
     fn apply_miserable_floor(&mut self) {
         let critical = (self.hunger > SICK_TRIGGER_HUNGER()) as u32
             + (self.tired > SICK_TRIGGER_TIRED()) as u32
-            + (self.drained > SICK_TRIGGER_DRAINED()) as u32
             + (self.sick > SICK_TRIGGER_TIRED()) as u32;
         let floor_severe = (critical * (STAT_MAX() as u32 / 5)).min(STAT_MAX() as u32) as u16;
         let floor_leaving = if self.phase == Phase::Leaving {
@@ -668,15 +664,6 @@ impl GameState {
                 0
             };
 
-        // Current drained interval.
-        let drained_interval = if self.cooldown_relax > 0 {
-            u32::MAX
-        } else if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
-            DRAINED_INTERVAL_MISERABLE()
-        } else {
-            DRAINED_INTERVAL()
-        };
-
         // Current miserable interval.
         let mis_interval = if self.cooldown_play > 0 {
             u32::MAX
@@ -693,12 +680,6 @@ impl GameState {
         let t60 = MISERABLE_STAT_THRESHOLD();
         m = m.min(ticks_up(self.hunger, t60, hunger_rate));
         m = m.min(ticks_up(self.tired, t60, tired_rate));
-        m = m.min(ticks_interval(
-            self.drained,
-            t60,
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
         // Sick rate mirrors apply_awake_decay/apply_sleep_decay's sick term
         // exactly (base + condition + diabetes + alcoholism, suppressed
         // during Heal) so the boundary estimate can't undershoot the real
@@ -756,24 +737,12 @@ impl GameState {
 
         m = m.min(ticks_up(self.hunger, SICK_TRIGGER_HUNGER(), hunger_rate));
         m = m.min(ticks_up(self.tired, SICK_TRIGGER_TIRED(), tired_rate));
-        m = m.min(ticks_interval(
-            self.drained,
-            SICK_TRIGGER_DRAINED(),
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
 
-        // ── Miserable thresholds (change hunger/tired/drained rates) ──
+        // ── Miserable thresholds (change hunger/tired rates) ──
 
         m = m.min(ticks_interval(
             self.miserable,
             MISERABLE_BOOST_THRESHOLD(),
-            MISERABLE_AMOUNT(),
-            mis_interval,
-        ));
-        m = m.min(ticks_interval(
-            self.miserable,
-            MISERABLE_DRAIN_THRESHOLD(),
             MISERABLE_AMOUNT(),
             mis_interval,
         ));
@@ -783,12 +752,6 @@ impl GameState {
         m = m.min(ticks_up(self.hunger, STAT_MAX(), hunger_rate));
         m = m.min(ticks_up(self.tired, STAT_MAX(), tired_rate));
         m = m.min(ticks_up(self.sick, STAT_MAX(), sick_rate_approx));
-        m = m.min(ticks_interval(
-            self.drained,
-            STAT_MAX(),
-            DRAINED_AMOUNT(),
-            drained_interval,
-        ));
 
         // ── Cooldown expiry (suppression ends → rate resumes) ──
 
@@ -797,9 +760,6 @@ impl GameState {
         }
         if self.cooldown_heal > 0 {
             m = m.min(self.cooldown_heal as u32);
-        }
-        if self.cooldown_relax > 0 {
-            m = m.min(self.cooldown_relax as u32);
         }
         if self.cooldown_play > 0 {
             m = m.min(self.cooldown_play as u32);
@@ -852,20 +812,14 @@ impl GameState {
                 Action::Feed => {
                     let food = self.active_food.unwrap_or(FoodKind::Apple);
                     let hunger_relief = food.scale_hunger_relief(FEED_HUNGER_RELIEF());
-                    let drained_relief = food.scale_drained_relief(FEED_DRAINED_RELIEF());
                     let weight_gain = food.scale_weight_gain(FEED_WEIGHT_GAIN());
                     self.hunger = sat_sub(self.hunger, mul_dt(hunger_relief, t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(drained_relief, t as u32));
                     // Overfeeding compounds the passive weight gain — how much
                     // depends entirely on what was eaten (see FoodKind).
                     self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Heal => {
                     self.sick = sat_sub(self.sick, mul_dt(HEAL_SICK_RELIEF(), t as u32));
-                }
-                Action::Relax => {
-                    self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), t as u32));
-                    self.hunger = sat_add(self.hunger, mul_dt(RELAX_HUNGER_COST(), t as u32));
                 }
                 Action::Play => {
                     let cm = curiosity_modifier(self.curiosity);
@@ -875,28 +829,22 @@ impl GameState {
                     };
                     self.hunger = sat_add(self.hunger, apply(PLAY_HUNGER_COST()));
                     self.tired = sat_add(self.tired, apply(PLAY_TIRED_COST()));
-                    self.drained = sat_add(self.drained, apply(PLAY_DRAINED_COST()));
                 }
                 Action::Exercise => {
                     self.weight = sat_sub(self.weight, mul_dt(EXERCISE_WEIGHT_RELIEF(), t as u32));
                     self.tired = sat_add(self.tired, mul_dt(EXERCISE_TIRED_COST(), t as u32));
                     self.hunger = sat_add(self.hunger, mul_dt(EXERCISE_HUNGER_COST(), t as u32));
-                    self.drained =
-                        sat_sub(self.drained, mul_dt(EXERCISE_DRAINED_RELIEF(), t as u32));
                 }
                 Action::Medicate => {}
                 Action::Ozempic => {
                     self.weight = sat_sub(self.weight, mul_dt(OZEMPIC_WEIGHT_RELIEF(), t as u32));
                     self.hunger = sat_sub(self.hunger, mul_dt(OZEMPIC_HUNGER_RELIEF(), t as u32));
-                    self.drained = sat_add(self.drained, mul_dt(OZEMPIC_DRAINED_COST(), t as u32));
                 }
                 Action::Drink => {
                     let drink = self.active_drink.unwrap_or(DrinkKind::Beer);
                     let drunk_gain = drink.scale_drunk_gain(DRINK_DRUNK_GAIN());
-                    let drained_relief = drink.scale_drained_relief(DRINK_DRAINED_RELIEF());
                     let weight_gain = drink.scale_weight_gain(DRINK_WEIGHT_GAIN());
                     self.drunk = sat_add(self.drunk, mul_dt(drunk_gain, t as u32));
-                    self.drained = sat_sub(self.drained, mul_dt(drained_relief, t as u32));
                     self.weight = sat_add(self.weight, mul_dt(weight_gain, t as u32));
                 }
                 Action::Rehab => {}
@@ -908,9 +856,10 @@ impl GameState {
                 match action {
                     Action::Feed => self.cooldown_feed = FEED_COOLDOWN(),
                     Action::Heal => self.cooldown_heal = HEAL_COOLDOWN(),
-                    Action::Relax => self.cooldown_relax = RELAX_COOLDOWN(),
                     Action::Play => {
-                        self.miserable = 0; // play zeroes miserable on completion
+                        // +30% happiness (was: zero it out entirely) — see
+                        // `HAPPINESS_STEP` doc comment.
+                        self.miserable = sat_sub(self.miserable, HAPPINESS_STEP);
                         self.cooldown_play = PLAY_COOLDOWN();
                     }
                     Action::Exercise => self.cooldown_exercise = EXERCISE_COOLDOWN(),
@@ -993,21 +942,6 @@ impl GameState {
             }
         }
 
-        // Drained (suppressed during relax action + cooldown).
-        if self.cooldown_relax == 0 && self.active_action != Some(Action::Relax) {
-            let interval = if self.miserable >= MISERABLE_DRAIN_THRESHOLD() {
-                DRAINED_INTERVAL_MISERABLE()
-            } else {
-                DRAINED_INTERVAL()
-            };
-            let (fires, new_counter) =
-                interval_fires(delta, self.drained_interval_counter, interval);
-            self.drained_interval_counter = new_counter;
-            if fires > 0 {
-                self.drained = sat_add(self.drained, mul_dt(DRAINED_AMOUNT(), fires));
-            }
-        }
-
         // Sick (suppressed during heal action + cooldown).
         if self.cooldown_heal == 0 && self.active_action != Some(Action::Heal) {
             let base = mul_dt(SICK_RATE(), delta);
@@ -1073,9 +1007,6 @@ impl GameState {
         if self.tired == 0 {
             self.is_sleeping = false;
         }
-
-        // Drained recovers during sleep.
-        self.drained = sat_sub(self.drained, mul_dt(DRAINED_SLEEP_RECOVERY(), delta));
 
         // Hunger still decays during sleep, and faster than awake —
         // sleeping is restorative, not free.
@@ -1223,19 +1154,6 @@ impl GameState {
         }
         self.active_action = Some(Action::Heal);
         self.action_ticks_remaining = HEAL_DURATION();
-        true
-    }
-
-    /// Start the relax action.
-    pub fn relax(&mut self) -> bool {
-        if !self.is_alive() || self.is_sleeping {
-            return false;
-        }
-        if self.active_action.is_some() || self.cooldown_relax > 0 {
-            return false;
-        }
-        self.active_action = Some(Action::Relax);
-        self.action_ticks_remaining = RELAX_DURATION();
         true
     }
 
@@ -1405,18 +1323,14 @@ impl GameState {
         true
     }
 
-    /// Award inspiration (reduce drained) as a reward for winning the
-    /// given mini-game.  Starts only that game's cooldown so other
+    /// Award the mini-game win reward: HEX (when `money_enabled`) plus the
+    /// per-game cooldown.  Starts only that game's cooldown so other
     /// mini-games stay available — encourages variety.  Also bumps
     /// hunger: playing burns calories.
     pub fn award_inspiration(&mut self, game: MiniGame) {
         if self.phase != Phase::Active {
             return;
         }
-        // Equivalent to ~2 ticks of relax relief, as a one-shot bonus.
-        // mul_dt widens to u32 and clamps, so a large configured relief value
-        // can't overflow the u16 multiply.
-        self.drained = sat_sub(self.drained, mul_dt(RELAX_DRAINED_RELIEF(), 2));
         self.hunger = sat_add(self.hunger, MINIGAME_HUNGER_COST());
         match game {
             MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN(),
@@ -1428,17 +1342,6 @@ impl GameState {
         if self.money_enabled {
             self.add_money(MINIGAME_HEX_REWARD);
         }
-    }
-
-    /// Add a variable-magnitude bonus to inspiration (reduces
-    /// `drained` by `amount`).  No cooldown set, no hunger cost —
-    /// callers pair this with [`Self::award_inspiration`] for those.
-    /// Used by Triple Born to scale the on-close bonus by score.
-    pub fn add_drained_relief(&mut self, amount: u16) {
-        if self.phase != Phase::Active {
-            return;
-        }
-        self.drained = sat_sub(self.drained, amount);
     }
 
     /// Total hours the pet has spent in hibernation during its life.
@@ -1658,8 +1561,6 @@ pub struct PetStats {
     pub hunger: u8,
     /// How rested the pet is (100 = alert, 0 = exhausted).
     pub tired: u8,
-    /// How inspired/energized the pet is (100 = energized, 0 = burnt out).
-    pub inspired: u8,
     /// How healthy the pet is (100 = healthy, 0 = critically ill).
     pub healthy: u8,
     /// How happy the pet is (100 = happy, 0 = miserable).
@@ -1702,7 +1603,6 @@ pub struct PetStats {
     /// Action availability (true = can be started right now).
     pub can_feed: bool,
     pub can_heal: bool,
-    pub can_relax: bool,
     pub can_play: bool,
     /// "Only pets" — same in-progress-action/cooldown gating as Play.
     /// Only ever surfaced in the menu when `money_enabled`, but this flag
@@ -1737,7 +1637,6 @@ pub struct PetStats {
     /// show the exact remaining time on a disabled menu row.
     pub cooldown_feed: u16,
     pub cooldown_heal: u16,
-    pub cooldown_relax: u16,
     pub cooldown_play: u16,
     pub cooldown_onlypets: u16,
     pub cooldown_exercise: u16,
@@ -1783,7 +1682,6 @@ impl GameState {
         PetStats {
             hunger: to_display_pct(self.hunger),
             tired: to_display_pct(self.tired),
-            inspired: to_display_pct(self.drained),
             healthy: to_display_pct(self.sick),
             happy: to_display_pct(self.miserable),
             weight: to_display_pct(self.weight),
@@ -1806,7 +1704,6 @@ impl GameState {
 
             can_feed: awake_active && action_idle && self.cooldown_feed == 0,
             can_heal: awake_active && action_idle && self.cooldown_heal == 0,
-            can_relax: awake_active && action_idle && self.cooldown_relax == 0,
             can_play: awake_active && action_idle && self.cooldown_play == 0,
             can_only_pets: awake_active && action_idle && self.cooldown_onlypets == 0,
             can_exercise: awake_active && action_idle && self.cooldown_exercise == 0,
@@ -1828,7 +1725,6 @@ impl GameState {
 
             cooldown_feed: self.cooldown_feed,
             cooldown_heal: self.cooldown_heal,
-            cooldown_relax: self.cooldown_relax,
             cooldown_play: self.cooldown_play,
             cooldown_onlypets: self.cooldown_onlypets,
             cooldown_exercise: self.cooldown_exercise,
@@ -1950,7 +1846,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 101;
+pub const SAVE_SIZE: usize = 95;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -1978,10 +1874,9 @@ impl GameState {
             };
         }
 
-        // Stats (10 bytes).
+        // Stats (8 bytes).
         w16!(self.hunger);
         w16!(self.tired);
-        w16!(self.drained);
         w16!(self.sick);
         w16!(self.miserable);
         // Weight (2 bytes).
@@ -2012,8 +1907,7 @@ impl GameState {
         w16!(self.cooldown_ozempic);
         w16!(self.cooldown_drink);
         w16!(self.cooldown_rehab);
-        // Interval counters (12 bytes).
-        w32!(self.drained_interval_counter);
+        // Interval counters (8 bytes).
         w32!(self.miserable_interval_counter);
         w32!(self.tired_passive_counter);
         // Overweight/drunk duration counters (8 bytes).
@@ -2037,7 +1931,7 @@ impl GameState {
         // HEX money (5 bytes).
         w32!(self.money);
         w8!(self.money_enabled as u8);
-        // Total: 101 bytes.
+        // Total: 95 bytes.
         b
     }
 
@@ -2078,7 +1972,6 @@ impl GameState {
 
         let hunger = r16!();
         let tired = r16!();
-        let drained = r16!();
         let sick = r16!();
         let miserable = r16!();
         let weight = r16!();
@@ -2109,7 +2002,6 @@ impl GameState {
         let cooldown_ozempic = r16!();
         let cooldown_drink = r16!();
         let cooldown_rehab = r16!();
-        let drained_interval_counter = r32!();
         let miserable_interval_counter = r32!();
         let tired_passive_counter = r32!();
         let overweight_ticks = r32!();
@@ -2131,7 +2023,6 @@ impl GameState {
             pet_kind,
             hunger,
             tired,
-            drained,
             sick,
             miserable,
             weight,
@@ -2176,7 +2067,6 @@ impl GameState {
             cooldown_bornjeweled: 0,
             // Not persisted — see the field doc on `cooldown_onlypets`.
             cooldown_onlypets: 0,
-            drained_interval_counter,
             miserable_interval_counter,
             tired_passive_counter,
             is_sleeping,
@@ -2368,7 +2258,8 @@ mod overweight_diabetes_tests {
     use super::*;
 
     /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 101-byte `SAVE_SIZE`.
+    /// 95-byte `SAVE_SIZE` (101 minus the removed `drained` (2B) +
+    /// `drained_interval_counter` (4B)).
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2384,7 +2275,7 @@ mod overweight_diabetes_tests {
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 101);
+        assert_eq!(SAVE_SIZE, 95);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
@@ -2457,19 +2348,19 @@ mod overweight_diabetes_tests {
     /// Every `Action` variant must round-trip through the persisted byte
     /// exactly. Regression test for a real bug: `to_bytes` wrote the
     /// discriminant via a bare `as u8` cast, but `from_bytes`'s
-    /// hand-written match only recognized Feed/Heal/Relax/Play (0-3) —
-    /// Exercise/Medicate/Ozempic/Drink/Rehab (4-8) all silently came
-    /// back as `None`, discarding an in-progress action (and, for
-    /// Drink specifically, dropping `active_drink` context too, so the
-    /// remainder of the action would have applied under the wrong
-    /// drink's multipliers had the match not dropped the action
-    /// entirely first).
+    /// hand-written match only recognized the first four discriminants
+    /// (0-3, at the time Feed/Heal/Relax/Play) — Exercise/Medicate/
+    /// Ozempic/Drink/Rehab (4-8) all silently came back as `None`,
+    /// discarding an in-progress action (and, for Drink specifically,
+    /// dropping `active_drink` context too, so the remainder of the
+    /// action would have applied under the wrong drink's multipliers
+    /// had the match not dropped the action entirely first). `2`
+    /// (formerly `Relax`) is now a deliberate gap — see `Action::to_u8`.
     #[test]
     fn every_action_round_trips_through_save() {
         let all = [
             Action::Feed,
             Action::Heal,
-            Action::Relax,
             Action::Play,
             Action::Exercise,
             Action::Medicate,
@@ -2710,7 +2601,6 @@ mod overweight_diabetes_tests {
         // one this test's estimate is exercising.
         state.hunger = 0;
         state.tired = 0;
-        state.drained = 0;
         state.cooldown_feed = 0;
         state.cooldown_relax = 0;
         state.cooldown_play = 0;
