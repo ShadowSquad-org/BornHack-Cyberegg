@@ -96,6 +96,10 @@ pub const MINIGAME_HEX_REWARD: u32 = 15;
 pub const BATTLE_HEX_REWARD: u32 = 20;
 /// Happiness change per Play / Only-pets completion = 30% of STAT_MAX (65535).
 pub const HAPPINESS_STEP: u16 = 19660;
+/// HEX cost of the basic Play action.
+pub const PLAY_HEX_COST: u32 = 10;
+/// HEX cost of a drug dose (Ozempic / Medicate / Rehab).
+pub const DRUG_HEX_COST: u32 = 15;
 
 /// Active user action (mutually exclusive).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1197,6 +1201,12 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_feed > 0 {
             return false;
         }
+        // Stage 3: best-effort charge — deducts if affordable, otherwise
+        // the action still proceeds for free. Stage 5 will turn this into
+        // an affordability gate that blocks the action instead.
+        if self.money_enabled {
+            let _ = self.spend_money(food.hex_price());
+        }
         self.active_action = Some(Action::Feed);
         self.active_food = Some(food);
         self.action_ticks_remaining = FEED_DURATION();
@@ -1236,6 +1246,10 @@ impl GameState {
         }
         if self.active_action.is_some() || self.cooldown_play > 0 {
             return false;
+        }
+        // Stage 3: best-effort charge — see the comment in `feed()`.
+        if self.money_enabled {
+            let _ = self.spend_money(PLAY_HEX_COST);
         }
         self.active_action = Some(Action::Play);
         self.action_ticks_remaining = PLAY_DURATION();
@@ -1282,6 +1296,10 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_medicate > 0 {
             return false;
         }
+        // Stage 3: best-effort charge — see the comment in `feed()`.
+        if self.money_enabled {
+            let _ = self.spend_money(DRUG_HEX_COST);
+        }
         self.active_action = Some(Action::Medicate);
         self.action_ticks_remaining = MEDICATE_DURATION();
         true
@@ -1297,6 +1315,10 @@ impl GameState {
         if self.active_action.is_some() || self.cooldown_ozempic > 0 {
             return false;
         }
+        // Stage 3: best-effort charge — see the comment in `feed()`.
+        if self.money_enabled {
+            let _ = self.spend_money(DRUG_HEX_COST);
+        }
         self.active_action = Some(Action::Ozempic);
         self.action_ticks_remaining = OZEMPIC_DURATION();
         true
@@ -1310,6 +1332,10 @@ impl GameState {
         }
         if self.active_action.is_some() || self.cooldown_drink > 0 {
             return false;
+        }
+        // Stage 3: best-effort charge — see the comment in `feed()`.
+        if self.money_enabled {
+            let _ = self.spend_money(drink.hex_price());
         }
         self.active_action = Some(Action::Drink);
         self.active_drink = Some(drink);
@@ -1328,6 +1354,10 @@ impl GameState {
         }
         if self.active_action.is_some() || self.cooldown_rehab > 0 {
             return false;
+        }
+        // Stage 3: best-effort charge — see the comment in `feed()`.
+        if self.money_enabled {
+            let _ = self.spend_money(DRUG_HEX_COST);
         }
         self.active_action = Some(Action::Rehab);
         self.action_ticks_remaining = REHAB_DURATION();
@@ -2788,5 +2818,144 @@ mod overweight_diabetes_tests {
         assert_eq!(state.miserable, STAT_MAX() - HAPPINESS_STEP);
         assert!(state.cooldown_onlypets > 0);
         assert_eq!(state.active_action, None);
+    }
+
+    // ── Stage 3: "things cost money" ────────────────────────────────────
+
+    /// Feeding charges by the food's health tier — healthy (Salad) costs
+    /// more than unhealthy (Burger), mirroring `FoodKind::hex_price`.
+    #[test]
+    fn feed_charges_by_food_health() {
+        let mut state = GameState::new_egg(40, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 85, "healthy food (Salad) should cost 15 HEX");
+
+        // Fresh egg so the cooldown from the first feed doesn't reject this one.
+        let mut state = GameState::new_egg(41, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Burger));
+        assert_eq!(state.money, 90, "unhealthy food (Burger) should cost 10 HEX");
+    }
+
+    /// Drinking charges by the drink's health tier — healthy (Water) costs
+    /// more than unhealthy (Cola), mirroring `DrinkKind::hex_price`.
+    #[test]
+    fn drink_charges_by_health() {
+        let mut state = GameState::new_egg(42, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.drink(DrinkKind::Water));
+        assert_eq!(state.money, 85, "healthy drink (Water) should cost 15 HEX");
+
+        let mut state = GameState::new_egg(43, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.drink(DrinkKind::Cola));
+        assert_eq!(state.money, 90, "unhealthy drink (Cola) should cost 10 HEX");
+    }
+
+    /// The basic Play action costs a flat `PLAY_HEX_COST` (10 HEX).
+    #[test]
+    fn play_costs_10() {
+        let mut state = GameState::new_egg(44, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 90);
+    }
+
+    /// Each drug action (Ozempic, Medicate, Rehab) costs a flat
+    /// `DRUG_HEX_COST` (15 HEX). Medicate/Rehab are gated on
+    /// diabetic/alcoholic respectively, so those flags are set first.
+    #[test]
+    fn drug_costs_15() {
+        let mut state = GameState::new_egg(45, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        assert!(state.ozempic());
+        assert_eq!(state.money, 85, "ozempic should cost 15 HEX");
+
+        let mut state = GameState::new_egg(46, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        state.diabetic = true;
+        assert!(state.medicate());
+        assert_eq!(state.money, 85, "medicate should cost 15 HEX");
+
+        let mut state = GameState::new_egg(47, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+        state.alcoholic = true;
+        assert!(state.rehab());
+        assert_eq!(state.money, 85, "rehab should cost 15 HEX");
+    }
+
+    /// With `money_enabled = false`, priced actions proceed but charge
+    /// nothing at all — the whole money layer stays inert.
+    #[test]
+    fn actions_free_when_money_disabled() {
+        let mut state = GameState::new_egg(48, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        assert_eq!(state.money, 100, "feed should not charge when money is off");
+
+        let mut state = GameState::new_egg(49, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = false;
+        state.money = 100;
+
+        assert!(state.play());
+        assert_eq!(state.money, 100, "play should not charge when money is off");
+    }
+
+    /// Stage 3 charges best-effort: an unaffordable action still proceeds
+    /// (Stage 5 will add the affordability gate), but `spend_money`
+    /// declines and leaves the balance untouched.
+    #[test]
+    fn broke_action_still_proceeds_without_charge() {
+        let mut state = GameState::new_egg(50, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 5;
+
+        assert!(state.feed(FoodKind::Salad), "action should still start when broke");
+        assert_eq!(state.money, 5, "an unaffordable charge should not touch the balance");
+        assert_eq!(state.active_action, Some(Action::Feed));
+    }
+
+    /// A rejected action (already busy) must never charge — the charge
+    /// line sits after the guard checks, so a second `feed()` call while
+    /// one is in progress returns false and leaves `money` unchanged.
+    #[test]
+    fn rejected_action_does_not_charge() {
+        let mut state = GameState::new_egg(51, PetKind::Bartholomeus);
+        state.update(HATCHING_TICKS() as u32);
+        state.money_enabled = true;
+        state.money = 100;
+
+        assert!(state.feed(FoodKind::Salad));
+        state.money = 100; // reset after the first (accepted) charge
+
+        assert!(!state.feed(FoodKind::Burger), "feed should be rejected while busy");
+        assert_eq!(state.money, 100, "a rejected action must not charge");
     }
 }
