@@ -234,7 +234,7 @@ impl Item {
             Self::Friends => "Friends",
             Self::Battle => "Battle",
             Self::FeedFood(food) => food.label(),
-            Self::GiveMedicine => "Give medicine",
+            Self::GiveMedicine => "Aspirine",
             Self::GiveMedication => "Insulin",
             Self::Ozempic => "Ozempic",
             Self::ExerciseNow => "Exercise now",
