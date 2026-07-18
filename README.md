@@ -396,6 +396,10 @@ sudo apt install build-essential gcc-arm-none-eabi libsdl2-dev dfu-util libudev-
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
 
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
+
 # probe-rs
 cargo install probe-rs-tools
 
@@ -411,6 +415,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo pacman -S base-devel arm-none-eabi-gcc sdl2 dfu-util
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+cargo install flip-link      # the firmware's linker — build fails without it
 cargo install probe-rs-tools
 ```
 
@@ -426,6 +431,10 @@ brew install arm-none-eabi-binutils sdl2 dfu-util
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add thumbv7em-none-eabihf
+
+# flip-link — the firmware's linker (see .cargo/config.toml); without it the
+# build fails with "linker `flip-link` not found"
+cargo install flip-link
 
 # probe-rs
 cargo install probe-rs-tools
@@ -447,6 +456,12 @@ Install the following:
    ```
 
 1. **ARM toolchain**: download the GNU Arm Embedded Toolchain from <https://developer.arm.com/downloads/-/gnu-rm> and add it to your PATH.
+
+1. **flip-link** — the firmware's linker (`.cargo/config.toml`); the build fails with `linker 'flip-link' not found` without it:
+
+   ```powershell
+   cargo install flip-link
+   ```
 
 1. **probe-rs**:
 
