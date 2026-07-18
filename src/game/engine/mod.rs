@@ -238,6 +238,12 @@ pub struct GameState {
     /// Chosen at pet creation, persisted. When `false` the whole money
     /// layer is inert: no HEX display, no prices, no rewards.
     pub money_enabled: bool,
+    /// Chosen at pet creation, persisted. Only meaningful when
+    /// `money_enabled` is true (hard mode implies money is on) — changes
+    /// PRICE AMOUNTS only (healthy food, medication, rehab all cost
+    /// more); it never changes which actions are gated on affordability,
+    /// that's still entirely `money_enabled`'s job.
+    pub hard_mode: bool,
 
     // Action state.
     pub active_action: Option<Action>,
@@ -374,6 +380,7 @@ impl GameState {
 
             money: 100,
             money_enabled: true,
+            hard_mode: false,
 
             active_action: None,
             active_food: None,
@@ -1620,6 +1627,9 @@ pub struct PetStats {
     /// Whether the money layer is active for this pet — gates HEX display,
     /// pricing, and menu affordability checks.
     pub money_enabled: bool,
+    /// Whether Hard (US) prices are in effect. Only meaningful when
+    /// `money_enabled` is true — see `GameState::hard_mode`.
+    pub hard_mode: bool,
 
     /// Currently active action (if any).
     pub active_action: Option<Action>,
@@ -1727,6 +1737,7 @@ impl GameState {
 
             money: self.money,
             money_enabled: self.money_enabled,
+            hard_mode: self.hard_mode,
 
             active_action: self.active_action,
             action_ticks_remaining: self.action_ticks_remaining,
@@ -1875,7 +1886,7 @@ impl GameState {
 // ---------------------------------------------------------------------------
 
 /// Serialized size of GameState in bytes.
-pub const SAVE_SIZE: usize = 95;
+pub const SAVE_SIZE: usize = 96;
 
 impl GameState {
     /// Serialize the game state to a fixed-size byte buffer for ekv.
@@ -1960,7 +1971,9 @@ impl GameState {
         // HEX money (5 bytes).
         w32!(self.money);
         w8!(self.money_enabled as u8);
-        // Total: 95 bytes.
+        // Hard mode (1 byte).
+        w8!(self.hard_mode as u8);
+        // Total: 96 bytes.
         b
     }
 
@@ -2047,6 +2060,7 @@ impl GameState {
         let cooldown_battle = r16!();
         let money = r32!();
         let money_enabled = r8!() != 0;
+        let hard_mode = r8!() != 0;
 
         Some(Self {
             pet_kind,
@@ -2073,6 +2087,7 @@ impl GameState {
             losses,
             money,
             money_enabled,
+            hard_mode,
             active_action,
             // Not persisted — see the field doc on `active_food`.
             active_food: None,
@@ -2287,8 +2302,7 @@ mod overweight_diabetes_tests {
     use super::*;
 
     /// New fields round-trip through `to_bytes`/`from_bytes` at the new
-    /// 95-byte `SAVE_SIZE` (101 minus the removed `drained` (2B) +
-    /// `drained_interval_counter` (4B)).
+    /// 96-byte `SAVE_SIZE` (95 + the new `hard_mode` byte).
     #[test]
     fn save_round_trip_includes_new_fields() {
         let mut state = GameState::new_egg(42, PetKind::Cat);
@@ -2301,10 +2315,11 @@ mod overweight_diabetes_tests {
         state.cooldown_battle = 77;
         state.money = 12345;
         state.money_enabled = false;
+        state.hard_mode = true;
 
         let bytes = state.to_bytes();
         assert_eq!(bytes.len(), SAVE_SIZE);
-        assert_eq!(SAVE_SIZE, 95);
+        assert_eq!(SAVE_SIZE, 96);
 
         let restored = GameState::from_bytes(&bytes).expect("valid save should parse");
         assert_eq!(restored.weight, 41000);
@@ -2317,6 +2332,7 @@ mod overweight_diabetes_tests {
         assert_eq!(restored.pet_kind.id(), PetKind::Cat.id());
         assert_eq!(restored.money, 12345);
         assert!(!restored.money_enabled);
+        assert!(restored.hard_mode);
     }
 
     /// A fresh egg starts with the Stage-1 HEX default: 100 balance, money
