@@ -1608,6 +1608,13 @@ pub struct PetStats {
     pub wins: u16,
     pub losses: u16,
 
+    /// Current HEX balance. Only meaningful (displayed/priced) when
+    /// `money_enabled`.
+    pub money: u32,
+    /// Whether the money layer is active for this pet — gates HEX display,
+    /// pricing, and menu affordability checks.
+    pub money_enabled: bool,
+
     /// Currently active action (if any).
     pub active_action: Option<Action>,
     /// Ticks remaining on the active action.
@@ -1711,6 +1718,9 @@ impl GameState {
 
             wins: self.wins,
             losses: self.losses,
+
+            money: self.money,
+            money_enabled: self.money_enabled,
 
             active_action: self.active_action,
             action_ticks_remaining: self.action_ticks_remaining,

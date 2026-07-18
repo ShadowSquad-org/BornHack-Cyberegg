@@ -304,16 +304,33 @@ impl Item {
             | Self::CheatForceAlcoholic
             | Self::CheatClearAlcoholism
             | Self::CheatResetBattleRecord => true,
-            Self::DrinkChoice(_) => stats.can_drink,
-            Self::Rehab => stats.can_rehab,
+            Self::DrinkChoice(drink) => {
+                stats.can_drink && (!stats.money_enabled || stats.money >= drink.hex_price())
+            }
+            Self::Rehab => {
+                stats.can_rehab
+                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+            }
             Self::Battle => stats.can_battle,
-            Self::FeedFood(_) => stats.can_feed,
+            Self::FeedFood(food) => {
+                stats.can_feed && (!stats.money_enabled || stats.money >= food.hex_price())
+            }
             Self::GiveMedicine => stats.can_heal,
-            Self::GiveMedication => stats.can_medicate,
-            Self::Ozempic => stats.can_ozempic,
+            Self::GiveMedication => {
+                stats.can_medicate
+                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+            }
+            Self::Ozempic => {
+                stats.can_ozempic
+                    && (!stats.money_enabled || stats.money >= super::engine::DRUG_HEX_COST)
+            }
             Self::ExerciseNow => stats.can_exercise,
             Self::Sleep => stats.can_sleep,
-            Self::PlayNow => stats.can_play,
+            Self::PlayNow => {
+                stats.can_play
+                    && (!stats.money_enabled || stats.money >= super::engine::PLAY_HEX_COST)
+            }
+            // Never gated — the escape hatch when broke.
             Self::OnlyPets => stats.can_only_pets,
             Self::TicTacToe => stats.can_play_tictactoe,
             Self::LightsOut => stats.can_play_lightsout,
