@@ -200,10 +200,14 @@ pub fn can_use_station() -> bool {
 }
 
 /// Create a new egg and begin the hatching countdown.
-/// Called after the player selects a pet kind on the selection screen.
-pub fn start_new_game(kind: super::engine::PetKind) {
+/// Called after the player selects a pet kind (and money mode) on the
+/// selection screen. The egg always starts with `money = 100` (see
+/// `GameState::new_egg`); `money_enabled` decides whether that balance
+/// is actually in play for this generation.
+pub fn start_new_game(kind: super::engine::PetKind, money_enabled: bool) {
     let mut egg = new_egg(kind);
     egg.last_update_tick = now_tick();
+    egg.money_enabled = money_enabled;
     unsafe {
         *GAME.get() = Some(egg);
     }
@@ -623,7 +627,8 @@ pub fn award_inspiration(game: super::engine::MiniGame) {
 
 /// Start a new generation (after pet has left or manual reset).
 /// Records the current pet in the Unicorn Realm before replacing it.
-pub fn new_generation(kind: super::engine::PetKind) {
+/// `money_enabled` is chosen fresh per generation, same as `kind`.
+pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool) {
     use super::engine::Phase;
     let state = unsafe { (*GAME.get()).as_mut() };
     if let Some(s) = state {
@@ -650,6 +655,7 @@ pub fn new_generation(kind: super::engine::PetKind) {
 
         let seed = now_tick() as u64 ^ 0xDEAD_BEEF;
         s.new_generation(seed, kind);
+        s.money_enabled = money_enabled;
         s.last_update_tick = now_tick();
 
         // Push AFTER the state reset (so new_generation() can't clobber the
