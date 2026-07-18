@@ -366,7 +366,7 @@ where
         let mut money_buf: heapless::String<12> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(
             &mut money_buf,
-            format_args!("{} HEX", lifecycle::money()),
+            format_args!("{} H", lifecycle::money()),
         );
         // Reuse the already-linked bold font (FONT_7X13_BOLD via `font`) —
         // pulling in a second glyph table (9x15) overflowed FLASH by ~12 KB.
