@@ -65,10 +65,10 @@ impl FoodKind {
         ((base as u32 * pct) / 100).min(u16::MAX as u32) as u16
     }
 
-    /// HEX price to feed this food. Healthy costs more than junk.
+    /// HAX price to feed this food. Healthy costs more than junk.
     /// In Hard (US) mode healthy food is pricier still (20 vs 15);
     /// unhealthy food is unaffected by `hard`.
-    pub fn hex_price(self, hard: bool) -> u32 {
+    pub fn hax_price(self, hard: bool) -> u32 {
         match self {
             FoodKind::Salad | FoodKind::Apple => {
                 if hard {
@@ -86,26 +86,26 @@ impl FoodKind {
 mod tests {
     use super::*;
 
-    /// Healthy foods (Salad, Apple) cost 15 HEX in normal mode; unhealthy
+    /// Healthy foods (Salad, Apple) cost 15 HAX in normal mode; unhealthy
     /// ones (Burger, Pizza, Cake) cost 10 — junk food is the cheap trap.
     #[test]
-    fn hex_price_matches_health_tier() {
-        assert_eq!(FoodKind::Salad.hex_price(false), 15);
-        assert_eq!(FoodKind::Apple.hex_price(false), 15);
-        assert_eq!(FoodKind::Frikandel.hex_price(false), 10);
-        assert_eq!(FoodKind::Pizza.hex_price(false), 10);
-        assert_eq!(FoodKind::Cake.hex_price(false), 10);
+    fn hax_price_matches_health_tier() {
+        assert_eq!(FoodKind::Salad.hax_price(false), 15);
+        assert_eq!(FoodKind::Apple.hax_price(false), 15);
+        assert_eq!(FoodKind::Frikandel.hax_price(false), 10);
+        assert_eq!(FoodKind::Pizza.hax_price(false), 10);
+        assert_eq!(FoodKind::Cake.hax_price(false), 10);
     }
 
-    /// In Hard (US) mode, healthy food (Salad, Apple) jumps to 20 HEX —
+    /// In Hard (US) mode, healthy food (Salad, Apple) jumps to 20 HAX —
     /// 2x the unhealthy price. Unhealthy food (Burger, Pizza, Cake) is
     /// unaffected by hard mode.
     #[test]
-    fn hex_price_hard_mode_raises_healthy_food_only() {
-        assert_eq!(FoodKind::Salad.hex_price(true), 20);
-        assert_eq!(FoodKind::Apple.hex_price(true), 20);
-        assert_eq!(FoodKind::Frikandel.hex_price(true), 10);
-        assert_eq!(FoodKind::Pizza.hex_price(true), 10);
-        assert_eq!(FoodKind::Cake.hex_price(true), 10);
+    fn hax_price_hard_mode_raises_healthy_food_only() {
+        assert_eq!(FoodKind::Salad.hax_price(true), 20);
+        assert_eq!(FoodKind::Apple.hax_price(true), 20);
+        assert_eq!(FoodKind::Frikandel.hax_price(true), 10);
+        assert_eq!(FoodKind::Pizza.hax_price(true), 10);
+        assert_eq!(FoodKind::Cake.hax_price(true), 10);
     }
 }

@@ -118,7 +118,7 @@ pub fn open() {
 
 pub fn close() {
     if ACTIVE.swap(false, Ordering::Relaxed) {
-        // Award the win reward (HEX + cooldown + hunger cost) for any
+        // Award the win reward (HAX + cooldown + hunger cost) for any
         // game that scored at least one cleared row.
         let score = SCORE.load(Ordering::Relaxed);
         if score > 0 {
