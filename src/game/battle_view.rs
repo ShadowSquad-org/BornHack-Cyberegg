@@ -368,7 +368,10 @@ where
 
     let count = super::friends::count();
     if count == 0 {
-        ui::draw_centered_message(display, "No friends to battle yet", Point::new(76, 85))?;
+        // Two lines — the single string is wider than the 152px panel and
+        // got clipped to "o friends to battle ye".
+        ui::draw_centered_message(display, "No friends", Point::new(76, 78))?;
+        ui::draw_centered_message(display, "to battle yet", Point::new(76, 92))?;
         return Ok(());
     }
 
