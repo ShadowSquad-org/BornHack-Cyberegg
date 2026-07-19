@@ -189,12 +189,18 @@ where
 
         let name = friend.name_str();
         let kind_name = super::engine::PetKind::from_u8(friend.pet_kind).name();
-        let mut line: heapless::String<28> = heapless::String::new();
+        let tag = friend.short_tag();
+        let mut line: heapless::String<40> = heapless::String::new();
         if !name.is_empty() {
-            let _ =
-                core::fmt::Write::write_fmt(&mut line, format_args!("{} ({})", name, kind_name));
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!("{} [{}] ({})", name, tag.as_str(), kind_name),
+            );
         } else {
-            let _ = core::fmt::Write::write_fmt(&mut line, format_args!("{}", kind_name));
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!("{} [{}]", kind_name, tag.as_str()),
+            );
         }
         let style = if is_selected {
             TEXT_BOLD_WHITE

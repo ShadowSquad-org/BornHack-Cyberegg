@@ -243,6 +243,13 @@ itself (other than Up/Down/Fire) closes the whole screen. Long names
 wrap onto a second line instead of running off the
 edge of the screen.
 
+Every friend's name is followed by a short **`[XX]`** tag — two
+characters unique to their badge, so two friends who happen to have
+named their pet the same thing still show up as clearly different
+entries (e.g. `Rex [7K] (Cat)` vs `Rex [Q2] (Cat)`). It's derived from
+the friend's badge, not their pet name, so it stays the same across
+renames and reboots.
+
 This only works between two physical badges, both running this firmware
 and both in LoRa range of each other and on the SHDW channel — there's
 no simulated version of meeting a friend.
@@ -265,7 +272,9 @@ the same permanent conditions that hurt everyday care also make your
 pet a weaker fighter.
 
 Select **Battle** — now the first option under the **Play** icon — to
-challenge a friend from your Friends list. Battling is **instant**:
+challenge a friend from your Friends list (shown with the same `[XX]`
+tag as the Friends screen, so a same-named friend is still easy to
+pick out). Battling is **instant**:
 your badge resolves the whole fight immediately using your pet's live
 stats and your friend's most recently broadcast combat stats, no
 waiting around. You'll see a result screen with both pets' remaining

@@ -134,12 +134,20 @@ where
     Ok(cursor_y)
 }
 
-fn friend_label(name: &str, kind_name: &str) -> heapless::String<32> {
+/// `tag` disambiguates two friends who share the same pet name — see
+/// `friends::FriendRecord::short_tag`. Sized generously (a custom pet
+/// installed via `PETS.CFG` can have a name up to `NAME_CAP` = 16 bytes,
+/// longer than a built-in's `PET_NAME_MAX` = 12) so a long name/kind
+/// combo can't silently truncate the tag or the trailing paren.
+fn friend_label(name: &str, kind_name: &str, tag: &str) -> heapless::String<40> {
     let mut label = heapless::String::new();
     if !name.is_empty() {
-        let _ = core::fmt::Write::write_fmt(&mut label, format_args!("{} ({})", name, kind_name));
+        let _ = core::fmt::Write::write_fmt(
+            &mut label,
+            format_args!("{} [{}] ({})", name, tag, kind_name),
+        );
     } else {
-        let _ = core::fmt::Write::write_fmt(&mut label, format_args!("{}", kind_name));
+        let _ = core::fmt::Write::write_fmt(&mut label, format_args!("{} [{}]", kind_name, tag));
     }
     label
 }
@@ -195,7 +203,7 @@ where
         }
 
         let kind_name = super::engine::PetKind::from_u8(friend.pet_kind).name();
-        let label = friend_label(friend.name_str(), kind_name);
+        let label = friend_label(friend.name_str(), kind_name, friend.short_tag().as_str());
         let style = if is_selected {
             TEXT_BOLD_WHITE
         } else {
@@ -243,7 +251,7 @@ where
 
     let left = TextStyleBuilder::new().baseline(Baseline::Top).build();
     let kind_name = super::engine::PetKind::from_u8(friend.pet_kind).name();
-    let label = friend_label(friend.name_str(), kind_name);
+    let label = friend_label(friend.name_str(), kind_name, friend.short_tag().as_str());
 
     let mut y = draw_wrapped(display, label.as_str(), 6, 22, TEXT_BOLD_BLACK)?;
     y += 2;

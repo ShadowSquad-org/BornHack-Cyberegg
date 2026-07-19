@@ -179,6 +179,37 @@ impl FriendRecord {
         let n = (self.name_len as usize).min(PET_NAME_MAX);
         core::str::from_utf8(&self.name[..n]).unwrap_or("")
     }
+
+    /// Short 2-character tag derived from `device_id`, for telling apart
+    /// two friends who happen to share the same pet name.
+    pub fn short_tag(&self) -> heapless::String<2> {
+        short_tag(self.device_id)
+    }
+}
+
+/// Crockford's Base32 alphabet, minus the checksum letters — 32 symbols
+/// that exclude glyphs easily confused with each other or with digits
+/// (no I/L/O/U), so a 2-character tag stays readable on the small
+/// e-paper font. Chosen for exactly this "short human-readable ID"
+/// use case, not just picked arbitrarily.
+const TAG_ALPHABET: [u8; 32] = *b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Derive a 2-character tag from a device id.
+///
+/// This is a display convenience, not a uniqueness guarantee: 2
+/// characters over 32 symbols is 1024 combinations, so two friends can
+/// still land on the same tag. That's an acceptable trade for staying
+/// short and readable — a full `device_id` printed as hex would be
+/// unambiguous but wouldn't fit next to a pet name on this screen.
+pub fn short_tag(device_id: [u8; 2]) -> heapless::String<2> {
+    let v = ((device_id[0] as usize) << 8) | device_id[1] as usize;
+    let idx = v % (TAG_ALPHABET.len() * TAG_ALPHABET.len());
+    let hi = idx / TAG_ALPHABET.len();
+    let lo = idx % TAG_ALPHABET.len();
+    let mut s = heapless::String::new();
+    let _ = s.push(TAG_ALPHABET[hi] as char);
+    let _ = s.push(TAG_ALPHABET[lo] as char);
+    s
 }
 
 /// Ring buffer of met friends, newest-first — same shape as `PetRealm`,
@@ -551,6 +582,54 @@ mod tests {
             wins: 0,
             losses: 0,
         }
+    }
+
+    #[test]
+    fn short_tag_is_deterministic_and_two_chars() {
+        let a = short_tag([0x12, 0x34]);
+        let b = short_tag([0x12, 0x34]);
+        assert_eq!(a, b, "same device_id must always produce the same tag");
+        assert_eq!(a.len(), 2);
+    }
+
+    #[test]
+    fn short_tag_only_uses_readable_alphabet() {
+        // Sweep enough device_ids to exercise every alphabet slot at least
+        // once, and confirm nothing outside TAG_ALPHABET (no ambiguous
+        // I/L/O/U, no lowercase) ever comes out.
+        for hi in 0u16..=255 {
+            for lo in [0u8, 85, 170, 255] {
+                let tag = short_tag([(hi & 0xFF) as u8, lo]);
+                for c in tag.chars() {
+                    assert!(
+                        TAG_ALPHABET.contains(&(c as u8)),
+                        "tag char {c:?} not in TAG_ALPHABET"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn short_tag_differs_for_most_distinct_device_ids() {
+        // Not a uniqueness guarantee (2 chars over 32 symbols is only
+        // 1024 slots) but different device_ids should usually produce
+        // different tags, not collapse to a handful of values.
+        let tags: heapless::Vec<_, 16> = (0u16..16)
+            .map(|i| short_tag(i.to_be_bytes()))
+            .collect();
+        let distinct = tags
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| !tags[..*i].contains(t))
+            .count();
+        assert!(distinct >= 14, "expected mostly-distinct tags, got {distinct}/16");
+    }
+
+    #[test]
+    fn friend_record_short_tag_matches_free_function() {
+        let f = friend_record([0xAB, 0xCD], 1, 1);
+        assert_eq!(f.short_tag(), short_tag([0xAB, 0xCD]));
     }
 
     /// Simulates loading a save written near the end of a long previous
