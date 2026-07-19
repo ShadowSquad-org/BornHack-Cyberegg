@@ -265,6 +265,7 @@ pub fn status_wants_full_refresh() -> bool {
         || lifecycle::is_alcoholic_untreated()
         || lifecycle::is_overweight_warning()
         || lifecycle::is_drunk_warning()
+        || battle_view::wants_full_refresh()
 }
 
 /// Show the station-cooldown toast with the remaining time formatted

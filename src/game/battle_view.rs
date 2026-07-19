@@ -8,7 +8,7 @@
 //!   refreshes are too slow for that) showing both pets' names, HP-left
 //!   bars, and a WIN/LOSE banner. Any button returns to the game screen.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
@@ -70,6 +70,30 @@ static RESULT: SyncCell<Option<ResultDisplay>> = SyncCell::new(None);
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
+
+/// The result screen (HP bars + WON/LOST + reward) needs a full tri-color
+/// refresh — the red "YOU LOST" banner under-drives on the fast delta LUT,
+/// and the whole-screen picker→result change ghosts otherwise.
+pub fn wants_full_refresh() -> bool {
+    ACTIVE.load(Ordering::Relaxed) && STATE.load(Ordering::Relaxed) == STATE_RESULT
+}
+
+/// Low 32 bits of uptime in ms (firmware); 0 on the simulator, where the
+/// dismiss guard below is a no-op.
+#[cfg(feature = "embassy-base")]
+fn now_ms() -> u32 {
+    embassy_time::Instant::now().as_millis() as u32
+}
+#[cfg(not(feature = "embassy-base"))]
+fn now_ms() -> u32 {
+    0
+}
+
+/// When the result screen was shown, so the same button action that
+/// resolved the battle (or a joystick bounce right after) can't instantly
+/// dismiss it before the player sees it.
+static RESULT_SHOWN_MS: AtomicU32 = AtomicU32::new(0);
+const RESULT_DISMISS_GUARD_MS: u32 = 600;
 
 pub fn open() {
     STATE.store(STATE_PICKING, Ordering::Relaxed);
@@ -148,6 +172,7 @@ fn try_challenge() {
             outcome,
         });
     }
+    RESULT_SHOWN_MS.store(now_ms(), Ordering::Relaxed);
     STATE.store(STATE_RESULT, Ordering::Relaxed);
 }
 
@@ -155,8 +180,13 @@ fn try_challenge() {
 /// input logic across the two sub-states (mirrors `pet_select`).
 pub fn handle_input(btn: ButtonId) {
     if STATE.load(Ordering::Relaxed) == STATE_RESULT {
-        // Any button dismisses the result and closes the whole screen.
-        close();
+        // Any button dismisses the result — but not for a brief guard
+        // window after it appears, so the Fire that resolved the battle
+        // (or a joystick bounce) can't flick it away before it's seen.
+        let elapsed = now_ms().wrapping_sub(RESULT_SHOWN_MS.load(Ordering::Relaxed));
+        if elapsed >= RESULT_DISMISS_GUARD_MS {
+            close();
+        }
         return;
     }
 
