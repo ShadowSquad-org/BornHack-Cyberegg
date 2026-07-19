@@ -330,7 +330,13 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
     });
 
     // Play the battle animation locally: our pet (left) vs the friend (right).
-    super::show_battle_anim(my_kind, friend.pet_kind, outcome.challenger_won);
+    super::show_battle_anim(
+        my_kind,
+        friend.pet_kind,
+        outcome.challenger_won,
+        outcome.challenger_hp_pct,
+        outcome.target_hp_pct,
+    );
 
     Some(outcome)
 }
@@ -381,7 +387,14 @@ pub async fn on_battle_result(data: &[u8]) {
     // generic placeholder pet (see `resolve_kind`).
     let own_kind = super::lifecycle::pet_kind().id();
     let opp_kind = resolve_kind(msg.challenger_kind, msg.challenger_id);
-    super::show_battle_anim(own_kind, opp_kind, we_won);
+    // From our side the HP swaps: our pet's HP is the packet's target HP.
+    super::show_battle_anim(
+        own_kind,
+        opp_kind,
+        we_won,
+        msg.target_hp_pct,
+        msg.challenger_hp_pct,
+    );
 }
 
 #[cfg(test)]
