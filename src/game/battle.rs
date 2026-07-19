@@ -192,18 +192,15 @@ const FULL_SIZE: usize = 9;
 /// placeholder pet (see [`resolve_kind`]).
 pub const KIND_UNKNOWN: u8 = 0xFF;
 
-/// Sprite `PP` prefix of the generic "unknown species" placeholder pet, drawn
-/// when we can't resolve the real species (legacy packet + unknown friend).
-pub const GENERIC_KIND: u8 = 0xFE;
-
 /// Resolve a combatant's sprite species: use `kind` when it's a real value,
-/// else fall back to the stored friend record for `device_id`, else the
-/// generic placeholder pet.
+/// else fall back to the stored friend record for `device_id`, else the first
+/// firmware pet (Bartholomeus). There is no generic placeholder — every drawn
+/// species is a real pet.
 pub fn resolve_kind(kind: u8, device_id: [u8; 2]) -> u8 {
     if kind != KIND_UNKNOWN {
         return kind;
     }
-    super::friends::pet_kind_of(device_id).unwrap_or(GENERIC_KIND)
+    super::friends::pet_kind_of(device_id).unwrap_or(super::engine::PetKind::Bartholomeus.id())
 }
 
 impl BattleResultMsg {
