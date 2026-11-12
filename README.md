@@ -213,7 +213,9 @@ upstream. Anyone comparing behaviour against upstream should know about these:
 [FEATURES.html](FEATURES.html) has a dated feature log of this fork (written in
 July 2026), including mesh protocol details and the writeup of each fix
 above. [CHANGELOG-2026-07-14-to-16.md](CHANGELOG-2026-07-14-to-16.md) covers
-those three days. For anything newer, read `git log`.
+those three days. [CHANGELOG.md](CHANGELOG.md) lists the changes per
+release, starting with the MeshCore 1.16 → 1.18 work. For anything newer,
+read `git log`.
 
 Features and bug fixes in this repository were partly written with A.I.
 
