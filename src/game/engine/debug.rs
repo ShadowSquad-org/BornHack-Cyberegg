@@ -186,7 +186,6 @@ impl GameState {
                 self.cooldown_tictactoe = 0;
                 self.cooldown_lightsout = 0;
                 self.cooldown_blackhole = 0;
-                self.cooldown_nim = 0;
                 self.cooldown_bornjeweled = 0;
                 self.cooldown_battle = 0;
             }

@@ -32,7 +32,6 @@ pub mod lightsout;
 pub mod minigame;
 pub mod modal;
 pub mod nav;
-pub mod nim;
 pub mod bornpets_cfg;
 pub mod pacing;
 pub mod pet_registry;
@@ -530,7 +529,6 @@ pub fn full_screen_view_up() -> bool {
         || tictactoe::is_active()
         || lightsout::is_active()
         || blackhole::is_active()
-        || nim::is_active()
         || bornjeweled::is_active()
 }
 
@@ -927,9 +925,6 @@ where
     }
     if blackhole::is_active() {
         return blackhole::draw(display);
-    }
-    if nim::is_active() {
-        return nim::draw(display);
     }
     if bornjeweled::is_active() {
         return bornjeweled::draw(display);
@@ -1359,7 +1354,7 @@ pub(crate) fn lock_test_state() -> TestState {
 /// Every full-screen view the lib.rs and game draw dispatch handles under the
 /// game feature (the firmware qwiic overlay aside): name, open, close.
 #[cfg(test)]
-const FULL_SCREEN_VIEWS: [(&str, fn(), fn()); 12] = [
+const FULL_SCREEN_VIEWS: [(&str, fn(), fn()); 11] = [
     ("text_entry", || crate::text_entry::begin(b"", 1, |_| {}, "t", false), crate::text_entry::close_for_test),
     ("realm", realm_view::open, realm_view::close),
     ("traits", traits_view::open, traits_view::close),
@@ -1370,7 +1365,6 @@ const FULL_SCREEN_VIEWS: [(&str, fn(), fn()); 12] = [
     ("tictactoe", tictactoe::open, tictactoe::close),
     ("lightsout", lightsout::open, lightsout::close),
     ("blackhole", blackhole::open, blackhole::close),
-    ("nim", nim::open, nim::close),
     ("bornjeweled", bornjeweled::open, bornjeweled::close),
 ];
 
@@ -1873,7 +1867,7 @@ mod tests {
 
     use super::{BATTERY_Y, DEMO_MARK, DEMO_MARK_POS, draw_demo_mark, draw_pet_line};
     use crate::game::engine::PetLine;
-    use crate::game::{nim, pet_select, tictactoe};
+    use crate::game::{pet_select, tictactoe};
 
     fn demo_pet() -> crate::game::engine::GameState {
         let mut s = active_test_pet();
@@ -1953,7 +1947,6 @@ mod tests {
         // (diary, realm, ...) are dispatched before it is called at all.
         for (name, open, close) in [
             ("tictactoe", tictactoe::open as fn(), tictactoe::close as fn()),
-            ("nim", nim::open, nim::close),
             ("pet_select", pet_select::open_new_game, pet_select::close),
         ] {
             open();

@@ -231,16 +231,14 @@ pub enum MiniGame {
     TicTacToe,
     LightsOut,
     BlackHole,
-    Nim,
     BornJeweled,
 }
 
 impl MiniGame {
-    pub const ALL: [MiniGame; 5] = [
+    pub const ALL: [MiniGame; 4] = [
         MiniGame::TicTacToe,
         MiniGame::LightsOut,
         MiniGame::BlackHole,
-        MiniGame::Nim,
         MiniGame::BornJeweled,
     ];
 }
@@ -398,7 +396,6 @@ pub struct GameState {
     pub cooldown_tictactoe: u16,
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
-    pub cooldown_nim: u16,
     pub cooldown_bornjeweled: u16,
 
     // Sleep.
@@ -544,7 +541,6 @@ impl GameState {
             cooldown_tictactoe: 0,
             cooldown_lightsout: 0,
             cooldown_blackhole: 0,
-            cooldown_nim: 0,
             cooldown_bornjeweled: 0,
 
             is_sleeping: false,
@@ -1170,7 +1166,6 @@ impl GameState {
             MiniGame::TicTacToe => self.cooldown_tictactoe = MINIGAME_COOLDOWN(),
             MiniGame::LightsOut => self.cooldown_lightsout = MINIGAME_COOLDOWN(),
             MiniGame::BlackHole => self.cooldown_blackhole = MINIGAME_COOLDOWN(),
-            MiniGame::Nim => self.cooldown_nim = MINIGAME_COOLDOWN(),
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
         if self.money_live() {
@@ -1349,7 +1344,6 @@ impl GameState {
             MiniGame::TicTacToe => self.cooldown_tictactoe,
             MiniGame::LightsOut => self.cooldown_lightsout,
             MiniGame::BlackHole => self.cooldown_blackhole,
-            MiniGame::Nim => self.cooldown_nim,
             MiniGame::BornJeweled => self.cooldown_bornjeweled,
         }
     }
@@ -1714,7 +1708,6 @@ pub struct PetStats {
     pub can_play_tictactoe: bool,
     pub can_play_lightsout: bool,
     pub can_play_blackhole: bool,
-    pub can_play_nim: bool,
     pub can_play_bornjeweled: bool,
     /// Whether a mesh Battle can be started right now (cooldown-gated,
     /// same shape as the mini-game `can_play_*` flags above). Does not
@@ -1728,7 +1721,6 @@ pub struct PetStats {
     pub cooldown_tictactoe: u16,
     pub cooldown_lightsout: u16,
     pub cooldown_blackhole: u16,
-    pub cooldown_nim: u16,
     pub cooldown_bornjeweled: u16,
     pub cooldown_battle: u16,
 
@@ -1886,14 +1878,12 @@ impl GameState {
             can_play_tictactoe: can_game(MiniGame::TicTacToe),
             can_play_lightsout: can_game(MiniGame::LightsOut),
             can_play_blackhole: can_game(MiniGame::BlackHole),
-            can_play_nim: can_game(MiniGame::Nim),
             can_play_bornjeweled: can_game(MiniGame::BornJeweled),
             can_battle: self.battle_refusal().is_none(),
 
             cooldown_tictactoe: self.cooldown_tictactoe,
             cooldown_lightsout: self.cooldown_lightsout,
             cooldown_blackhole: self.cooldown_blackhole,
-            cooldown_nim: self.cooldown_nim,
             cooldown_bornjeweled: self.cooldown_bornjeweled,
             cooldown_battle: self.cooldown_battle,
 
@@ -2879,13 +2869,13 @@ mod overweight_diabetes_tests {
         state.money = 0;
         state.money_enabled = true;
 
-        state.award_inspiration(MiniGame::Nim, GRADE_WIN);
+        state.award_inspiration(MiniGame::BlackHole, GRADE_WIN);
         assert_eq!(state.money, MINIGAME_HAX_REWARD);
 
         state.money = 0;
         state.money_enabled = false;
-        state.cooldown_nim = 0;
-        state.award_inspiration(MiniGame::Nim, GRADE_WIN);
+        state.cooldown_blackhole = 0;
+        state.award_inspiration(MiniGame::BlackHole, GRADE_WIN);
         assert_eq!(state.money, 0, "money off should grant no HAX");
     }
 
@@ -2916,14 +2906,14 @@ mod overweight_diabetes_tests {
         state.update(HATCHING_TICKS() as u32);
         state.money = 0;
         state.money_enabled = false;
-        state.award_inspiration(MiniGame::Nim, GRADE_LOSS);
+        state.award_inspiration(MiniGame::BlackHole, GRADE_LOSS);
         assert_eq!(state.money, 0, "money off pays nothing");
-        assert!(state.cooldown_nim > 0);
+        assert!(state.cooldown_blackhole > 0);
 
         state.money_enabled = true;
         state.demo.on = true;
-        state.cooldown_nim = 0;
-        state.award_inspiration(MiniGame::Nim, GRADE_LOSS);
+        state.cooldown_blackhole = 0;
+        state.award_inspiration(MiniGame::BlackHole, GRADE_LOSS);
         assert_eq!(state.money, 0, "demo pays nothing");
     }
 

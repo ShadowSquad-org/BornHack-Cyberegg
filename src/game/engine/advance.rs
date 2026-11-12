@@ -82,7 +82,6 @@ pub fn advance(s: &mut GameState, dt: u32) {
         &mut s.cooldown_tictactoe,
         &mut s.cooldown_lightsout,
         &mut s.cooldown_blackhole,
-        &mut s.cooldown_nim,
         &mut s.cooldown_bornjeweled,
     ] {
         *c = c.saturating_sub(spent);

@@ -95,7 +95,7 @@ that names it, so the status word shows.
   w("Clear conditions"), [Ends every condition at once: injury, hangover,
     groggy, dependence, diabetes, rehab and the rest.],
   w("Clear cooldowns"), [Frees the medicine, Ozempic and insulin waits, the
-    five mini-games and Battle. It also ends a working insulin dose, so a
+    four mini-games and Battle. It also ends a working insulin dose, so a
     diabetic pet's ceiling penalty returns.],
   w("Reset battle record"), [Sets this pet's wins and losses to zero, and
     every friend's record too (@ch-friends).],

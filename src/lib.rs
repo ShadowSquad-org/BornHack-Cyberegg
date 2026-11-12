@@ -40,7 +40,7 @@
 //!   NFC tag, LoRa radio, BLE companion, MeshCore plumbing, FAT12 reader,
 //!   ekv-backed kv store, sponsors slideshow.  Embassy only.
 //! - `game` — virtual-pet lifecycle (hunger / inspiration / health /
-//!   tiredness), mini-games (black-hole, NIM, lights-out, tic-tac-toe,
+//!   tiredness), mini-games (black-hole, lights-out, tic-tac-toe,
 //!   sprite engine), station bonuses, action-feedback toasts.  Gated by `game`.
 //! - `watch` — Casio-style digital + analog clock face, alarms with per-day
 //!   mask and weekly repeats, multi-slot alarm state.  Gated by `watch`.

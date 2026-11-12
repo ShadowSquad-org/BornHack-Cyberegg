@@ -135,7 +135,6 @@ impl ModalKind {
                         Item::TicTacToe,
                         Item::LightsOut,
                         Item::BlackHole,
-                        Item::Nim,
                         Item::BornJeweled,
                         Item::Cancel,
                     ]
@@ -147,7 +146,6 @@ impl ModalKind {
                         Item::TicTacToe,
                         Item::LightsOut,
                         Item::BlackHole,
-                        Item::Nim,
                         Item::BornJeweled,
                         Item::Cancel,
                     ]
@@ -211,7 +209,6 @@ enum Item {
     TicTacToe,
     LightsOut,
     BlackHole,
-    Nim,
     BornJeweled,
     PlayMusic,
     /// Buzzer song index passed to [`crate::fw::buzzer::play`].
@@ -322,7 +319,6 @@ impl Item {
             Self::TicTacToe => "Tic Tac Toe",
             Self::LightsOut => "Lights Out",
             Self::BlackHole => "Black Hole",
-            Self::Nim => "Nim",
             Self::BornJeweled => "BornJeweled",
             Self::PlayMusic => "Play music",
             Self::Song(crate::SONG_STARTUP_INDEX) => "Startup",
@@ -420,7 +416,6 @@ impl Item {
                 Self::TicTacToe => stats.can_play_tictactoe,
                 Self::LightsOut => stats.can_play_lightsout,
                 Self::BlackHole => stats.can_play_blackhole,
-                Self::Nim => stats.can_play_nim,
                 Self::BornJeweled => stats.can_play_bornjeweled,
                 Self::Hibernate => true,
                 Self::WakeUp => false,
@@ -509,7 +504,6 @@ impl Item {
             Self::TicTacToe => lifecycle::game_refusal(MiniGame::TicTacToe),
             Self::LightsOut => lifecycle::game_refusal(MiniGame::LightsOut),
             Self::BlackHole => lifecycle::game_refusal(MiniGame::BlackHole),
-            Self::Nim => lifecycle::game_refusal(MiniGame::Nim),
             Self::BornJeweled => lifecycle::game_refusal(MiniGame::BornJeweled),
             Self::Sleep => lifecycle::sleep_refusal(),
             Self::WakeFromSleep => (!stats.is_sleeping).then_some(Reason::Refused(Refusal::NoNeed)),
@@ -617,10 +611,6 @@ impl Item {
             }
             Self::BlackHole => {
                 super::blackhole::open();
-                close();
-            }
-            Self::Nim => {
-                super::nim::open();
                 close();
             }
             Self::BornJeweled => {
@@ -2238,7 +2228,6 @@ mod tests {
                 s.cooldown_tictactoe = t::MINIGAME_COOLDOWN();
                 s.cooldown_lightsout = t::MINIGAME_COOLDOWN();
                 s.cooldown_blackhole = t::MINIGAME_COOLDOWN();
-                s.cooldown_nim = t::MINIGAME_COOLDOWN();
                 s.cooldown_bornjeweled = t::MINIGAME_COOLDOWN();
             }),
         ];
@@ -2329,7 +2318,6 @@ mod tests {
                 Item::TicTacToe,
                 Item::LightsOut,
                 Item::BlackHole,
-                Item::Nim,
                 Item::BornJeweled,
             ],
             Remedy::Relax => vec![Item::Relax],
@@ -2385,7 +2373,6 @@ mod tests {
                 s.cooldown_tictactoe = 9;
                 s.cooldown_lightsout = 9;
                 s.cooldown_blackhole = 9;
-                s.cooldown_nim = 9;
             }),
             ("frozen", false, false, |s| s.hibernating = true),
         ];

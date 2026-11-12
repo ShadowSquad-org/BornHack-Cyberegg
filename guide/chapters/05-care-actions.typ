@@ -256,7 +256,7 @@ the protection ends and mood falls by #v("DOSE_RELAPSE_MOOD_PCT").
     - #w("Play now"): the plain play.
     - #w("Only pets"): the pet works for HAX.
     - #w("Play music"): the #w("Music") menu.
-    - Five mini-games.
+    - Four mini-games.
   ],
   screen("menu-play", width: shot-m, caption: [The Play menu.]))
 
@@ -276,9 +276,9 @@ Refused when #w("asleep"), #w("injured") or #w("too tired") (energy under
 
 #pic-row((("playing", [Play now.]), ("tired", [Too tired for work.])))
 
-=== The five mini-games
+=== The four mini-games
 
-Pick a game and the badge opens it. Tic Tac Toe, Black Hole and Nim ask for a
+Pick a game and the badge opens it. Tic Tac Toe and Black Hole ask for a
 difficulty first. It changes the opponent, not the prize.
 
 #tbl((auto, 1fr),
@@ -286,7 +286,6 @@ difficulty first. It changes the opponent, not the prize.
   [#w("Tic Tac Toe")], [Three in a row. A draw counts as a draw.],
   [#w("Lights Out")], [Switching every light off. Each press flips its neighbours too.],
   [#w("Black Hole")], [The lowest score next to the hole. A tie counts as a draw.],
-  [#w("Nim")], [Making the opponent take the last stick.],
   [#w("BornJeweled")], [Matching gems until the moves run out. Leave with a point on the board and it counts as a win.],
 )
 

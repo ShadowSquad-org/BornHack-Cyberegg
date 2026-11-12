@@ -1,6 +1,6 @@
 # BornPets & Mini-Games — User Guide
 
-The **Game** screen runs BornPets — a virtual pet inspired by Tamagotchi — plus five mini-games you can launch from the pet's **Play** menu.
+The **Game** screen runs BornPets — a virtual pet inspired by Tamagotchi — plus four mini-games you can launch from the pet's **Play** menu.
 
 ## BornPets
 
@@ -525,7 +525,7 @@ single plane, RLE, fixed palette 0 = black / 1 = red / 2 = white /
 With three free prefixes (`5`–`7`) the roster tops out at the three
 built-ins plus three custom pets.
 
-## The five mini-games
+## The four mini-games
 
 Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has its own cooldown (limit on how often you can play it for stat reduction). **CAN** always exits any mini-game.
 
@@ -533,7 +533,6 @@ Open the bottom-row **Play** menu in BornPets, then pick a game. Each game has i
 | --------------- | ----------------------------------------------- | ----------------------------------- |
 | **Tic-Tac-Toe** | Draw or beat the computer's X-vs-O              | Difficulty: Normal (computer slips 35%) or Impossible (never slips) |
 | **Lights Out**  | Toggle squares on a 5×5 grid until all are off  | Toggling a cell flips its 4 neighbours too. All seeds are solvable. |
-| **Nim**         | Force the computer to take the last stick       | Four rows of 1 / 3 / 5 / 7 sticks. Two-phase input: pick row, then count. |
 | **Black Hole**  | Lower adjacent-sum than the AI                 | 21-cell pyramid, both players place numbers 1..10 in alternating turns. |
 | **BornJeweled** | Match-3 with a move limit                       | 6×6 board, 30 moves. Shapes only — no colour pairs, fully accessible. |
 

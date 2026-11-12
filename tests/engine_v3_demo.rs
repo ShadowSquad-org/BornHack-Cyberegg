@@ -190,7 +190,7 @@ mod state {
         s.demo.on = true;
         assert!(s.feed(FoodKind::Pizza));
         assert_eq!(s.money, 50);
-        s.award_inspiration(MiniGame::Nim, GRADE_WIN);
+        s.award_inspiration(MiniGame::BlackHole, GRADE_WIN);
         assert_eq!(s.money, 50);
         s.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: true });
         assert_eq!(s.money, 50);
@@ -848,7 +848,7 @@ mod policy {
                     s.fun = pct(t::DEMO_SOFT_FUN_PCT() as i32 - 3);
                     soft(s);
                 },
-                Some(Choice::Game(MiniGame::TicTacToe, 1)),
+                Some(Choice::Game(MiniGame::BlackHole, 1)),
             ),
             (
                 "13 whim: beer",
@@ -923,7 +923,7 @@ mod policy {
         s.injured_min = if next(2) == 0 { next(100) as u16 } else { 0 };
         s.med_cd_min = if next(2) == 0 { next(100) as u16 } else { 0 };
         s.cooldown_tictactoe = if next(2) == 0 { next(600) as u16 } else { 0 };
-        s.cooldown_nim = if next(2) == 0 { next(600) as u16 } else { 0 };
+        s.cooldown_bornjeweled = if next(2) == 0 { next(600) as u16 } else { 0 };
         s.cooldown_blackhole = if next(2) == 0 { next(600) as u16 } else { 0 };
         s.demo.lazy = next(15) as u8;
         s.demo.soft_armed = next(1) == 1;
@@ -1243,7 +1243,7 @@ mod policy {
         s.demo.whim_min = 0;
         s.demo.lazy_min = 9;
         s.demo.pause_min = 3;
-        s.cooldown_nim = 7; // a minute and a bit: two minutes to go
+        s.cooldown_blackhole = 7; // a minute and a bit: two minutes to go
         let tm = demo::timers(&s);
         assert_eq!(tm[0], u32::MAX, "an unarmed clock is not running");
         assert_eq!(tm[1], u32::MAX, "whim at 0");
@@ -1411,7 +1411,7 @@ mod wake {
             s.dependent = next(4) == 0;
             s.insulin_min = next(200) as u16;
             s.injured_min = if next(2) == 0 { next(100) as u16 } else { 0 };
-            s.cooldown_nim = if next(2) == 0 { next(900) as u16 } else { 0 };
+            s.cooldown_bornjeweled = if next(2) == 0 { next(900) as u16 } else { 0 };
             s.cooldown_lightsout = if next(3) == 0 { next(900) as u16 } else { 0 };
             s.demo.on = true;
             s.demo.animated = i % 2 == 0;

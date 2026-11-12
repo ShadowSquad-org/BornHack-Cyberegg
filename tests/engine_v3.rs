@@ -1976,7 +1976,7 @@ mod doses_care {
         assert_eq!(s.fun as i32, pct(50 + 34));
         assert_eq!(s.energy as i32, pct(27));
         let mut s = pet();
-        s.award_inspiration(MiniGame::Nim, 2);
+        s.award_inspiration(MiniGame::BlackHole, 2);
         assert!(s.fun as i32 > pct(50));
     }
 
@@ -2269,17 +2269,17 @@ mod cooldown_countdown {
         let mut s = GameState::new_egg(7, PetKind(0));
         s.update(HATCHING_TICKS() as u32);
         s.tick_rem = 0;
-        s.cooldown_nim = 100;
+        s.cooldown_bornjeweled = 100;
         s.cooldown_battle = 50;
         s.cooldown_tictactoe = 30;
         let t0 = s.last_update_tick;
         s.update(t0 + 18); // 3 minutes
-        assert_eq!(s.cooldown_nim, 82);
+        assert_eq!(s.cooldown_bornjeweled, 82);
         assert_eq!(s.cooldown_battle, 32);
         assert_eq!(s.cooldown_tictactoe, 12);
         assert_eq!(s.cooldown_lightsout, 0);
         s.update(t0 + 120); // 20 minutes: all done
-        assert_eq!(s.cooldown_nim, 0);
+        assert_eq!(s.cooldown_bornjeweled, 0);
         assert_eq!(s.cooldown_battle, 0);
         assert_eq!(s.cooldown_tictactoe, 0);
     }
@@ -2965,7 +2965,7 @@ mod status_wake {
         let fun_after = |grade: u8| {
             let mut s = pet();
             s.fun = pct(30);
-            s.award_inspiration(MiniGame::Nim, grade);
+            s.award_inspiration(MiniGame::BlackHole, grade);
             s.fun
         };
         assert!(fun_after(1) > fun_after(0));
@@ -2973,7 +2973,7 @@ mod status_wake {
         let mut a = pet();
         a.fun = pct(30);
         let mut b = a.clone();
-        a.award_inspiration(MiniGame::Nim, 2);
+        a.award_inspiration(MiniGame::BlackHole, 2);
         doses::minigame(&mut b, 2);
         assert_eq!(a.fun, b.fun);
     }
@@ -3109,9 +3109,9 @@ mod fix_round_1 {
     #[test]
     fn game_rows_wait_out_their_cooldown() {
         let mut s = pet();
-        assert_eq!(s.game_refusal(MiniGame::Nim), None);
-        s.cooldown_nim = 18;
-        assert_eq!(s.game_refusal(MiniGame::Nim), Some(Reason::Wait(180)));
+        assert_eq!(s.game_refusal(MiniGame::BlackHole), None);
+        s.cooldown_blackhole = 18;
+        assert_eq!(s.game_refusal(MiniGame::BlackHole), Some(Reason::Wait(180)));
         assert_eq!(s.game_refusal(MiniGame::TicTacToe), None);
         s.cooldown_battle = 6;
         assert_eq!(s.battle_refusal(), Some(Reason::Wait(60)));
@@ -3665,7 +3665,6 @@ mod debug_menu {
         s.cooldown_tictactoe = 5;
         s.cooldown_lightsout = 5;
         s.cooldown_blackhole = 5;
-        s.cooldown_nim = 5;
         s.cooldown_bornjeweled = 5;
         s.cooldown_battle = 5;
         assert!(s.refusal_for(Action::Heal, None).is_some());
@@ -3680,7 +3679,6 @@ mod debug_menu {
             s.cooldown_tictactoe,
             s.cooldown_lightsout,
             s.cooldown_blackhole,
-            s.cooldown_nim,
             s.cooldown_bornjeweled,
             s.cooldown_battle,
         ] {
@@ -3954,15 +3952,15 @@ mod leaving_win {
         s.update(HATCHING_TICKS() as u32);
         s.phase = Phase::Leaving;
         s.fun = 0;
-        s.award_inspiration(MiniGame::Nim, 2);
+        s.award_inspiration(MiniGame::BlackHole, 2);
         assert!(s.fun > 0, "no fun dose");
-        assert_eq!(s.cooldown_nim, MINIGAME_COOLDOWN());
+        assert_eq!(s.cooldown_blackhole, MINIGAME_COOLDOWN());
 
         let mut gone = GameState::new_egg(7, PetKind(0));
         gone.update(HATCHING_TICKS() as u32);
         gone.phase = Phase::Gone;
-        gone.award_inspiration(MiniGame::Nim, 2);
-        assert_eq!(gone.cooldown_nim, 0);
+        gone.award_inspiration(MiniGame::BlackHole, 2);
+        assert_eq!(gone.cooldown_blackhole, 0);
     }
 }
 
@@ -4994,7 +4992,6 @@ mod hint {
                     s.cooldown_tictactoe = 10;
                     s.cooldown_lightsout = 10;
                     s.cooldown_blackhole = 10;
-                    s.cooldown_nim = 10;
                     s.cooldown_bornjeweled = if g == 0 { 10 } else { 0 };
                     out.push((format!("{tag} bored games {g}"), s));
                 }

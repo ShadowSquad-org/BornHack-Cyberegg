@@ -229,7 +229,7 @@ If you just got a badge, start here:
 | **[POCKET_CARD.md](POCKET_CARD.md)** | One-page printable reference — buttons, LEDs, combos |
 | **[FAQ.md](FAQ.md)** | Why the red LED blinks, which screen saves battery, inverted/ghosted screen, DFU |
 | **[USER_WATCH.md](USER_WATCH.md)** | Watch face, alarms, calendar, time sync |
-| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + five mini-games |
+| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + four mini-games |
 | **[USER_MESH.md](USER_MESH.md)** | LoRa mesh: adverts, PMs, channels, identity QR |
 | **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking |
 | **[USER_NFC.md](USER_NFC.md)** | NFC station taps via the BadgeCtl app |
