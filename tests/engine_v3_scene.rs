@@ -360,6 +360,9 @@ mod budget {
             },
         )
         .outcome;
+        // Printed only, never asserted: the demo's scene-only figure may
+        // undercount, because demo bit 0 and a line under a Note are in `Rest`
+        // but are not drawn.
         eprintln!(
             "absent, demo, clock: {:.2} scene changes a day ({:.2} scene-only), {:.2} engine wakes a day, {:.2} refreshes a day",
             demo.scene_changes_per_day,
