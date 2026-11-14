@@ -392,6 +392,9 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `BATTLE_HP_FLOOR_PTS` | 60 | 60 |
 | `BATTLE_STAMINA_FLOOR_PTS` | 1 | 1 |
 | `BATTLE_INJURED_PCT` | 60 | 60 |
+| `BATTLE_FORM_TOP_PCT` | 65 | 65 |
+| `BATTLE_FORM_IN_PCT` | 50 | 50 |
+| `BATTLE_FORM_OFF_PCT` | 30 | 30 |
 
 Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. Unknown keys are logged and skipped.
 

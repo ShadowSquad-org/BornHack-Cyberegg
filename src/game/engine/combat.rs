@@ -450,3 +450,200 @@ pub fn derive(b: &Body) -> Snapshot {
         flags: flags_of(b, felt(b)),
     }
 }
+
+// ---------------------------------------------------------------------
+// The fight. Everything from `fight` to `win_chance` is wire contract:
+// both badges run it from the same two snapshots, so it is `const` and
+// reads no config.
+// ---------------------------------------------------------------------
+
+pub const ROUNDS: u8 = 10;
+/// hit% = clamp(HIT_BASE + (speedA' - speedD') / 3 + focusA, HIT_MIN, HIT_MAX)
+pub const HIT_BASE: i32 = 72;
+pub const HIT_MIN: i32 = 15;
+pub const HIT_MAX: i32 = 95;
+/// Past its stamina a pet strikes at this percent of its speed and power.
+pub const TIRED_PCT: i32 = 60;
+pub const DAMAGE_MIN: i32 = 3;
+pub const CHANCE_FIGHTS: u32 = 64;
+
+/// How a fight ended. `a` is the challenger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    pub a_won: bool,
+    pub a_hp_pct: u8,
+    pub b_hp_pct: u8,
+    pub rounds: u8,
+}
+
+fn strike(att: &Snapshot, def: &Snapshot, round: i32, s: &mut u32) -> i32 {
+    let tired = |p: &Snapshot| round > p.stamina as i32;
+    let slow = |p: &Snapshot| {
+        if tired(p) {
+            p.speed as i32 * TIRED_PCT / 100
+        } else {
+            p.speed as i32
+        }
+    };
+    let hit = (HIT_BASE + (slow(att) - slow(def)) / 3 + att.focus as i32).clamp(HIT_MIN, HIT_MAX);
+    *s = crate::platform::xorshift32(*s);
+    if (*s % 100) as i32 >= hit {
+        return 0;
+    }
+    let pw = if tired(att) {
+        att.power as i32 * TIRED_PCT / 100
+    } else {
+        att.power as i32
+    };
+    let base = (pw - def.guard as i32 / 2).max(DAMAGE_MIN);
+    *s = crate::platform::xorshift32(*s);
+    base * (85 + (*s % 31) as i32) / 100
+}
+
+/// The fight: up to [`ROUNDS`] rounds, the faster pet strikes first.
+/// `a` is the challenger.
+pub fn fight(seed: u32, a: &Snapshot, b: &Snapshot) -> Outcome {
+    let mut s = seed | 1;
+    let (mut ha, mut hb) = (a.hp as i32, b.hp as i32);
+    let mut round = 0;
+    while ha > 0 && hb > 0 && round < ROUNDS as i32 {
+        round += 1;
+        let a_first = a.speed > b.speed
+            || (a.speed == b.speed && {
+                s = crate::platform::xorshift32(s);
+                s & 1 == 0
+            });
+        if a_first {
+            hb -= strike(a, b, round, &mut s);
+            if hb > 0 {
+                ha -= strike(b, a, round, &mut s);
+            }
+        } else {
+            ha -= strike(b, a, round, &mut s);
+            if ha > 0 {
+                hb -= strike(a, b, round, &mut s);
+            }
+        }
+    }
+    let pa = ha.max(0) * 100 / a.hp as i32;
+    let pb = hb.max(0) * 100 / b.hp as i32;
+    let a_won = if ha > 0 && hb <= 0 {
+        true
+    } else if hb > 0 && ha <= 0 {
+        false
+    } else if pa != pb {
+        pa > pb
+    } else {
+        s = crate::platform::xorshift32(s);
+        s & 1 == 0
+    };
+    Outcome {
+        a_won,
+        a_hp_pct: pa as u8,
+        b_hp_pct: pb as u8,
+        rounds: round as u8,
+    }
+}
+
+/// Seed of a live fight: both badges compute it from the same four values,
+/// challenger first. A fallback fight uses `nonce_b = 0`.
+pub fn seed(nonce_a: u16, nonce_b: u16, id_a: [u8; 2], id_b: [u8; 2]) -> u32 {
+    let ids = (u16::from_le_bytes(id_a) as u32) << 16 | u16::from_le_bytes(id_b) as u32;
+    let x = ((nonce_a as u32) << 16 | nonce_b as u32) ^ ids ^ 0x9E37_79B9;
+    crate::platform::xorshift32(crate::platform::xorshift32(x | 1))
+}
+
+pub fn chance_seed(k: u32) -> u32 {
+    k.wrapping_mul(2_654_435_761).wrapping_add(7)
+}
+
+/// The challenger's chance in percent, rounded to the nearest 5 (ties up):
+/// 64 fights on `chance_seed(0..64)`. The target shows `100 - win_chance`.
+pub fn win_chance(a: &Snapshot, b: &Snapshot) -> u8 {
+    let w = (0..CHANCE_FIGHTS)
+        .filter(|&k| fight(chance_seed(k), a, b).a_won)
+        .count() as u32;
+    (((w * 100 + 32) / 64 + 2) / 5 * 5) as u8
+}
+
+/// How the pet feels about a fight against an average pet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Form {
+    Top,
+    In,
+    Off,
+    Poor,
+}
+
+impl Form {
+    pub fn text(self) -> &'static str {
+        match self {
+            Form::Top => "top form",
+            Form::In => "in form",
+            Form::Off => "off form",
+            Form::Poor => "poor form",
+        }
+    }
+}
+
+/// The pet's own chance against `derive(&Body::REFERENCE)` as `a`, read
+/// through the per-badge form keys (not part of the wire contract).
+pub fn form(own: &Snapshot) -> Form {
+    let c = win_chance(own, &derive(&Body::REFERENCE));
+    if c >= t::BATTLE_FORM_TOP_PCT() {
+        Form::Top
+    } else if c >= t::BATTLE_FORM_IN_PCT() {
+        Form::In
+    } else if c >= t::BATTLE_FORM_OFF_PCT() {
+        Form::Off
+    } else {
+        Form::Poor
+    }
+}
+
+/// Up to two factor lines for one side: the first helping and the first
+/// hurting factor in `Factor` order; with none of one sign, the first two
+/// of the other.
+pub fn factors(s: &Snapshot) -> [Option<Factor>; 2] {
+    let mut helps = Factor::ALL
+        .iter()
+        .copied()
+        .filter(|&f| f.helps() && s.flags.has(f));
+    let mut hurts = Factor::ALL
+        .iter()
+        .copied()
+        .filter(|&f| !f.helps() && s.flags.has(f));
+    let (h, u) = (helps.next(), hurts.next());
+    match (h, u) {
+        (Some(_), Some(_)) => [h, u],
+        (Some(_), None) => [h, helps.next()],
+        (None, Some(_)) => [u, hurts.next()],
+        (None, None) => [None, None],
+    }
+}
+
+/// What stood out in a lost fight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decisive {
+    Factor(Factor),
+    OutOfSteam(u8),
+}
+
+/// Why the loser lost, if one thing stands out: its first hurting factor;
+/// else, if it fought past its stamina, `OutOfSteam(stamina + 1)`; else
+/// `None`. Returns `(loser_is_a, why)`.
+pub fn decisive(o: &Outcome, a: &Snapshot, b: &Snapshot) -> Option<(bool, Decisive)> {
+    let loser_is_a = !o.a_won;
+    let l = if loser_is_a { a } else { b };
+    if let Some(f) = Factor::ALL
+        .iter()
+        .copied()
+        .find(|&f| !f.helps() && l.flags.has(f))
+    {
+        return Some((loser_is_a, Decisive::Factor(f)));
+    }
+    if o.rounds > l.stamina {
+        return Some((loser_is_a, Decisive::OutOfSteam(l.stamina + 1)));
+    }
+    None
+}

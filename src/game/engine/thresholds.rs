@@ -119,6 +119,9 @@ thresholds_table! {
     BATTLE_HP_FLOOR_PTS: u8,
     BATTLE_STAMINA_FLOOR_PTS: u8,
     BATTLE_INJURED_PCT: u8,
+    BATTLE_FORM_TOP_PCT: u8,
+    BATTLE_FORM_IN_PCT: u8,
+    BATTLE_FORM_OFF_PCT: u8,
     // v3 need bands (percent, 1..=99); see engine::needs
     FULL_LO_PCT: u8,
     FULL_HI_PCT: u8,
@@ -475,6 +478,9 @@ impl Thresholds {
         BATTLE_HP_FLOOR_PTS: 60,
         BATTLE_STAMINA_FLOOR_PTS: 1,
         BATTLE_INJURED_PCT: 60,
+        BATTLE_FORM_TOP_PCT: 65,
+        BATTLE_FORM_IN_PCT: 50,
+        BATTLE_FORM_OFF_PCT: 30,
 
         FULL_LO_PCT: 38,
         FULL_HI_PCT: 78,
@@ -829,6 +835,9 @@ impl Thresholds {
         BATTLE_HP_FLOOR_PTS: 60,
         BATTLE_STAMINA_FLOOR_PTS: 1,
         BATTLE_INJURED_PCT: 60,
+        BATTLE_FORM_TOP_PCT: 65,
+        BATTLE_FORM_IN_PCT: 50,
+        BATTLE_FORM_OFF_PCT: 30,
 
         FULL_LO_PCT: 33,
         FULL_HI_PCT: 83,
@@ -2016,6 +2025,9 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("BATTLE_HP_FLOOR_PTS", |t, v| t.BATTLE_HP_FLOOR_PTS = v.min(100) as u8),
     ("BATTLE_STAMINA_FLOOR_PTS", |t, v| t.BATTLE_STAMINA_FLOOR_PTS = v.min(100) as u8),
     ("BATTLE_INJURED_PCT", |t, v| t.BATTLE_INJURED_PCT = clamp_pct(v)),
+    ("BATTLE_FORM_TOP_PCT", |t, v| t.BATTLE_FORM_TOP_PCT = clamp_pct(v)),
+    ("BATTLE_FORM_IN_PCT", |t, v| t.BATTLE_FORM_IN_PCT = clamp_pct(v)),
+    ("BATTLE_FORM_OFF_PCT", |t, v| t.BATTLE_FORM_OFF_PCT = clamp_pct(v)),
 ];
 
 /// Last minute of the day, the most a bedtime or getting-up line can be.
@@ -2076,6 +2088,11 @@ pub fn validate(t: &Thresholds, preset: &Thresholds) -> Thresholds {
     if r.BATTLE_LOW_MOOD_PCT >= r.BATTLE_HIGH_MOOD_PCT {
         r.BATTLE_LOW_MOOD_PCT = preset.BATTLE_LOW_MOOD_PCT;
         r.BATTLE_HIGH_MOOD_PCT = preset.BATTLE_HIGH_MOOD_PCT;
+    }
+    if r.BATTLE_FORM_OFF_PCT >= r.BATTLE_FORM_IN_PCT || r.BATTLE_FORM_IN_PCT >= r.BATTLE_FORM_TOP_PCT {
+        r.BATTLE_FORM_OFF_PCT = preset.BATTLE_FORM_OFF_PCT;
+        r.BATTLE_FORM_IN_PCT = preset.BATTLE_FORM_IN_PCT;
+        r.BATTLE_FORM_TOP_PCT = preset.BATTLE_FORM_TOP_PCT;
     }
     if r.DIABETES_WEIGHT_LO_PCT >= r.DIABETES_WEIGHT_HI_PCT {
         r.DIABETES_WEIGHT_LO_PCT = preset.DIABETES_WEIGHT_LO_PCT;

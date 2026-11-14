@@ -11,7 +11,7 @@ mod snapshot {
     use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
 
     /// The prototype builds (`battle::builds`) as `Body`, traits 50.
-    fn builds() -> [(&'static str, Body); 20] {
+    pub(super) fn builds() -> [(&'static str, Body); 20] {
         let b = Body::REFERENCE;
         let fit = Body {
             fit: 90,
@@ -145,7 +145,7 @@ mod snapshot {
         ]
     }
 
-    fn build(name: &str) -> Body {
+    pub(super) fn build(name: &str) -> Body {
         builds().iter().find(|(n, _)| *n == name).unwrap().1
     }
 
@@ -503,5 +503,234 @@ mod snapshot {
             assert!(f.text().len() <= 11, "{} too wide", f.text());
         }
         assert_eq!(seen.len(), 20);
+    }
+}
+
+mod fight {
+    use super::snapshot::{build, builds};
+    use bornhack_aegg::game::engine::combat::Body;
+    use bornhack_aegg::game::engine::combat::{
+        Decisive, Factor, Form, ROUNDS, Snapshot, chance_seed, decisive, derive, factors, fight,
+        form, seed, win_chance,
+    };
+    use bornhack_aegg::game::engine::thresholds as t;
+
+    fn snap(name: &str) -> Snapshot {
+        derive(&build(name))
+    }
+
+    fn round5(w: u32) -> u8 {
+        ((w * 100 + 32) / 64 + 2) as u8 / 5 * 5
+    }
+
+    #[test]
+    fn matrix_matches_section_18_4() {
+        let bs = builds();
+        let snaps: Vec<Snapshot> = bs.iter().map(|(_, b)| derive(b)).collect();
+        let mut avgs = Vec::new();
+        let mut cells = vec![vec![0u32; 20]; 20];
+        for i in 0..20 {
+            let (mut tot, mut cnt) = (0, 0);
+            for j in 0..20 {
+                let mut w = 0u32;
+                let base = ((i * 131 + j * 17) as u32).wrapping_add(7);
+                for k in 0..2000u32 {
+                    let s = k.wrapping_mul(2654435761).wrapping_add(base);
+                    if fight(s, &snaps[i], &snaps[j]).a_won {
+                        w += 1;
+                    }
+                }
+                let p = w * 100 / 2000;
+                cells[i][j] = p;
+                if i != j {
+                    tot += p;
+                    cnt += 1;
+                }
+            }
+            avgs.push(tot / cnt);
+        }
+        assert_eq!(
+            avgs,
+            [
+                82, 84, 74, 85, 86, 81, 60, 41, 42, 22, 9, 44, 41, 48, 33, 48, 44, 34, 20, 2
+            ]
+        );
+        assert_eq!(cells[0][3], 44, "fit vs sumo");
+        assert_eq!(cells[3][0], 53, "sumo vs fit");
+    }
+
+    #[test]
+    fn fight_is_deterministic_and_bounded() {
+        let bs = builds();
+        for (i, (_, a)) in bs.iter().enumerate() {
+            for (j, (_, b)) in bs.iter().enumerate() {
+                let (sa, sb) = (derive(a), derive(b));
+                for k in 0..8u32 {
+                    let s = k.wrapping_mul(2654435761).wrapping_add((i * 20 + j) as u32);
+                    let o = fight(s, &sa, &sb);
+                    assert_eq!(o, fight(s, &sa, &sb));
+                    assert!(o.rounds <= ROUNDS && o.rounds >= 1);
+                    assert!(o.a_hp_pct <= 100 && o.b_hp_pct <= 100);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fight_reads_no_config() {
+        let src = include_str!("../src/game/engine/combat.rs");
+        let from = src.find("pub fn fight").expect("fight");
+        let to = src.find("pub fn form").expect("form");
+        assert!(from < to);
+        let order = [
+            "pub fn fight",
+            "pub fn seed",
+            "pub fn chance_seed",
+            "pub fn win_chance",
+            "pub fn form",
+        ];
+        let mut at = 0;
+        for o in order {
+            let p = src[at..]
+                .find(o)
+                .unwrap_or_else(|| panic!("{o} out of order"));
+            at += p + o.len();
+        }
+        let stripped: String = src[from..to]
+            .lines()
+            .map(|l| l.split("//").next().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!stripped.contains("thresholds"), "fight reads thresholds");
+        let b = stripped.as_bytes();
+        let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        for (i, _) in stripped.match_indices("t::") {
+            let before = i > 0 && word(b[i - 1]);
+            assert!(
+                before,
+                "fight reads a threshold: {}",
+                &stripped[i.saturating_sub(10)..i + 10]
+            );
+        }
+    }
+
+    #[test]
+    fn seed_is_symmetric_in_roles() {
+        let (na, nb, ia, ib) = (0x1234, 0x5678, [1, 2], [3, 4]);
+        let s = seed(na, nb, ia, ib);
+        assert_eq!(s, seed(na, nb, ia, ib));
+        // Swapping the roles changes the seed: the challenger goes first on both badges.
+        assert_ne!(s, seed(na, nb, ib, ia));
+        assert_ne!(s, seed(nb, na, ia, ib));
+        assert_ne!(s, seed(na ^ 1, nb, ia, ib));
+        assert_ne!(s, seed(na, nb ^ 2, ia, ib));
+        // A fallback fight uses nonce_b = 0.
+        assert_ne!(seed(na, 0, ia, ib), s);
+    }
+
+    #[test]
+    fn chance_is_honest() {
+        let bs = builds();
+        for (_, a) in bs.iter() {
+            for (_, b) in bs.iter() {
+                let (sa, sb) = (derive(a), derive(b));
+                let w = (0..64u32)
+                    .filter(|&k| fight(chance_seed(k), &sa, &sb).a_won)
+                    .count() as u32;
+                let c = win_chance(&sa, &sb);
+                assert_eq!(c, round5(w));
+                assert_eq!(c % 5, 0);
+            }
+        }
+        for (n, b) in bs.iter() {
+            let s = derive(b);
+            assert!((40..=60).contains(&win_chance(&s, &s)), "{n} mirror");
+        }
+        for n in ["average", "fit, normal weight"] {
+            let s = snap(n);
+            assert!((45..=55).contains(&win_chance(&s, &s)), "{n} mirror");
+        }
+        assert!(win_chance(&snap("fit, normal weight"), &snap("injured")) >= 95);
+        assert!(win_chance(&snap("injured"), &snap("fit, normal weight")) <= 5);
+    }
+
+    #[test]
+    fn form_words_follow_the_chance() {
+        assert_eq!(form(&snap("fit, normal weight")), Form::Top);
+        assert_eq!(form(&snap("hung over")), Form::Poor);
+        assert_eq!(form(&snap("injured")), Form::Poor);
+        let reference = derive(&Body::REFERENCE);
+        for (n, b) in builds().iter() {
+            let s = derive(b);
+            let c = win_chance(&s, &reference) as u32;
+            let want = if c >= t::BATTLE_FORM_TOP_PCT() as u32 {
+                Form::Top
+            } else if c >= t::BATTLE_FORM_IN_PCT() as u32 {
+                Form::In
+            } else if c >= t::BATTLE_FORM_OFF_PCT() as u32 {
+                Form::Off
+            } else {
+                Form::Poor
+            };
+            assert_eq!(form(&s), want, "{n}");
+        }
+    }
+
+    #[test]
+    fn factors_pick_one_of_each_sign() {
+        assert_eq!(
+            factors(&snap("sumo, two beers")),
+            [Some(Factor::Heavy), Some(Factor::Tipsy)]
+        );
+        assert_eq!(
+            factors(&snap("hung over")),
+            [Some(Factor::HungOver), Some(Factor::Thirsty)]
+        );
+        let rested = derive(&Body {
+            strain: 50,
+            ..build("well rested")
+        });
+        assert_eq!(factors(&rested), [Some(Factor::Rested), Some(Factor::Sore)]);
+        assert_eq!(factors(&snap("average")), [None, None]);
+    }
+
+    #[test]
+    fn decisive_names_the_losers_problem() {
+        let (wasted, fit) = (snap("wasted"), snap("fit, normal weight"));
+        let k = (0..100u32)
+            .find(|&k| !fight(k, &wasted, &fit).a_won)
+            .expect("fit wins somewhere");
+        let o = fight(k, &wasted, &fit);
+        assert_eq!(
+            decisive(&o, &wasted, &fit),
+            Some((true, Decisive::Factor(Factor::Sloppy)))
+        );
+        let fat = snap("fat and unfit");
+        assert_eq!(fat.stamina, 1);
+        let k = (0..100u32)
+            .find(|&k| {
+                let o = fight(k, &fat, &fit);
+                !o.a_won && o.rounds > 1
+            })
+            .expect("fit wins a long fight");
+        let o = fight(k, &fat, &fit);
+        assert_eq!(
+            decisive(&o, &fat, &fit),
+            Some((true, Decisive::OutOfSteam(2)))
+        );
+    }
+
+    #[test]
+    fn factor_words_fit_half_a_line() {
+        for f in Factor::ALL {
+            assert!(1 + f.text().len() <= 12, "{}", f.text());
+        }
+    }
+
+    #[test]
+    fn form_words_fit_the_row() {
+        for f in [Form::Top, Form::In, Form::Off, Form::Poor] {
+            assert!("Battle: ".len() + f.text().len() <= 17, "{}", f.text());
+        }
     }
 }
