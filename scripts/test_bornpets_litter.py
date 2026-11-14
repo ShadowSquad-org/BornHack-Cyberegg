@@ -200,6 +200,18 @@ class Cutting(unittest.TestCase):
         out, _ = lit.cut_item(boxed("pizza_box", draw), "pizza_box")
         self.assertFalse([p for p in out.getdata() if p == BLACK])
 
+    def test_cut_item_threshold_is_a_quarter(self):
+        def line(frac):
+            def draw(img, x0, y0, s, w, h):
+                fill(img, x0, y0, w * s, h * s, WHITE)
+                fill(img, x0, y0, w * s, round(s * frac), BLACK)
+            return draw
+
+        under, _ = lit.cut_item(boxed("pizza_box", line(0.22)), "pizza_box")
+        over, _ = lit.cut_item(boxed("pizza_box", line(0.28)), "pizza_box")
+        self.assertFalse([p for p in under.getdata() if p == BLACK])
+        self.assertTrue(all(over.getpixel((x, 0)) == BLACK for x in range(24)))
+
     def test_cut_item_snaps_red_and_counts_it(self):
         def draw(img, x0, y0, s, w, h):
             fill(img, x0, y0, w * s, h * s, WHITE)
@@ -354,6 +366,30 @@ class Cli(Base):
         os.utime(note, (time.time() + 5, time.time() + 5))
         _, fake3, _ = self.run_cli("generate", "--note-file", str(note))
         self.assertEqual(len(fake3.calls), 1)
+
+    def test_force_with_a_note_file_pays_once(self):
+        note = self.dir / "note.json"
+        note.write_text(json.dumps({"floor_sock": "a red stripe"}))
+        _, fake, _ = self.run_cli("generate", "--force", "--note-file", str(note))
+        self.assertEqual(len(fake.calls), 1)
+        _, fake2, _ = self.run_cli("generate", "--force", "--note-file", str(note))
+        self.assertEqual(len(fake2.calls), 0)
+
+    def test_malformed_note_file_is_a_clean_exit(self):
+        note = self.dir / "note.json"
+        note.write_text("{nope")
+        code, fake, out = self.run_cli("generate", "--note-file", str(note))
+        self.assertEqual(code, 1)
+        self.assertEqual(fake.calls, [])
+
+    def test_rust_without_git_refuses(self):
+        with mock.patch.object(lit, "SOURCE", self.dir / "strip.png"), \
+                mock.patch.object(lit, "RUST_OUT", self.dir / "o.rs"):
+            def nogit(*a, **k):
+                raise FileNotFoundError("git")
+            code = self.run_cli("rust", fake=nogit)[0]
+        self.assertEqual(code, 1)
+        self.assertFalse((self.dir / "o.rs").exists())
 
     def test_a_failed_item_exits_1_after_the_others(self):
         code, fake, out = self.run_cli("generate", "--items", "sock,can", fake=FakeRun(fail=True))

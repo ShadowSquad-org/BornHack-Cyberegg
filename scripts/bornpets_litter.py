@@ -126,12 +126,12 @@ def litter_prompt(item: str, note: str | None = None) -> str:
     return text
 
 
-def _is_dark(r: int, g: int, b: int) -> bool:
-    return (r * 299 + g * 587 + b * 114) // 1000 < 96 or (r > 140 and g < 110 and b < 110)
-
-
 def _is_red(r: int, g: int, b: int) -> bool:
     return r > 140 and g < 110 and b < 110
+
+
+def _is_dark(r: int, g: int, b: int) -> bool:
+    return (r * 299 + g * 587 + b * 114) // 1000 < 96 or _is_red(r, g, b)
 
 
 def cut_item(raw: Image.Image, item: str) -> tuple[Image.Image, int]:
@@ -296,13 +296,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
     unknown = [i for i in wanted if i not in ITEMS]
     if unknown:
         sys.exit(f"unknown items: {unknown}; known: {', '.join(ITEMS)}")
-    notes, note_mtime = None, 0.0
-    if args.note_file:
-        nf = Path(args.note_file)
-        notes = json.loads(nf.read_text(encoding="utf-8"))
-        note_mtime = nf.stat().st_mtime
-        if not isinstance(notes, dict):
-            sys.exit("--note-file must hold a JSON object {frame_id: note}")
+    notes = afm.load_notes(args.note_file) if args.note_file else None
     for sub in ("raw", "items", "plan7", "ref"):
         (work / sub).mkdir(parents=True, exist_ok=True)
     metrics = _load_metrics(work)
@@ -315,12 +309,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
                 print(f"[{n}/{len(wanted)}] {item}: skipped")
                 continue
             note = notes[key].strip()
-        if args.force:
-            generate = True
-        elif note is not None:
-            generate = not raw_path.exists() or raw_path.stat().st_mtime < note_mtime
-        else:
-            generate = not raw_path.exists()
+        generate = afm.needs_call(raw_path, args.note_file, note, args.force)
         try:
             if generate:
                 print(f"[{n}/{len(wanted)}] {item}: generating...", flush=True)
@@ -368,12 +357,15 @@ def source_is_committed() -> bool:
     """True when SOURCE is tracked and has no change against HEAD (staged or not)."""
     src = Path(SOURCE)
     cwd = src.parent
-    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", src.name], cwd=cwd,
-                             capture_output=True)
-    if tracked.returncode != 0:
-        return False
-    clean = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", src.name], cwd=cwd,
-                           capture_output=True)
+    try:
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", src.name], cwd=cwd,
+                                 capture_output=True)
+        if tracked.returncode != 0:
+            return False
+        clean = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", src.name], cwd=cwd,
+                               capture_output=True)
+    except OSError:
+        return False   # no git: the strip cannot be verified, so it is refused
     return clean.returncode == 0
 
 

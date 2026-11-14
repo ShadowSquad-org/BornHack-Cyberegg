@@ -1583,6 +1583,30 @@ def _is_ok(value: object) -> bool:
     return not isinstance(value, str) or value.strip().rstrip(".").casefold() in ("", "ok")
 
 
+def load_notes(path: str | Path) -> dict:
+    """The --note-file JSON object; a missing or malformed file is a clean exit."""
+    try:
+        notes = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        sys.exit(f"--note-file {path} is not readable JSON: {exc}")
+    if not isinstance(notes, dict):
+        sys.exit(f"--note-file {path} must hold a JSON object {{id: note}}")
+    return notes
+
+
+def needs_call(raw_path: Path, note_path: str | Path | None, note: str | None, force: bool) -> bool:
+    """Whether an item or frame costs an API call.
+
+    A note decides first: a raw newer than the note file already answers it, so
+    `--force --note-file` re-run with the same file buys nothing. --force only
+    covers entries without a note (or runs without a note file).
+    """
+    raw_path = Path(raw_path)
+    if note is not None and note_path is not None:
+        return not raw_path.exists() or raw_path.stat().st_mtime < Path(note_path).stat().st_mtime
+    return force or not raw_path.exists()
+
+
 def cmd_state(args: argparse.Namespace) -> None:
     prefix = pet_prefix()
     ids = dict(zip(STATES, state_frame_ids()))
@@ -1591,14 +1615,7 @@ def cmd_state(args: argparse.Namespace) -> None:
     if unknown:
         sys.exit(f"unknown states: {unknown}; known: {', '.join(STATES)}")
 
-    notes: dict | None = None
-    note_mtime = 0.0
-    if args.note_file:
-        nf = Path(args.note_file)
-        notes = json.loads(nf.read_text(encoding="utf-8"))
-        note_mtime = nf.stat().st_mtime
-        if not isinstance(notes, dict):
-            sys.exit("--note-file must hold a JSON object {frame_id: note}")
+    notes: dict | None = load_notes(args.note_file) if args.note_file else None
 
     work = Path(args.work)
     (work / "raw").mkdir(parents=True, exist_ok=True)
@@ -1616,14 +1633,7 @@ def cmd_state(args: argparse.Namespace) -> None:
                 print(f"[{n}/{len(wanted)}] {fid}: skipped")
                 continue
             note = notes[fid].strip()
-        # A raw newer than the note file already answers that note: re-running
-        # the same file buys nothing.
-        if args.force:
-            generate = True
-        elif note is not None:
-            generate = not raw_path.exists() or raw_path.stat().st_mtime < note_mtime
-        else:
-            generate = not raw_path.exists()
+        generate = needs_call(raw_path, args.note_file, note, args.force)
         try:
             if generate:
                 print(f"[{n}/{len(wanted)}] {fid}: generating...", flush=True)

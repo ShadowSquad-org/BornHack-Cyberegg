@@ -367,6 +367,20 @@ class StateCommand(Base):
             self.assertEqual(len(self.run_state(t, note).calls), 1)
             self.assertEqual(len(self.run_state(t, note).calls), 0)
 
+    def test_force_with_a_note_file_pays_once(self):
+        with tempfile.TemporaryDirectory() as t:
+            note = {"panda_wired_0": "bigger can"}
+            self.assertEqual(len(self.run_state(t, note, extra=["--force"]).calls), 1)
+            self.assertEqual(len(self.run_state(t, note, extra=["--force"]).calls), 0)
+
+    def test_malformed_note_file_is_a_clean_exit(self):
+        with tempfile.TemporaryDirectory() as t:
+            Path(t, "notes.json").write_text("{nope")
+            argv = ["x", "--work", t, "state", "--note-file", str(Path(t, "notes.json"))]
+            with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as cm:
+                afm.main()
+            self.assertIn("notes.json", str(cm.exception))
+
     def test_note_newer_than_cached_raw_redraws(self):
         with tempfile.TemporaryDirectory() as t:
             note = {"panda_wired_0": "bigger can"}
