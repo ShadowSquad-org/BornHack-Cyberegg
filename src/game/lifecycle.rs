@@ -65,6 +65,27 @@ fn minute_of_day(unix: u32) -> u16 {
     local_min.rem_euclid(super::engine::demo::MINUTES_PER_DAY as i64) as u16
 }
 
+/// What the background shows now, without updating the pet; `None` without a
+/// game (or where no background is drawn).
+pub fn background_state() -> Option<super::engine::scene::BackgroundState> {
+    let s = unsafe { (*GAME.get()).as_ref() }?;
+    super::engine::scene::background_state(s)
+}
+
+/// A clock sync from `before` to `after` (local minutes of day) needs an
+/// immediate redraw: the sky differs, or the next switch moved earlier by
+/// more than a minute (a later switch waits for the planned wake).
+pub fn clock_sync_needs_redraw(before: Option<u16>, after: Option<u16>) -> bool {
+    use super::engine::scene::{minutes_to_switch, sky};
+    if sky(before) != sky(after) {
+        return true;
+    }
+    match (minutes_to_switch(before), minutes_to_switch(after)) {
+        (Some(was), Some(now)) => was > now + 1,
+        _ => false,
+    }
+}
+
 /// Advance the uptime tick by `delta` ticks (for tests/simulator only).
 pub fn advance_ticks(delta: u32) {
     UPTIME_TICKS.fetch_add(delta, Ordering::Relaxed);
@@ -312,8 +333,14 @@ pub fn on_wall_clock_set(now_unix: u32) {
         let uptime_s = (crate::platform::uptime_ms() / 1000) as u32;
         let saved = BOOT_SAVED_UNIX.load(Ordering::Relaxed);
         let applied = boot_catch_up_minutes(s, &CATCH_UP_DONE, saved, now_unix, uptime_s);
-        // The clock was unknown until now: the pet learns the time of day.
+        // The pet learns the time of day (or a re-sync moves it).
+        let before = s.day_min;
         s.sync_clock(now_tick(), Some(minute_of_day(now_unix)));
+        if clock_sync_needs_redraw(before, s.day_min) {
+            // The sky differs, or its next switch now comes before the
+            // planned wake: run the display loop, which plans it again.
+            crate::TOAST_SIGNAL.signal(());
+        }
         if applied.is_some_and(|m| m > 0) {
             // The pet jumped ahead: wake the display loop so the screen, the
             // status line show it now, not at the next scheduled wake.
@@ -1788,5 +1815,22 @@ mod tests {
         set_state_for_test(None);
         assert_eq!(demo_care_label(), "Demo care: instant");
         assert!(!toggle_demo_care());
+    }
+
+    #[test]
+    fn a_clock_jump_redraws() {
+        use super::clock_sync_needs_redraw as r;
+        let m = |h: u16, mi: u16| Some(h * 60 + mi);
+        assert!(r(None, m(12, 0)));
+        assert!(!r(m(12, 0), m(12, 1)));
+        assert!(r(m(19, 0), m(20, 50)));
+        assert!(!r(m(20, 50), m(19, 0)));
+        assert!(r(m(20, 59), m(21, 0)));
+    }
+
+    #[test]
+    fn lock_test_state_pins_noon() {
+        let _guard = crate::game::lock_test_state();
+        assert_eq!(super::local_minute(), Some(720));
     }
 }

@@ -1163,6 +1163,7 @@ type Visible = (
     Option<Action>,
     u8,
     u8,
+    u8,
 );
 
 /// What is written under the pet.
@@ -1453,7 +1454,15 @@ impl GameState {
             self.active_action,
             self.onset_bits(),
             demo::wake_view(self),
+            scene::wake_view(self),
         )
+    }
+
+    /// Host test hook: everything a wake-up has to show. Oracles compare
+    /// this, so they never restate the view by hand.
+    #[cfg(any(test, feature = "simulator"))]
+    pub fn wake_view_for_test(&self) -> impl PartialEq + core::fmt::Debug {
+        self.visible()
     }
 
     /// The tick at which the engine must run next: when something the

@@ -1247,7 +1247,10 @@ static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn lock_test_state() -> TestState {
-    TestState(TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    let guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Lib tests run at noon, whatever the hour of the build.
+    crate::platform::set_fake_unix(Some(crate::platform::GUIDE_NOON_UNIX));
+    TestState(guard)
 }
 
 /// Every full-screen view the lib.rs and game draw dispatch handles under the

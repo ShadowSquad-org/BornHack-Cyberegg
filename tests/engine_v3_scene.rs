@@ -171,3 +171,172 @@ mod state {
         );
     }
 }
+
+mod wake {
+    use bornhack_aegg::game::engine::needs::{MAX, P};
+    use bornhack_aegg::game::engine::scene::{Sky, background_state, floor_items};
+    use bornhack_aegg::game::engine::thresholds::MAX_SLEEP_TICKS;
+    use bornhack_aegg::game::engine::{GameState, PetKind, Phase, TICKS_PER_MINUTE};
+
+    fn pct(p: i32) -> u16 {
+        (p * P) as u16
+    }
+
+    fn active() -> GameState {
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.phase = Phase::Active;
+        s.money_enabled = false;
+        s.tick_rem = 0;
+        s.is_sleeping = false;
+        s.fullness = pct(60);
+        s.hydration = pct(60);
+        s.energy = pct(80);
+        s.health = pct(95);
+        s.mood = pct(90);
+        s.fun = pct(60);
+        s.dirt = 0;
+        s.booze = 0;
+        s
+    }
+
+    /// Oracle: step a clone one minute at a time (a test-only step loop).
+    fn first_change_min(s: &GameState, limit: u32) -> Option<u32> {
+        let mut c = s.clone();
+        let o = format!("{:?}", c.wake_view_for_test());
+        let t0 = c.last_update_tick;
+        (1..=limit).find(|m| {
+            c.update(t0 + m * TICKS_PER_MINUTE);
+            format!("{:?}", c.wake_view_for_test()) != o || c.note().is_some()
+        })
+    }
+
+    #[test]
+    fn scene_wake_is_exact_on_random_states() {
+        const STATES: usize = 2000;
+        let limit = MAX_SLEEP_TICKS().div_ceil(TICKS_PER_MINUTE);
+        let mut x = 11u64;
+        let mut next = |bound: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % (bound + 1)
+        };
+        let (mut timed, mut with_clock) = (0, 0);
+        for i in 0..STATES {
+            let mut s = active();
+            s.fullness = pct(next(100) as i32);
+            s.hydration = pct(next(100) as i32);
+            s.energy = pct(next(100) as i32);
+            s.fun = pct(next(100) as i32);
+            s.dirt = pct(30 + next(70) as i32);
+            s.booze = pct(next(100) as i32);
+            s.fitness = pct(next(100) as i32);
+            s.weight = pct(next(100) as i32);
+            s.health = pct(30 + next(70) as i32);
+            s.mood = MAX as u16;
+            s.is_sleeping = next(1) == 1;
+            s.demo.on = i % 2 == 0;
+            s.set_demo_rng(1 + next(1_000_000) as u32);
+            let clock = if next(1) == 1 {
+                with_clock += 1;
+                Some(next(1439) as u16)
+            } else {
+                None
+            };
+            s.sync_clock(s.last_update_tick, clock);
+            let t0 = s.last_update_tick;
+            let mut c = s.clone();
+            bornhack_aegg::game::engine::demo::settle(&mut c);
+            let expect = if bornhack_aegg::game::engine::demo::decide(&c).is_some() {
+                t0 + 1
+            } else {
+                first_change_min(&c, limit).map_or(t0 + MAX_SLEEP_TICKS(), |m| {
+                    timed += 1;
+                    t0 + m * TICKS_PER_MINUTE
+                })
+            };
+            assert_eq!(s.next_wake_tick(), expect, "random state {i}");
+        }
+        assert!(timed > 200, "{timed} states changed within the look-ahead");
+        assert!(with_clock > 500);
+    }
+
+    #[test]
+    fn the_sky_switch_is_a_wake() {
+        let mut s = active();
+        let t0 = s.last_update_tick;
+        s.sync_clock(t0, Some(20 * 60 + 50));
+        assert_eq!(background_state(&s).unwrap().sky, Sky::Day);
+        assert_eq!(s.next_wake_tick(), t0 + 10 * TICKS_PER_MINUTE);
+        s.update(t0 + 10 * TICKS_PER_MINUTE);
+        assert_eq!(background_state(&s).unwrap().sky, Sky::Night);
+    }
+
+    #[test]
+    fn a_floor_step_is_a_wake() {
+        let mut s = active();
+        s.dirt = pct(39);
+        let t0 = s.last_update_tick;
+        let m = first_change_min(&s, 120).expect("dirt rises to 40 %");
+        assert_eq!(s.next_wake_tick(), t0 + m * TICKS_PER_MINUTE);
+        let mut c = s.clone();
+        c.update(t0 + m * TICKS_PER_MINUTE);
+        assert_eq!(floor_items(c.dirt), 1);
+        assert_eq!(background_state(&c).unwrap().floor, 1);
+    }
+
+    #[test]
+    fn the_sky_does_not_change_the_pet() {
+        fn mk(day: Option<u16>) -> GameState {
+            let mut s = active();
+            s.fullness = pct(70);
+            s.dirt = pct(20);
+            s.sync_clock(s.last_update_tick, day);
+            s
+        }
+        fn view(s: &GameState) -> String {
+            format!(
+                "{:?}",
+                (
+                    (s.fullness, s.hydration, s.energy, s.fun, s.dirt, s.booze),
+                    (s.fitness, s.weight, s.mood, s.health, s.phase),
+                    (s.diabetic, s.dependent, s.injured_min, s.groggy_min),
+                    (s.hangover_min, s.is_sleeping),
+                )
+            )
+        }
+        let days = 3 * 1440 * TICKS_PER_MINUTE;
+        let mut a = mk(None);
+        let mut b = mk(Some(6 * 60));
+        let t0 = a.last_update_tick;
+        a.update(t0 + days);
+        b.update(t0 + days);
+        assert_eq!(view(&a), view(&b));
+        let mut x = 5u64;
+        let mut cuts: Vec<u32> = (0..50)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((x >> 33) % days as u64) as u32
+            })
+            .collect();
+        cuts.sort();
+        let mut c = mk(Some(6 * 60));
+        for cut in cuts {
+            c.update(t0 + cut);
+        }
+        c.update(t0 + days);
+        assert_eq!(view(&c), view(&a));
+    }
+
+    #[test]
+    fn washing_clears_the_floor_at_once() {
+        let mut s = active();
+        s.dirt = pct(96);
+        assert_eq!(background_state(&s).unwrap().floor, 5);
+        assert!(s.wash());
+        s.update(s.action_end_tick());
+        assert_eq!(background_state(&s).unwrap().floor, 0);
+    }
+}

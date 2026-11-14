@@ -4,9 +4,8 @@
 use bornhack_aegg::game::engine::needs::P;
 use bornhack_aegg::game::engine::scene::background_state;
 use bornhack_aegg::game::engine::sim;
-use bornhack_aegg::game::engine::status::{Word, status_line};
 use bornhack_aegg::game::engine::thresholds::{BORNPETS_CFG_KEYS, Mode, Thresholds, validate};
-use bornhack_aegg::game::engine::{GameState, PetKind, PetLine, Phase};
+use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
 
 fn install() {
     let mut c = Thresholds::CLASSIC;
