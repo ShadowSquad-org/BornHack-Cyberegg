@@ -913,7 +913,7 @@ async fn display_loop(
         // open and close; we consume it with `swap` so the redraw applies
         // once.  The expensive full refresh is now promoted automatically
         // inside `update_partial` once the cumulative changed-pixel counter
-        // reaches `full_after_screens` (5 screens) — see `should_force_full`.
+        // reaches `full_after_screens` (3 screens, the vendor default) — see `should_force_full`.
         // First iteration after boot (last_screen == 0xFF) skips since boot
         // already drove a clean frame.
         let screen_changed = last_screen != 0xFF && last_screen != active_screen;
