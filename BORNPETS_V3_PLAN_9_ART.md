@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** the pet looks the way it feels. Bartholomeus, Cat, Panda, Badger and Starfish each get one new frame for each of ten states: tipsy, wasted, hung over, sore, injured, groggy, stuffed, thirsty, wired and throwing up. Relax finally shows the Relaxing art that is already on the badge. The Slug, and any pet without a file, keeps today's stand-ins. Sport on a stuffed pet always ends in "Bleurgh!": the session is cut short, the belly empties, the floor gets messy and Wash is wanted.
+**Goal:** the pet looks the way it feels. Bartholomeus, Cat, Panda, Badger and Starfish each get one new frame for each of ten states: tipsy, wasted, hung over, sore, injured, groggy, stuffed, thirsty, wired and throwing up. Relax finally shows the Relaxing art that is already on the badge. The Slug, and any pet without a file, keeps today's stand-ins. Sport on a stuffed pet always ends in "Bleurgh!": the session is cut short, the belly empties, the floor gets messy and Wash is wanted. The floor litter of plan 7 (crumbs, banana peel, can, sock, pizza box) is redrawn in the pets' sprite style, larger, and baked into flash.
 
 **Architecture:** two parts.
 
@@ -10,13 +10,15 @@
 - The existing OpenAI pipeline (`scripts/bornpets_ai_frames.py`) makes each state frame from the pet's own shipped frames as reference images. Its output is cut back to the exact frame and palette.
 - A new checker (`scripts/bornpets_art_check.py`) proves the export, measures the FAT12 cost, flags outline and size drift, and writes the files the controller turns into the owner's gallery.
 - asset-gen `migrate` re-lays out each pet's sheet for the new json5 rows.
-- Nothing reaches `assets/to-badge` and no sheet is committed as final until the owner has approved the gallery.
+- A litter generator (`scripts/bornpets_litter.py`) makes the five floor items the same way, from plan 7's hand bitmaps and shipped frames, into one 152 x 10 strip image (`assets/bornpets-litter.png`).
+- Nothing reaches `assets/to-badge` and no sheet or strip is committed as final until the owner has approved the gallery. The litter shares the pets' gallery rounds.
 
 **Part B, the firmware.** It runs after plans 5 and 7 are merged.
 - Ten new `DisplayAnim` variants, plus `Relaxing`, on ids `0x29`–`0x32` (and `0x0E`). The presence table is indexed through a slot map, so RAM shrinks by 18 B.
 - A pure `GameState::shown_anim(has_art)` picks the art from the status line's first word, else today's `display_anim()` as the stand-in.
 - The throw-up is one branch inside the Exercise dose, with six tunables.
-- Then the 50 PCX are shipped, the space guard is run, and the guide line is added.
+- Then the 50 PCX are shipped and the space guard is run.
+- The litter strip is generated into `src/game/litter_art.rs` (new slots, one ink plane), replacing plan 7's hand bitmaps in `background.rs`. Then the guide line is added.
 
 **Tech stack:**
 - Part A: Python 3 with Pillow, `curl`, OpenAI `POST /v1/images/edits`, asset-gen (read-only sibling repo).
@@ -27,7 +29,7 @@
 - §2 the findings;
 - §3 the planner's calls.
 
-Also: `BORNPETS_V3_DESIGN.md` §8.3 (the existing-art table) and §14 (backgrounds, for floor items). Roadmap row 9. Interfaces consumed from `BORNPETS_V3_PLAN_5_BATTLES.md` (worktree `../BornHack-Cyberegg-v3battles`) and `BORNPETS_V3_PLAN_7_BACKGROUNDS.md` (`../BornHack-Cyberegg-v3bg`). Format exemplar: `BORNPETS_V3_PLAN_3_DEMO.md`.
+Litter: design §1.9 (owner) and §3.5 (planner's calls). Also: `BORNPETS_V3_DESIGN.md` §8.3 (the existing-art table) and §14 (backgrounds, for floor items). Roadmap row 9. Interfaces consumed from `BORNPETS_V3_PLAN_5_BATTLES.md` (worktree `../BornHack-Cyberegg-v3battles`) and `BORNPETS_V3_PLAN_7_BACKGROUNDS.md` (`../BornHack-Cyberegg-v3bg`). Format exemplar: `BORNPETS_V3_PLAN_3_DEMO.md`.
 
 **Code base:** worktree `BornHack-Cyberegg-v3art`, branch `ranzbak/bornpets-v3-art`, from local `main` `5e59574`. Part B first rebases onto `main` with plans 5 and 7 merged, then re-anchors these lines (they are at `5e59574`):
 - `src/game/engine/to_display.rs`: `DisplayAnim` 28, `display_anim` 90, status groups 141 to 166.
@@ -79,6 +81,12 @@ Every task's requirements include this section.
   - The 50 new PCX may use at most **55 clusters** (derivation in Self-review).
   - Every frame over 2048 bytes is simplified first, Badger and Starfish first, by the island merge of Task A2.
   - Plan 7's `test_repo_assets_fit_the_volume` (≥ 16 spare, ≤ 511 entries) must pass.
+- **Floor litter (owner, design §1.9):**
+  - The five items are generated with the pets' method (reference frames, fixed rectangle, exact cut-back, palette snap, uniform 1 px outline) and go through the same gallery rounds and the same 3-round cap. Manifest entries have `pet = "floor"`.
+  - Palette on the badge: black ink only, white and transparent both mean "floor shows". No red (plan 7's `only_the_cross_is_red`); red the model draws is snapped to black and flagged.
+  - Slots (planner's call, design §3.5): crumbs (2, 105) 12 x 5, peel (116, 101) 16 x 9, can (16, 100) 12 x 10, sock (134, 100) 14 x 10, pizza box (30, 102) 24 x 8.
+  - Baked into flash (one ink plane, 92 B), never a PCX. `scene.rs`, `FLOOR_ITEMS`, the dirt lines, the tufts and the cross are unchanged.
+  - The Slug's `021500`–`021700` are references only; never modified.
 - **Anim ids:** `0x29`–`0x32` in the design §3.1 order. `Relaxing` is `0x0E`. Ids `0x15`–`0x1F` stay unused and uncatalogued, and their files stay.
 - **Save:** none. The save stays `state_v3`, format 3, 177 bytes, with no new field. Never write kv `state`, `game/name` or `BORNPETS.CFG`.
 - **Tunables:**
@@ -126,25 +134,31 @@ The failure modes most likely to reach a player unnoticed, most likely first. Ea
 
    Pinned in B3 by `at_the_line_it_does_not`, `casual_uses_its_own_line`, `stuffed_and_strained_only_throws_up`, `a_full_value_that_stays_stuffed_falls_back`, `battles_never_throw_up`, `demo_pet_never_sports_while_stuffed` and `a_reboot_mid_session_still_throws_up`.
 4. **The badge sleeps through a picture change, or wakes for nothing.** The shown frame must change only when `Visible` does. Pinned in B2 by `shown_art_wake_is_exact` (2000 seeded states).
-5. **The OpenAI key leaks** onto argv, stdout, stderr or a file in the repo. Pinned in A2 by `test_key_never_reaches_argv_or_output`, `test_key_file_inside_repo_is_refused` and `test_key_file_readable_by_others_is_refused`.
+5. **The OpenAI key leaks** onto argv, stdout, stderr or a file in the repo. Pinned in A2 by `test_key_never_reaches_argv_or_output`, `test_key_file_inside_repo_is_refused` and `test_key_file_readable_by_others_is_refused`, and in A2b by `test_litter_uses_the_same_key_rules`.
+6. **The new litter breaks plan 7's floor.** An item leaves the strip, meets another, floats above the floor, reads as a speck, carries red, or the baked art drifts from the approved strip. Pinned in A2b by `test_slots_fit_the_strip_and_never_meet` and `item_drift`, in B4b by plan 7's own floor tests re-run on the new data, `every_item_rests_on_the_floor`, `ink_rows_match_their_slots` and `test_litter_art_is_current`.
 
 ## File map
 
 | File | Part | Change |
 |---|---|---|
-| `scripts/bornpets_art_check.py` | A | create: `decode_pcx`, `clusters`, `diff_exports`, `new_files`, `budget`, `drift`, `write_review`; CLI `diff`, `budget`, `review` |
+| `scripts/bornpets_art_check.py` | A | create: `decode_pcx`, `clusters`, `diff_exports`, `new_files`, `budget`, `edge_runs`, `drift`, `write_review`, `LITTER_DIR`; CLI `diff`, `budget`, `review` |
 | `scripts/test_bornpets_art_check.py` | A | create |
 | `scripts/bornpets_ai_frames.py` | A | `--key-file` and key guards; default model `gpt-image-2.6-sunburst`; profiles bartholomeus, cat, panda; `STATE_BRIEFS`, `STATE_REFS`, `ref_png`, `state_prompt`, `cut_back`, `merge_islands`; subcommands `state`, `simplify`, `list --states`; `frame_index` without the Panda layout pairing for reference-built profiles |
 | `scripts/test_bornpets_ai_frames.py` | A | create (mocked `subprocess.run`; no API call) |
-| `scripts/README.md` | A | rows for the two scripts and the art workflow |
+| `scripts/bornpets_litter.py` | A | create: `ITEMS`, `SLOTS`, `PLAN7_SKETCH`, `LITTER_REFS`, `item_scale`, `sketch_png`, `ref_canvas`, `litter_prompt`, `cut_item`, `item_drift`, `strip`, `ink_rows`, `rust_source`; CLI `generate`, `assemble`, `rust`, `check` |
+| `scripts/test_bornpets_litter.py` | A, B | create (A2b); `test_litter_art_is_current` (B4b) |
+| `assets/bornpets-litter.png` | A | create: the 152 x 10 strip (committed after approval) |
+| `scripts/README.md` | A | rows for the three scripts and the art workflow |
 | `assets/bornpets-bartholomeus.json5`, `assets/bornpets-sponsors-{cat,panda,badger,seastar}.json5` | A | new rows (and placeholder rows for Bartholomeus and Cat) |
 | `assets/bornpets-sprites-{bartholomeus,cat,panda,badger,seastar}.png` | A | migrated layout, then the approved art |
+| `src/game/litter_art.rs` | B | create, generated: `FLOOR_SLOTS`, `FLOOR_INK` |
+| `src/game/background.rs` | B | plan 7's `CRUMBS` … `PIZZA_BOX`, `FLOOR_BITMAPS` and slot values removed; `FLOOR_SLOTS` re-exported; `bitmap()` on byte rows; `TUFT` as bytes; two tests |
 | `src/game/engine/to_display.rs` | B | 11 variants; `art_for_word`; `GameState::{is_stuffed, shown_anim}` |
 | `src/game/engine/anim_files.rs` | B | ids `0x0E`, `0x29`–`0x32`; `PRESENCE_SLOTS`, `presence_slot` |
 | `src/game/sprite_loader.rs` | B | presence table of `PRESENCE_SLOTS`; `AA_MAX` removed |
 | `src/game/pacing.rs` | B | `Relaxing`, `ThrowingUp` are action animations |
 | `src/game/lifecycle.rs` | B | `display_anim` resolves through `shown_anim` with the pet's files |
-| `src/game/mod.rs` | B | debug names for the new variants; toast headline from `toast_what` |
+| `src/game/mod.rs` | B | debug names for the new variants; toast headline from `toast_what`; `mod litter_art;` |
 | `src/game/engine/causes.rs` | B | `Cause::ThrewUp`, `toast_what`, pack code 64 |
 | `src/game/engine/doses.rs` | B | `exercise` → `throw_up` when stuffed |
 | `src/game/engine/thresholds.rs`, `assets/to-badge/BPETS_V3.CFG`, `USER_GAMES.md` | B | six `THROWUP_*` keys |
@@ -156,6 +170,7 @@ The failure modes most likely to reach a player unnoticed, most likely first. Ea
 | `scripts/test_copy_assets.py` | B | new-art tests |
 | `.github/workflows/tests.yml` | B | `guide` job: the two `test_bornpets_*` suites |
 | `src/guide/words.rs`, `guide/chapters/05-care-actions.typ` | B | `toast_what` words; the full-belly line and joke |
+| `guide/chapters/03-reading-your-pet.typ` | B | only if plan 7's `== Sky and floor` text describes how an item looks |
 | `BORNPETS_V3_ROADMAP.md` | docs | row 9 |
 
 **Shared names** (both scripts import them from `bornpets_art_check.py`):
@@ -197,9 +212,11 @@ def diff_exports(old_dir, new_dir, prefixes=tuple(p for p, *_ in ART_PETS.values
     # {"changed": [...], "removed": [...], "added": [...]}; only names starting with a prefix; byte compare
 def budget(export_dir) -> dict
     # {"files": [(name, bytes, clusters)], "total": int, "over": [names > 2048 B], "fits": total <= NEW_PCX_BUDGET}
+def edge_runs(rows: list[list[int]]) -> tuple[int, int]     # (median black run inward, % of edges starting black); see drift
 def drift(new: list[list[int]], idle: list[list[int]]) -> dict
     # {"outline": (idle, new), "coverage": (idle, new), "height": (idle, new), "dy": int, "cut_off": bool, "flags": [...]}
-def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR) -> Path   # returns the manifest path
+def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR, litter_dir=LITTER_DIR) -> Path   # returns the manifest path
+LITTER_DIR = REPO / "target/v3art/litter"   # written by bornpets_litter.py (Task A2b)
 ```
 - **`drift`.** Opaque means index ≠ 3.
   - *Outline.* At every transparent-to-opaque step, scanning each row both ways and each column both ways (the frame edge counts as transparent), count the run of black pixels inward. Edges whose first pixel is not black are left out of the width. `outline` is the median run (an integer). `coverage` is the percentage of edges that start black.
@@ -223,6 +240,14 @@ def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR) -> Path   # retu
              "sheet": "badger/sheet.png", "pcx": "062900.PCX", "bytes": 1834, "clusters": 1,
              "flags": [], "metrics": {"outline": [2, 2], "coverage": [94, 91], "height": [61, 58], "dy": 1, "cut_off": false}}]}
 ```
+  - **floor** (when `litter_dir/items/` holds the five items, Task A2b): `floor/<item>.png` (the item on white), `floor/<item>_plan7.png` (plan 7's bitmap in its old slot), `floor/strip.png` (the 152 x 10 strip on white) and `floor/scene.png` (the strip under the Panda's idle frame `050100`, 152 x 75, so the size shows against a pet), all 4x. Five more `frames` entries, read from `litter_dir/metrics.json`:
+```json
+{"pet": "floor", "prefix": null, "state": "crumbs", "anim_id": null, "frame_id": "floor_crumbs",
+ "file": "floor/crumbs.png", "idle": "floor/crumbs_plan7.png", "sheet": "floor/strip.png", "pcx": null,
+ "bytes": 10, "clusters": 0, "slot": [2, 105, 12, 5], "note": "slot size is the planner's call (design §3.5)",
+ "flags": [], "metrics": {"outline": 1, "coverage": 100, "bottom": true, "ink_pct": 41, "red": 0}}
+```
+  `bytes` is the item's flash cost (its ink plane). The budget line is unchanged: the litter costs no cluster.
   Paths are relative to `out_dir`. It overwrites the PNGs of the round and keeps older `feedback-*.json` files.
 - **CLI:**
   - `diff OLD NEW`: prints the three lists; exits 1 on any changed or removed file, or on an added file that is not in `new_files()`.
@@ -245,6 +270,9 @@ def test_drift_bigger_pet_is_flagged(self): ...             # box 20 % taller ->
 def test_drift_art_on_a_new_border_is_cut_off(self): ...    # opaque pixel on row 0, idle clear -> "cut_off"
 def test_review_writes_manifest_and_files(self): ...        # tmp export with the 50 names -> manifest has 50 frames,
                                                             # every "file", "idle" and "sheet" exists and is 4x the frame
+def test_review_lists_the_floor_items(self): ...            # tmp litter_dir with five items + metrics.json -> 55 frames;
+                                                            # the five have pet "floor", clusters 0, a "slot"; floor/scene.png exists;
+                                                            # budget total unchanged; no litter_dir items -> 50 frames
 ```
 - [ ] **Step 2: run and see them fail.** `python3 -I -m unittest discover -s scripts -p 'test_bornpets_art_check.py'`.
 - [ ] **Step 3: implement**, then the `scripts/README.md` row.
@@ -332,6 +360,105 @@ def test_note_file_skips_ok_frames_and_adds_notes(self): ...  # {"panda_tipsy_0"
 - [ ] **Step 5: commit** `feat(assets): state frames from the pet's own frames, key file guards`.
 - [ ] **Step 6: V.**
 
+### Task A2b: the litter generator
+
+Owner (design §1.9): the floor litter in the pets' sprite style, from existing frames as references, in the same gallery rounds. Slots and storage are the planner's calls of design §3.5.
+
+**Files:**
+- Create: `scripts/bornpets_litter.py`, `scripts/test_bornpets_litter.py`.
+- Modify: `scripts/README.md` (one row).
+
+**Interfaces:**
+- Consumes: A1 `decode_pcx`, `edge_runs`, `LITTER_DIR`; A2 `api_key`, `call_api`, `KEY`, `dekey`, `despeckle` (import `bornpets_ai_frames` with `BORNPETS_PET` set to `panda` when unset, since that module picks its profile at import).
+- Produces:
+```python
+ITEMS = ("crumbs", "peel", "can", "sock", "pizza_box")       # plan 7 slot order
+SLOTS = {"crumbs": (2, 105, 12, 5), "peel": (116, 101, 16, 9), "can": (16, 100, 12, 10),
+         "sock": (134, 100, 14, 10), "pizza_box": (30, 102, 24, 8)}   # x, y, w, h on the screen
+OLD_SLOTS = {"crumbs": (4, 107, 7, 3), "peel": (120, 104, 11, 6), "can": (16, 104, 10, 6),
+             "sock": (136, 102, 9, 8), "pizza_box": (29, 105, 16, 5)}  # plan 7 at 7fdea40
+STRIP_TOP, STRIP = 100, (152, 10)
+SOURCE = REPO / "assets/bornpets-litter.png"
+RUST_OUT = REPO / "src/game/litter_art.rs"
+PLAN7_SKETCH: dict[str, tuple[str, ...]]   # plan 7's rows as bit strings, an exact copy of CRUMBS ... PIZZA_BOX
+LITTER_REFS = {"crumbs": ("001500", "050C00", "021500"), "peel": ("001500", "010C00", "021500"),
+               "can": ("052500", "062500", "001600"), "sock": ("001700", "021700", "051000"),
+               "pizza_box": ("001500", "060C00", "021500")}
+LITTER_BRIEFS: dict[str, str]
+def item_scale(item: str) -> int            # min(1400 // w, 900 // h): crumbs 116, peel 87, can 90, sock 90, pizza_box 58
+def item_box(item: str) -> tuple[int, int, int, int]   # (x0, y0, w * S, h * S), centred on CANVAS
+def sketch_png(item: str, path: Path) -> None          # PLAN7_SKETCH stretched nearest onto w x h, x S into item_box, on KEY
+def ref_canvas(name: str, path: Path) -> None          # decode_pcx(assets/to-badge/<name>.PCX), largest integer scale that fits
+                                                       # 1400 x 900, centred on a KEY CANVAS, transparent as KEY
+def litter_prompt(item: str, note: str | None = None) -> str
+def cut_item(raw: Image.Image, item: str) -> tuple[Image.Image, int]   # (w x h in the 4 badge colours, red cells snapped)
+def item_drift(img: Image.Image, red: int) -> dict   # {"outline", "coverage", "bottom", "ink_pct", "red", "flags"}
+def strip(items: dict[str, Image.Image]) -> Image.Image   # 152 x 10, transparent, each item at (x, y - STRIP_TOP)
+def ink_rows(img: Image.Image) -> bytes                # black = 1, MSB first, rows padded to (w + 7) // 8 bytes
+def rust_source(strip_img: Image.Image) -> str         # the text of src/game/litter_art.rs
+```
+- **`litter_prompt`** is: "IMAGE 1 is a rough sketch of a {noun} lying on the floor, inside the box it must fill exactly. IMAGES 2 to 4 are frames from the same game: match their black line weight and flat fills, not their subjects."; then the brief; then "Chunky pixel art on a {w} x {h} grid, each grid cell one flat colour. A 1 pixel black outline all round. Black and white only, no red, no grey, no shading. Nothing outside the box."; then, if given, "Owner feedback on the previous attempt: {note}". The briefs (exact copy):
+  - crumbs: "A few scattered bread crumbs, three or four small lumps."
+  - peel: "A banana peel lying flat, three floppy peel arms."
+  - can: "An empty drink can lying on its side, a dent in the middle."
+  - sock: "One dirty sock, an L shape, a hole at the toe."
+  - pizza_box: "A flat closed pizza box, a grease stain on the lid."
+- **`cut_item`** asserts `raw.size == CANVAS`, crops `item_box`, and reduces it by exactly `S` with `Image.BOX` on the dekeyed RGBA. A cell is black when at least 25 % of its area was dark (luma < 96) or red, white when at least half of it was opaque, else transparent. Red cells are counted and become black. Then `despeckle`.
+- **`item_drift`** uses A1 `edge_runs` (the slot edge counts as transparent). Flags:
+  - `"outline"` when the median black run is not 1;
+  - `"coverage"` when black edges are under 90 %;
+  - `"floating"` when no black cell is on the bottom row;
+  - `"speck"` when black cells are under 15 % of `w * h`;
+  - `"red"` when `red > 0`.
+- **`rust_source`** emits exactly:
+```rust
+//! Generated by scripts/bornpets_litter.py from assets/bornpets-litter.png. Do not edit.
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
+
+use super::engine::scene::FLOOR_ITEMS;
+
+/// Slot boxes in slot order: crumbs, peel, can, sock, pizza box (bottom row y 109).
+pub const FLOOR_SLOTS: [Rectangle; FLOOR_ITEMS] = [
+    Rectangle::new(Point::new(2, 105), Size::new(12, 5)),
+    // ... one line per item
+];
+/// Black pixels of each item, MSB first, `(width + 7) / 8` bytes a row.
+pub const FLOOR_INK: [&[u8]; FLOOR_ITEMS] = [
+    &[0x00, 0x00, /* ... */],
+    // ... one line per item, 16 bytes to a source line
+];
+```
+- **Subcommands** (work dir `LITTER_DIR`):
+  - `generate [--items a,b] [--quality q] [--force] [--note-file F]`: per item, `call_api([sketch, refs...], litter_prompt(..), q, CANVAS)` → `raw/<item>.png` → `cut_item` → `items/<item>.png`; then `metrics.json` with each item's `slot`, `bytes` (`len(ink_rows)`), metrics and flags. A cached raw is skipped unless `--force`. The note file is the gallery feedback JSON: key `floor_<item>`; `"ok"` items are skipped.
+  - `assemble`: `strip(items/*)` → `SOURCE` (working tree; the gallery gate decides when it is committed).
+  - `rust`: `rust_source(SOURCE)` → `RUST_OUT`.
+  - `check`: exit 1 unless `RUST_OUT` equals `rust_source(SOURCE)`.
+
+- [ ] **Step 1: write the failing tests** in `scripts/test_bornpets_litter.py` (`subprocess.run` patched as in A2; no API call):
+```python
+def test_slots_fit_the_strip_and_never_meet(self): ...   # every SLOTS box in y 100..=109, x 0..=151, bottom row 109 or above;
+                                                          # pairwise disjoint; same order and count as OLD_SLOTS
+def test_sketch_is_plan_7_in_the_fixed_box(self): ...     # sketch_png("can") outside item_box is KEY; the box holds black
+                                                          # where the stretched PLAN7_SKETCH has 1
+def test_generate_sends_the_sketch_first_then_refs(self): ...  # generate --items sock: image[] order sketch, 001700, 021700, 051000
+def test_litter_uses_the_same_key_rules(self): ...        # key file 0644 -> SystemExit; token never in argv or output
+def test_cut_item_keeps_a_thin_outline(self): ...         # a CANVAS whose box has a black line S // 5 wide on each cell edge
+                                                          # -> every border cell black, the inside white
+def test_cut_item_snaps_red_and_counts_it(self): ...      # three red cells -> black, red == 3
+def test_drift_flags_speck_floating_and_thick(self): ...  # one black cell -> "speck"; item off the bottom row -> "floating";
+                                                          # 2-px outline -> "outline"; a clean 1-px box -> no flags
+def test_ink_rows_pad_to_bytes(self): ...                 # 12 x 5 all black -> 10 bytes, each row 0xFF 0xF0
+def test_rust_source_round_trips(self): ...               # parse FLOOR_SLOTS and FLOOR_INK out of rust_source(strip) ->
+                                                          # SLOTS and ink_rows of each item; total ink bytes 92
+def test_note_file_skips_ok_items(self): ...              # {"floor_can": "ok", "floor_sock": "a red stripe"} -> one call (sock)
+```
+- [ ] **Step 2: run and see them fail.** `python3 -I -m unittest discover -s scripts -p 'test_bornpets_litter.py'`.
+- [ ] **Step 3: implement.** Copy `PLAN7_SKETCH` from `../BornHack-Cyberegg-v3bg/src/game/background.rs` at `7fdea40` (read only), then the `scripts/README.md` row.
+- [ ] **Step 4: run them and see them pass.** Same command: PASS.
+- [ ] **Step 5: commit** `feat(assets): floor litter generator in the pets' style`.
+- [ ] **Step 6: V.**
+
 ### Task A3: sheet definitions and `migrate`
 
 Owner: "Also update the sprite sheet definition." Controller: edit each json5, `asset-gen migrate`, fill the blank slots, export.
@@ -373,7 +500,7 @@ def test_frame_index_has_the_states(self): ...  # for every ART_PETS pet: load_s
 ### Task A4: generate, fit, first gallery round
 
 **Files:**
-- Modify: the five sheet PNGs, in the working tree only. They are not committed (gallery gate).
+- Modify: the five sheet PNGs, in the working tree only; create `assets/bornpets-litter.png`, also uncommitted. Neither is committed (gallery gate).
 
 **Interfaces:**
 - Consumes: A1 `budget`, `drift`, `write_review`, `diff`; A2 `state`, `simplify`, `assemble`, `list --states`; A3 the layout.
@@ -381,31 +508,33 @@ def test_frame_index_has_the_states(self): ...  # for every ART_PETS pet: load_s
 
 - [ ] **Step 1: smoke.** Read https://developers.openai.com/api/docs/models and confirm `gpt-image-2.6-sunburst` is listed; otherwise set `BORNPETS_MODEL` to the current id and report it. Then make one call: `BORNPETS_PET=panda python3 -I scripts/bornpets_ai_frames.py --key-file <scratchpad>/openai.key state --states tipsy --quality low`. Expect a 1536 x 1024 raw and a 152 x 75 frame.
 - [ ] **Step 2: generate.** For each pet in `ART_PETS`: `BORNPETS_PET=<pet> python3 -I scripts/bornpets_ai_frames.py --key-file <path> state --quality medium` (50 calls). Rerun any listed as failed.
+- [ ] **Step 2b: litter.** `python3 -I scripts/bornpets_litter.py --key-file <path> generate --quality medium` (5 calls), then `assemble`. Regenerate (`--force --items <i>`) any item flagged `floating` or `speck` once before review, with the note "bigger, resting on the floor".
 - [ ] **Step 3: assemble.** Per pet: `... --only $(... list --states) assemble`. Only the state boxes change.
 - [ ] **Step 4: export and diff.** Run `$A export <the 9 configs> -o target/v3art/export-r1`, then `bornpets_art_check.py diff target/v3art/export-old target/v3art/export-r1`. Expect `added` to be exactly `new_files()`, with nothing changed or removed.
 - [ ] **Step 5: fit.** Run `bornpets_art_check.py budget target/v3art/export-r1`.
   - For each name in `over`, Badger (`06`) and Starfish (`07`) first, run `simplify --only <fid> --min-island N` for N = 4, 8, 16, 32, re-assembling and re-exporting after each N, until the file is ≤ 2048 B or N is 32. A frame still over then gets `state --force --states <s> --note-file` with the note "flat fills, no texture, fewer small details".
   - Stop when `budget` fits. Frames from the other pets may stay over 2048 B while the total fits.
-- [ ] **Step 6: review files.** Run `bornpets_art_check.py review target/v3art/export-r1 --round 1`. Hand the absolute path of `target/v3art/review/` to the controller, with the budget line and the flagged frames. **Stop here**: the controller builds the gallery and collects the owner's feedback.
-- [ ] **Step 7: V** (no commit in this task; `git status --short` shows the five sheet PNGs modified, nothing else).
+- [ ] **Step 6: review files.** Run `bornpets_art_check.py review target/v3art/export-r1 --round 1`. Hand the absolute path of `target/v3art/review/` to the controller, with the budget line, the flagged frames, and the litter's slot sizes and flash bytes (marked as the planner's call). **Stop here**: the controller builds the gallery and collects the owner's feedback.
+- [ ] **Step 7: V** (no commit in this task; `git status --short` shows the five sheet PNGs modified and `assets/bornpets-litter.png` untracked, nothing else).
 
 ### Task A5: owner review rounds, then the final sheets
 
 **Files:**
-- Modify: the five sheet PNGs (committed at the end).
+- Modify: the five sheet PNGs and `assets/bornpets-litter.png` (committed at the end).
 
 **Interfaces:**
 - Consumes: the controller's `target/v3art/review/feedback-<round>.json` (`{frame_id: "ok" | note}`), A2, A1.
 - Produces: the committed sheets with every state frame approved. `target/v3art/export-final` (Part B re-exports from the committed sheets).
 
-- [ ] **Step 1: one round** (round `r` = 2 or 3). Per pet with a frame not `"ok"`, run `state --force --note-file target/v3art/review/feedback-<r-1>.json` (only those frames are called). Then `assemble --only <those ids>`, export to `export-r<r>`, `diff`, `budget` (with A4 step 5 if it no longer fits), and `review export-r<r> --round <r>`. Hand the path back to the controller and stop.
+- [ ] **Step 1: one round** (round `r` = 2 or 3). Per pet with a frame not `"ok"`, run `state --force --note-file target/v3art/review/feedback-<r-1>.json` (only those frames are called). Then `assemble --only <those ids>`, export to `export-r<r>`, `diff`, `budget` (with A4 step 5 if it no longer fits). For a `floor_<item>` not `"ok"`: `bornpets_litter.py --key-file <path> generate --force --note-file target/v3art/review/feedback-<r-1>.json`, then `assemble`. Then `review export-r<r> --round <r>`. If the owner asks for a different slot size, change `SLOTS` (and `OLD_SLOTS` stays), rerun `test_bornpets_litter.py`, and regenerate that item. Hand the path back to the controller and stop.
 - [ ] **Step 2: cap.** If round 3 comes back with any frame not `"ok"`, stop. The controller asks the owner. Do not start round 4.
 - [ ] **Step 3: finish** when every frame of the latest feedback is `"ok"`:
   - export to `target/v3art/export-final`;
   - `diff target/v3art/export-old target/v3art/export-final` (only the 50 added);
   - `budget` (fits);
-  - `python3 -I scripts/check_badge_pcx.py target/v3art/export-final` (exit 0).
-- [ ] **Step 4: commit** `feat(assets): v3 state art for five pets (owner-approved, round <r>)`, with the five sheets only. The body lists the budget total and the date of the owner's approval.
+  - `python3 -I scripts/check_badge_pcx.py target/v3art/export-final` (exit 0);
+  - `bornpets_litter.py assemble` from the approved items, so `assets/bornpets-litter.png` is the approved strip.
+- [ ] **Step 4: commit** `feat(assets): v3 state art and floor litter (owner-approved, round <r>)`, with the five sheets and the litter strip only (and `SLOTS` if the owner changed a size). The body lists the budget total and the date of the owner's approval.
 - [ ] **Step 5: V.**
 
 ---
@@ -633,10 +762,49 @@ In `tests/state_art.rs` `mod files` (simulator `count_anim_frames` reads `assets
 - [ ] **Step 5: commit** `feat(assets): ship the v3 state art`.
 - [ ] **Step 6: V.**
 
+### Task B4b: the litter in the firmware
+
+Replaces plan 7's hand bitmaps with the approved strip (design §3.5). `scene.rs`, `FLOOR_ITEMS`, the `FLOOR_*_DIRT_PCT` keys, the tufts and the cross stay as plan 7 landed them.
+
+**Files:**
+- Create: `src/game/litter_art.rs` (generated by `bornpets_litter.py rust`; never edited by hand).
+- Modify: `src/game/background.rs`, `src/game/mod.rs` (`mod litter_art;` beside `pub mod background;`), `scripts/test_bornpets_litter.py`.
+
+**Interfaces:**
+- Consumes: A2b `rust_source`, `check`; A5's committed `assets/bornpets-litter.png`; plan 7's `background.rs`.
+- Produces: `background::FLOOR_SLOTS` (same name and type, now `pub use super::litter_art::FLOOR_SLOTS;`) and `litter_art::FLOOR_INK`.
+- `bitmap(display, origin, width, rows: &[u8])` reads `(width + 7) / 8` bytes a row, MSB first, and draws only black. `TUFT` becomes `[u8; 4]` (`0b10101000`, `0b10101000`, `0b01110000`, `0b00100000`). R15: `CRUMBS`, `PEEL`, `CAN`, `SOCK`, `PIZZA_BOX`, `FLOOR_BITMAPS`, the old slot values and the `u16` path are removed in the same commit.
+
+- [ ] **Step 1: write the failing tests.** In `src/game/background.rs` `mod draw`:
+```rust
+#[test] fn every_item_rests_on_the_floor() {
+    // Sky::Plain, floor 5: for each slot, the black pixels drawn inside it are exactly the set bits of FLOOR_INK[k]
+    // at (x + col, y + row); at least one of them is on the slot's bottom row; ink >= 15 % of the slot
+}
+#[test] fn ink_rows_match_their_slots() {
+    // FLOOR_INK[k].len() == h * ((w + 7) / 8); the padding bits past w are 0; total 92 bytes
+}
+```
+In `scripts/test_bornpets_litter.py`:
+```python
+def test_litter_art_is_current(self): ...   # RUST_OUT == rust_source(Image.open(SOURCE)): the baked art is the approved strip
+```
+- [ ] **Step 2: run and see them fail.** `CARGO_BUILD_JOBS=2 taskset -c 0,1 cargo test -j 2 --features simulator --lib background::` and `python3 -I -m unittest discover -s scripts -p 'test_bornpets_litter.py'`.
+- [ ] **Step 3: implement.** `python3 -I scripts/bornpets_litter.py rust`, then the `background.rs` changes above. Update plan 7's doc comments that describe the old bitmaps.
+- [ ] **Step 4: run them and see them pass.** The two commands of step 2: PASS. These plan-7 tests run **unchanged** (no line of their code changes; they are written over `FLOOR_SLOTS`, `FLOOR_TOP`/`FLOOR_BOTTOM`, `TUFT_XS` and the cross, so they now check the new data):
+  - `background.rs` `mod draw`: `floor_items_are_cumulative_and_never_move`, `slots_and_cross_never_overlap`, `grass_steps_around_the_items`, `only_the_cross_is_red`, `background_stays_in_the_pet_area` (all in the `background::` run above);
+  - `background.rs` `mod budget`: `the_sky_switch_is_cheap`, `ssd1675_promotions_stay_bounded`. The items are static and the floor is white day and night, so their numbers should not move: report the before and after `eprintln!` values;
+  - `src/game/mod.rs`: `ui_boxes_stay_clear` (dirt 95, all five items): `... cargo test -j 2 --features simulator --lib ui_boxes_stay_clear`;
+  - `tests/guide_shots.rs`: `every_shot_is_drawn_at_noon_unless_it_says_night`: `... --test guide_shots`.
+
+  A plan-7 test that fails is a slot or art problem. Fix the slot (back to A5 with the owner) or the art, never the test.
+- [ ] **Step 5: commit** `feat(game): floor litter in the pets' sprite style`.
+- [ ] **Step 6: V.**
+
 ### Task B5: the guide
 
 **Files:**
-- Modify: `guide/chapters/05-care-actions.typ` (the `== Exercise` section, after the *Injury* paragraph), `src/guide/words.rs`.
+- Modify: `guide/chapters/05-care-actions.typ` (the `== Exercise` section, after the *Injury* paragraph), `src/guide/words.rs`; `guide/chapters/03-reading-your-pet.typ` only as step 3b says.
 
 - [ ] **Step 1: words.** In `build`, after the causes loop, add `toast_what()` for each cause whose `toast_what() != what()`.
 - [ ] **Step 2: the line and the joke** (exact copy; numbers through `v()`, words through `w()`, no bare digits):
@@ -651,6 +819,7 @@ weight by #v("THROWUP_WEIGHT_PCT"), mood by #v("THROWUP_MOOD_PCT") and water by
 #tip[Never take a stuffed pet to the gym. It will show you its lunch, and you are the one
 holding the mop. Wash comes next.]
 ```
+- [ ] **Step 3b: the floor.** Plan 7's `"floor"` shot (`debug_set_dirt_pct(96)`, expect `floor == 5`) keeps its definition; it is redrawn with the new litter. In the built guide, look at `screen("floor")`: all five items show and none is hidden by the status backing more than in plan 7's shot. Read ch3's `== Sky and floor` table: the item names and `#v("FLOOR_*_DIRT_PCT")` stay. Change a sentence only where it describes an item's look (for example "a tiny can"), to match the approved art.
 - [ ] **Step 3: check.** Run `CARGO_BUILD_JOBS=2 taskset -c 0,1 cargo test -j 2 --features simulator --test guide_words` and then `make guide` (the build uses the same pin through `CARGO_BUILD_JOBS`; run nothing else in parallel). Both pass. `GAME.md` is untouched.
 - [ ] **Step 4: commit** `docs(guide): ch5 a full belly and the gym`.
 - [ ] **Step 5: V.**
@@ -661,7 +830,7 @@ holding the mop. Wash comes next.]
 - [ ] **Step 2:** watch every job (`gh run watch` on the mirror).
 - [ ] **Step 3: report:**
   - every job's result, and the failing test names with their messages;
-  - the SSD1680 release image against `main` before this branch (estimate +1.5 KiB);
+  - the SSD1680 release image against `main` before this branch (estimate +1.6 KiB, of which the litter about +32 B);
   - the debug firmware's `.bss` against `main` (expect −18 B);
   - `Outcome::throw_ups` per day for each standard sim routine (a routine that throws up daily is a balance change to report, not to hide);
   - the volume budget.
@@ -708,6 +877,10 @@ holding the mop. Wash comes next.]
 | 1.6 reference frames per state; drift check | A2 `STATE_REFS`, A1 `drift` |
 | 1.7 reserved ids, RAM, ids | design §3.1, B1 |
 | 1.8 rules | Global Constraints; V |
+| 1.9 litter in the pets' style, from references, same gallery rounds, `pet = "floor"` | A2b, A1 `write_review` (floor), A4 step 2b, A5 |
+| 1.9 slot sizes in the strip, clear of the UI, shown as the planner's call | design §3.5; A2b `test_slots_fit_the_strip_and_never_meet`; B4b plan 7's tests re-run |
+| 1.9 storage baked into flash | design §3.5 (one ink plane, argued); B4b |
+| 1.9 replace plan 7's bitmaps, keep `scene.rs` and thresholds, tests and guide | B4b (the re-run list), B5 step 3b |
 
 **Planner's calls:** all are in the design §3 and marked there:
 - ids and the slot map;
@@ -715,26 +888,29 @@ holding the mop. Wash comes next.]
 - the throw-up numbers, the floor-line minimum for dirt, what a throw-up leaves alone, the session length, and the toast's second line;
 - the reference-frame table and the cut-back;
 - the island merge as the simplifier;
-- the review directory.
+- the review directory;
+- the litter slots, the no-red palette, one ink plane instead of two, the plan-7 bitmap as image 1, the 25 % cut-back rule and the litter drift flags (design §3.5).
 
 **Type consistency:** checked across tasks:
 - Python: `STATES`, `ART_PETS`, `FRAME`, `NEW_PCX_BUDGET`, `REVIEW_DIR`, `new_files`, `diff_exports`, `budget`, `drift`, `write_review`, `STATE_REFS`, `STATE_BRIEFS`, `ref_png`, `state_refs`, `state_prompt`, `cut_back`, `merge_islands`, `api_key(key_file)`;
-- Rust: `PRESENCE_SLOTS`, `presence_slot`, the 11 variant names, `art_for_word`, `is_stuffed`, `shown_anim`, `Cause::ThrewUp`, `toast_what`, `throw_up`, `Outcome::throw_ups` and the six key names.
+- litter: `ITEMS`, `SLOTS`, `OLD_SLOTS`, `PLAN7_SKETCH`, `LITTER_REFS`, `item_scale`, `item_box`, `sketch_png`, `cut_item`, `item_drift`, `edge_runs`, `ink_rows`, `rust_source`, `LITTER_DIR`, frame ids `floor_<item>`;
+- Rust: `FLOOR_SLOTS`, `FLOOR_INK`, `PRESENCE_SLOTS`, `presence_slot`, the 11 variant names, `art_for_word`, `is_stuffed`, `shown_anim`, `Cause::ThrewUp`, `toast_what`, `throw_up`, `Outcome::throw_ups` and the six key names.
 
 Frame ids use `seq_prefix` (`bartho_`, not `bartholomeus_`).
 
-**Review Focus:** items 1 to 5 are pinned in B2/B4, A3/A4/B4, B3, B2 and A2.
+**Review Focus:** items 1 to 6 are pinned in B2/B4, A3/A4/B4, B3, B2, A2/A2b and A2b/B4b.
 
-**Proportion:** 5 art tasks and 7 firmware tasks. The code is short (one branch, one mapping, one table change). Most of the risk is in the assets, and the plan spends its words there.
+**Proportion:** 6 art tasks and 8 firmware tasks. The code is short (one branch, one mapping, one table change). Most of the risk is in the assets, and the plan spends its words there.
 
-**Flash (Part B):** about +1.5 KiB, so about 878 KiB of 960 after plans 5 and 7:
+**Flash (Part B):** about +1.6 KiB, so about 878 KiB of 960 after plans 5 and 7:
 - 11 variants and their arms in `anim_id`, pacing and the debug names: about 0.5 KiB;
 - `shown_anim` and `art_for_word`: about 0.3 KiB;
 - `throw_up`, the cause and its texts: about 0.2 KiB;
 - six keys in two presets with setters and key strings: about 0.4 KiB;
-- `presence_slot`: under 0.1 KiB.
+- `presence_slot`: under 0.1 KiB;
+- the litter: +92 B of ink, −56 B of plan 7 bitmaps, −4 B of tuft, so about +32 B.
 
-No font, no image in flash. Measured in B6.
+No font. The only image data in flash is the 92 B of litter ink. Measured in B6.
 
 **RAM:** the presence table goes from 738 B to 720 B (−18 B). The alternatives were growing `AA_MAX` to 51 (+180 B) and reusing `0x15`–`0x1E` (0 B, but 18 to 19 shipped files change, including 8 Slug files). No other static or stack grows; `shown_anim` takes a closure by value and allocates nothing.
 

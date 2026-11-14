@@ -86,6 +86,16 @@ Owner, later the same day: "use other frames from the sprite sheet to get good c
 
 Delta engine, no polling. A throw-up is one event inside the Exercise dose. Focused tests per task, then a CI regression on the GitHub mirror and a bug-fix round. Cargo uses 2 cores. Integer math, no alloc. Never write kv `state`, `game/name` or `BORNPETS.CFG`, and the save is `state_v3`. Toast ≤ 15 columns, cause what/why ≤ 12/≤ 15. Every new on-screen word goes in a `words()` list, and `make guide` must pass. Never touch GAME.md. R15: code made dead is removed in the same commit.
 
+### 1.9 Floor litter (owner, 2026-11-14, relayed by the controller)
+
+The quoted phrase is verbatim; the rest is the controller's relay, kept close to its words.
+
+"dirt items indeed are the floor litter items": the floor litter, meaning plan 7's crumbs, peel, can, sock and pizza box, must also be made in the pets' sprite style, using existing sprite-sheet frames as references so the style stays consistent.
+- Part A generates the 5 litter items with the same reference-frame method, palette snap (black/white/red; transparent where the item doesn't cover) and outline rule. They go into the same owner gallery rounds (manifest `pet = "floor"`).
+- The item size is the planner's to propose: the current slots are tiny. The proposal stays within the floor strip and clear of the UI (plan 7's layout rules), and the gallery shows it as the planner's call.
+- Storage: the controller recommends baking the litter into firmware flash as const bitmaps (two 1-bit planes, about ≤ 100 B each), not as PCX on FAT12.
+- Part B replaces plan 7's hand bitmaps with the baked art. It keeps `scene.rs` and the dirt thresholds unchanged, and updates plan 7's pixel tests and the guide shots/text as needed.
+
 ## 2. Findings at `5e59574`
 
 1. **Live badger sources.** `bornpets-sponsors-badger.json5` with `bornpets-sprites-badger.png` (no suffix). Decoded pixel by pixel, all 51 shipped `06*.PCX` match its sheet. The `-v2` and `-v3` sheets match 0 of 51; they are stale.
@@ -204,3 +214,70 @@ Casual equals Classic. Its later stuffed line (83) already makes it gentler, as 
   - Root entries: 372 + 50 = 422 of 511.
 - **Shipping.** Only the 50 files `PP29xx`–`PP32xx` for PP 00, 01, 05, 06, 07 are copied. `MANIFEST.TXT` is hand-edited and its new version listed in plan 7's `asset-changes.txt` `replace` line. New files need no change line, because `--update` adds missing files.
 - **Review directory.** `target/v3art/review/` in this worktree (gitignored).
+
+### 3.5 Floor litter *(planner's call)*
+
+**Plan 7 at `7fdea40`** (`../BornHack-Cyberegg-v3bg`, its Task 3 landed):
+- `src/game/background.rs` draws five black-only `u16` bitmaps (`CRUMBS`, `PEEL`, `CAN`, `SOCK`, `PIZZA_BOX`, in `FLOOR_BITMAPS`) into `FLOOR_SLOTS`: 7 x 3, 11 x 6, 10 x 6, 9 x 8 and 16 x 5.
+- The floor strip is y 100 to 109 (10 rows). It is white day and night: the night dither ends at y 99 (`SKY_BOTTOM`), and the tufts are skipped wherever a shown item meets them. So under a litter item there is only white floor.
+- Its rules: every slot inside the strip and x 0 to 151, no two slots overlapping, items cumulative and never moving, grass tufts skipped where an item is shown, and no red outside the poorly cross.
+- The status line, with its backing, is drawn over the floor and wins. The toast, HAX, battery, demo mark, sun and cross all sit above the strip.
+
+**Slots** (bottom row y 109; left and right groups, as plan 7 has them):
+
+| Item | Plan 7 slot | Proposed slot (x, y, w x h) |
+|---|---|---|
+| crumbs | (4, 107) 7 x 3 | (2, 105) 12 x 5 |
+| banana peel | (120, 104) 11 x 6 | (116, 101) 16 x 9 |
+| can | (16, 104) 10 x 6 | (16, 100) 12 x 10 |
+| sock | (136, 102) 9 x 8 | (134, 100) 14 x 10 |
+| pizza box | (29, 105) 16 x 5 | (30, 102) 24 x 8 |
+
+- The left group spans x 2 to 53 and the right group x 116 to 147; no two slots touch.
+- Ten rows is the strip's full height. A taller item would reach into the sky, which is dithered at night.
+- The widths leave room for a 1 px outline around a readable shape at the pets' scale (the 20 x 20 `ENV_*` icons are the nearest shipped examples).
+- The gallery shows the strip with all five items, the plan-7 slots beside them, and a pet standing over them.
+
+**Palette: black, white and transparent; no red.** This narrows the owner's "black/white/red":
+- Plan 7's battery rule says red appears only while the red pet line already asks for a full refresh, and its test `only_the_cross_is_red` pins that.
+- Red litter would put red on the screen without the red line, and on the SSD1675 red needs a full refresh to seat.
+- Any red the model draws is snapped to black, and the gallery flags it.
+
+**Method** (as for the pets, §3.4: a fixed rectangle, reference frames, a cut-back by an exact factor):
+- One `/v1/images/edits` call per item, on the same 1536 x 1024 magenta canvas.
+- **Image 1 (primary)** is plan 7's hand bitmap for that item, stretched nearest-neighbour onto the new slot and drawn at the item scale `S = min(1400 // w, 900 // h)` (crumbs 116, peel 87, can 90, sock 90, pizza box 58) in a rectangle centred on the canvas. It plays the idle frame's role: it fixes what the item is, its size and its place.
+- **Images 2 to 4** are shipped frames decoded from `assets/to-badge`, each at the largest integer scale that fits the canvas, centred, transparent as magenta. The Slug's `021500`–`021700` are only read, as references; they are never modified (§1.2):
+
+| Item | References after the plan-7 sketch |
+|---|---|
+| crumbs | `001500` (Bartholomeus food item), `050C00` (Panda feeding), `021500` (Slug food item) |
+| peel | `001500`, `010C00` (Cat feeding), `021500` |
+| can | `052500` (Panda drinking), `062500` (Badger drinking), `001600` (medicine) |
+| sock | `001700` (toy), `021700` (Slug toy), `051000` (Panda sleeping) |
+| pizza box | `001500`, `060C00` (Badger feeding), `021500` |
+
+- The prompt asks for chunky pixel art on a w x h grid with a 1 px black outline, matching the references' line weight, and no red.
+- **Cut-back.** The output's rectangle is cut out and reduced by exactly `S` (`Image.BOX`). Then a cell is black when at least 25 % of it is dark (so a thin drawn outline survives the reduction), else white when at least half of it is opaque, else transparent. Red is snapped to black and flagged. Then `despeckle`.
+- **Drift check** (flags for the gallery, never an automatic patch). Measured on the shipped references: the 20 x 20 icons `001500`/`001600` have a 1 px outline with 100 % black edges.
+  - the outline median is not 1 px;
+  - black edges under 90 %;
+  - no ink on the slot's bottom row (the item must rest on the floor);
+  - ink under 15 % of the slot (the item would read as a speck);
+  - any red snapped.
+
+**Storage: baked into flash, as the controller recommended, but as one plane, not two.**
+- **Why baked.** FAT12 has no margin. The 50 state frames already need all 55 spare clusters, and five more PCX would cost 5 clusters plus a loader.
+- **Why one plane.** Under an item there is only white floor (above), so a white plane would draw white on white: 92 B of flash that changes no pixel. Transparent and white inside the outline look the same on the badge.
+  - The source PNG keeps white and transparent apart. If a later plan paints the floor, a `paint` plane is 92 B more and the generator already has the data.
+  - The gallery shows each item on the white floor, which is what the badge shows.
+- **Flash cost:**
+  - One 1-bit `ink` plane per item, rows padded to whole bytes, MSB first: crumbs 10 B, peel 18 B, can 20 B, sock 20 B, pizza box 24 B, so **92 B**.
+  - Plan 7's five `u16` bitmaps are removed (56 B). `bitmap()` keeps its size: it reads byte rows with a stride instead of `u16` rows, and the tuft becomes byte rows too (8 B → 4 B).
+  - Net about **+32 B** (under 0.1 KiB). Plan 9 then totals about +1.6 KiB, still about 878 KiB of 960 after plans 5 and 7.
+- **Generated code.** `scripts/bornpets_litter.py` generates `src/game/litter_art.rs` (the five slots and the five ink planes) from one source image, `assets/bornpets-litter.png`. That image is the 152 x 10 floor strip with each item in its slot, in the four badge colours. It is not an asset-gen sheet and is never exported to `assets/to-badge`. A test fails when the generated file is stale.
+
+**Part B** replaces `CRUMBS` … `PIZZA_BOX`, `FLOOR_BITMAPS` and the slot values:
+- `scene.rs`, `FLOOR_ITEMS`, the tufts, the cross and the `FLOOR_*_DIRT_PCT` keys stay as they are.
+- `FLOOR_SLOTS` keeps its name and type; it moves into the generated file and `background.rs` re-exports it.
+- No plan-7 test changes its code. Every one is written over `FLOOR_SLOTS` and its bounds, so they are re-run on the new data. The list is in the plan, Task B4b.
+- The guide keeps plan 7's "floor" shot and ch3 table. The shot is redrawn and looked at; the text changes only if it describes how an item looks.
