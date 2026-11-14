@@ -69,9 +69,10 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 fn current() -> Option<&'static Registry> {
     if INSTALLED.load(Ordering::Acquire) {
-        // SAFETY: `REGISTRY` is written exactly once inside `install` (before
-        // the `INSTALLED` Release store) and only ever read afterwards.  Boot
-        // is single-threaded, so no concurrent access occurs.
+        // SAFETY: `REGISTRY` is written at boot only: once in `install` (before
+        // the `INSTALLED` Release store) and once in `drop_without_sprites`
+        // (`ids` and `dropped`, before any task reads the roster).  Boot is
+        // single-threaded, so no concurrent access occurs.
         Some(unsafe { &*core::ptr::addr_of!(REGISTRY) })
     } else {
         None

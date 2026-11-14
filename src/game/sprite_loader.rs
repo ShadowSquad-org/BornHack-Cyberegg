@@ -73,7 +73,6 @@ const FF_MAX: u8 = 16;
 static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
     [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];
 
-#[cfg(not(feature = "simulator"))]
 /// Set once `init` walked the directory to its real end.  A `dir.next()` error
 /// ends the walk without it, and the missing-sprite retirement then stands down.
 #[cfg(feature = "embassy-core")]
@@ -104,6 +103,7 @@ pub(crate) fn set_incomplete_for_test(v: bool) {
     TEST_INCOMPLETE.store(v, core::sync::atomic::Ordering::Relaxed);
 }
 
+#[cfg(not(feature = "simulator"))]
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------

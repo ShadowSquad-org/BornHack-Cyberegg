@@ -1063,7 +1063,8 @@ pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mo
         let should_record = match s.phase {
             Phase::Hatching => false,
             Phase::Gone => s.realm_pending,
-            _ => true,
+            // A hidden Active pet was recorded by `retire_hidden_pet`.
+            _ => !is_hidden_kind(s.pet_kind),
         };
         let departing =
             should_record.then(|| PetRecord::from_game_state(s, pet_name_bytes_sync()));
@@ -1107,6 +1108,17 @@ pub fn is_hidden_kind(kind: super::engine::PetKind) -> bool {
     super::pet_registry::is_hidden(kind)
 }
 
+/// Whether two records are the same pet.  Identity only: the age may differ
+/// between two boots (catch-up), so it is not compared.
+fn same_pet(a: &PetRecord, b: &PetRecord) -> bool {
+    a.generation == b.generation
+        && a.pet_kind == b.pet_kind
+        && a.vitality == b.vitality
+        && a.curiosity == b.curiosity
+        && a.resilience == b.resilience
+        && a.name[..a.name_len as usize] == b.name[..b.name_len as usize]
+}
+
 // retire_hidden_pet: begin
 /// At boot, after `drop_without_sprites` and `init`: a pet whose kind has no
 /// sprites on this badge moves to the Unicorn Realm (an egg goes back to pet
@@ -1126,6 +1138,9 @@ pub fn retire_hidden_pet() -> Retired {
     match s.phase {
         Phase::Gone => Retired::Nothing,
         Phase::Hatching => {
+            // Freeze the egg: it must not hatch behind pet selection and ask
+            // for a name.  `new_generation` replaces the whole state.
+            s.hibernate();
             super::pet_select::open_new_generation();
             Retired::Egg
         }
@@ -1134,7 +1149,7 @@ pub fn retire_hidden_pet() -> Retired {
             let realm = unsafe { &mut *REALM.get() };
             // Newest first.  A power cut between the realm and state writes
             // leaves the record in the realm with the pet still alive.
-            if realm.count == 0 || realm.pets[0] != record {
+            if realm.count == 0 || !same_pet(&realm.pets[0], &record) {
                 realm.push(record);
             }
             REALM_DIRTY.store(true, Ordering::Relaxed);
@@ -1950,6 +1965,7 @@ mod retire_tests {
         assert_eq!(display_anim(), DisplayAnim::Gone);
         assert!(!can_use_station());
         assert!(is_started(), "the Gone screen needs the game to draw");
+        assert!(!take_naming_pending());
         teardown();
     }
 
@@ -2071,6 +2087,47 @@ mod retire_tests {
         assert!(REALM_DIRTY.load(Ordering::Relaxed));
         assert!(unsafe { (*GAME.get()).as_ref().unwrap().needs_save() });
         REALM_DIRTY.store(false, Ordering::Relaxed);
+        teardown();
+    }
+
+    #[test]
+    fn a_hidden_egg_stays_frozen_and_is_never_recorded() {
+        let _g = setup();
+        start_new_game(PetKind(8), true, false);
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::Egg);
+        advance_ticks(10_000);
+        for _ in 0..3 {
+            cycle();
+        }
+        assert_eq!(phase(), Phase::Hatching, "the egg did not hatch");
+        assert!(!take_naming_pending(), "no naming prompt");
+        new_generation(PetKind(0), true, false);
+        assert_eq!(realm_count(), n);
+        let s = unsafe { (*GAME.get()).as_ref().unwrap() };
+        assert_eq!(s.pet_kind, PetKind(0));
+        assert_eq!(s.phase, Phase::Hatching);
+        assert!(!s.hibernating);
+        teardown();
+    }
+
+    #[test]
+    fn the_power_cut_dedupe_ignores_age_but_not_generation() {
+        let _g = setup();
+        let mut pet = live(8);
+        set_pet_name(b"Jelly");
+        let rec = PetRecord::from_game_state(&pet, b"Jelly");
+        unsafe { (*REALM.get()).push(rec) };
+        let n = realm_count();
+        pet.age_ticks += 500; // catch-up changed the age between boots
+        set_state_for_test(Some(pet.clone()));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), n, "same pet, no second record");
+        let mut other = live(8);
+        other.generation = pet.generation + 1000;
+        set_state_for_test(Some(other));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), (n + 1).min(10), "another generation records");
         teardown();
     }
 }

@@ -1117,6 +1117,7 @@ impl GameState {
         self.active_action = None;
         self.hibernating = false;
         self.realm_pending = false;
+        self.naming_pending = false;
         self.request_save();
     }
 
