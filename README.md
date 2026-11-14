@@ -848,6 +848,8 @@ more frames than it uses; the firmware counts the files actually present.
 
 After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
 
+**Updating a badge that already has assets.** `scripts/copy_assets.py --update` accepts non-empty `CYBR*` volumes. It adds the files the badge is missing, then applies [`assets/asset-changes.txt`](assets/asset-changes.txt): a `remove` line deletes a retired file and a `replace` line overwrites a changed one, but only when the file on the badge matches the SHA-256 of a version we shipped. A file you changed or made yourself is reported as kept and never touched. `000000.PCX`, `010000.PCX`, `PETS.CFG`, `BPETS_V3.CFG` and `BORNPETS.CFG` are protected and are never removed or replaced. A replacement is written to a `.TMP` file first; if the volume is full the partial file is deleted, the old file stays, and the script prints a `WARN` line naming each file it could not write.
+
 #### Changing or adding assets
 
 The firmware maps animation states to filenames in code. If you add new animations, change frame counts, reorder assets, or add a new pet kind, the following source files must be updated to match:

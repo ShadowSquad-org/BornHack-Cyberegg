@@ -1,0 +1,13 @@
+# Shipped-asset changes applied by `scripts/copy_assets.py --update`.
+#
+# One change per line:
+#   remove  NAME SHA256 [SHA256 ...]   delete NAME from a badge
+#   replace NAME SHA256 [SHA256 ...]   overwrite NAME with assets/to-badge/NAME
+#
+# The SHA256 values (lowercase hex of the file bytes) are every shipped
+# version of NAME a badge may legitimately hold.  A file on the badge whose
+# hash is not listed was changed by the player and is left alone.  Names
+# match case-insensitively.  '#' starts a comment.
+#
+# Never listed (refused by the loader): 000000.PCX, 010000.PCX, PETS.CFG,
+# BPETS_V3.CFG, BORNPETS.CFG.
