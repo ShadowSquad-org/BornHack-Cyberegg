@@ -217,7 +217,8 @@ def _sha256(path):
 
 def _copy_new(src, dst):
     """Copy ``src`` to a new file ``dst``.  On ENOSPC the partial file is
-    deleted and False is returned.  FileExistsError propagates."""
+    deleted and False is returned.  Any other OSError also deletes it, then
+    propagates.  FileExistsError propagates (nothing was created)."""
     created = False
     try:
         with open(src, "rb") as fin, open(dst, "xb") as fout:
@@ -226,13 +227,14 @@ def _copy_new(src, dst):
         shutil.copystat(src, dst)
         return True
     except OSError as e:
-        if e.errno != errno.ENOSPC:
-            raise
+        # Never leave a truncated file behind, whatever the error was.
         if created:
             try:
                 os.remove(dst)
             except OSError:
                 pass
+        if e.errno != errno.ENOSPC:
+            raise
         return False
 
 
@@ -289,9 +291,15 @@ def update_assets_to(mount_point, assets_dir, changes=()):
                 continue
             src = sources[name.lower()]
             tmp = entry.with_suffix(".TMP")
-            if tmp.name.lower() in present:
-                result["kept"].append(entry.name)  # unknown .TMP in the way
-                continue
+            stale = present.get(tmp.name.lower())
+            if stale is not None:
+                # This name has a listed replace entry, so a NAME.TMP is
+                # our own leftover from an interrupted run.
+                if not stale.is_file():
+                    result["kept"].append(entry.name)
+                    continue
+                os.remove(stale)
+                present.pop(tmp.name.lower())
             try:
                 ok = _copy_new(src, tmp)
             except FileExistsError:
@@ -330,6 +338,13 @@ def _say(*args):
         print(*args, flush=True)
 
 
+def _report_future(fut):
+    """Done-callback: a worker exception must never vanish silently."""
+    exc = fut.exception()
+    if exc is not None:
+        print(f"  ERR  worker failed: {exc!r}", file=sys.stderr)
+
+
 def process_device(devnode, label, *, quiet, update=False):
     """Full mount → copy → sync → unmount cycle for one block device.
 
@@ -346,7 +361,12 @@ def process_device(devnode, label, *, quiet, update=False):
             _say(f"SKIP  {mount_point}  (label {label!r} is not CYBR*)")
             unmount_via_udisks(devnode)
             return False
-        res = update_assets_to(mount_point, ASSETS_DIR, load_changes(CHANGES_FILE))
+        try:
+            res = update_assets_to(mount_point, ASSETS_DIR, load_changes(CHANGES_FILE))
+        except Exception as e:  # never swallow: name the device and the error
+            print(f"  ERR  [{label}] {devnode}: update failed: {e!r}", file=sys.stderr)
+            unmount_via_udisks(devnode)
+            return False
         _say(f"  [{label}] → removed {len(res['removed'])}, "
              f"replaced {len(res['replaced'])}, added {len(res['added'])}, "
              f"kept {len(res['kept'])}, no space {len(res['no_space'])}")
@@ -436,7 +456,7 @@ def watch_udev(quiet, once, max_workers, update=False):
                     success_count[0] += 1
                     if once:
                         done_event.set()
-        pool.submit(worker)
+        pool.submit(worker).add_done_callback(_report_future)
 
     # Handle pre-mounted volumes first (also parallelised).
     initial_sweep_parallel(submit)
@@ -528,7 +548,7 @@ def watch_inotify_fallback(quiet, once, max_workers, update=False):
             ok = process_device(devnode, label, quiet=quiet, update=update)
             if ok and once:
                 done_event.set()
-        pool.submit(worker)
+        pool.submit(worker).add_done_callback(_report_future)
 
     # Initial sweep handles anything already mounted.
     initial_sweep_parallel(submit)

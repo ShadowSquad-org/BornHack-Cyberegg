@@ -239,7 +239,8 @@ class CopyAssetsTest(unittest.TestCase):
         (d / "a").write_bytes(b"x")
         (d / "b").write_bytes(b"x" * 2048)
         (d / "c").write_bytes(b"x" * 2049)
-        self.assertEqual(copy_assets.volume_budget(d), (1 + 1 + 2, 3))
+        (d / "z").write_bytes(b"")
+        self.assertEqual(copy_assets.volume_budget(d), (1 + 1 + 2 + 0, 4))
 
     def test_process_device_reports_no_space(self):
         changes_file = self.assets.parent / "changes.txt"
@@ -261,6 +262,64 @@ class CopyAssetsTest(unittest.TestCase):
         out = "\n".join(str(c.args[0]) for c in say.call_args_list)
         self.assertIn("WARN", out)
         self.assertIn("PETS.CFG", out)
+
+    def test_non_enospc_error_removes_partial_and_propagates(self):
+        real_copy = shutil.copyfileobj
+
+        def eio(fin, fout, *a, **k):
+            if fout.name.endswith("010000.PCX"):
+                fout.write(b"0123")
+                raise OSError(errno.EIO, "io error")
+            return real_copy(fin, fout, *a, **k)
+
+        with mock.patch.object(shutil, "copyfileobj", eio):
+            with self.assertRaises(OSError) as cm:
+                self.update()
+        self.assertEqual(cm.exception.errno, errno.EIO)
+        self.assertFalse((self.vol / "010000.PCX").exists())
+
+        (self.assets / "MANIFEST.TXT").write_bytes(b"new manifest")
+        (self.vol / "MANIFEST.TXT").write_bytes(b"old manifest")
+        changes = [("replace", "MANIFEST.TXT", frozenset({self.sha(b"old manifest")}))]
+
+        def eio_tmp(fin, fout, *a, **k):
+            if fout.name.endswith("MANIFEST.TMP"):
+                fout.write(b"01")
+                raise OSError(errno.EIO, "io error")
+            return real_copy(fin, fout, *a, **k)
+
+        with mock.patch.object(shutil, "copyfileobj", eio_tmp):
+            with self.assertRaises(OSError):
+                copy_assets.update_assets_to(self.vol, self.assets, changes)
+        self.assertFalse((self.vol / "MANIFEST.TMP").exists())
+        self.assertEqual((self.vol / "MANIFEST.TXT").read_bytes(), b"old manifest")
+
+    def test_replace_deletes_its_own_stale_tmp(self):
+        (self.assets / "MANIFEST.TXT").write_bytes(b"new manifest")
+        (self.vol / "MANIFEST.TXT").write_bytes(b"old manifest")
+        (self.vol / "MANIFEST.TMP").write_bytes(b"half")
+        changes = [("replace", "MANIFEST.TXT", frozenset({self.sha(b"old manifest")}))]
+        result = copy_assets.update_assets_to(self.vol, self.assets, changes)
+        self.assertEqual((self.vol / "MANIFEST.TXT").read_bytes(), b"new manifest")
+        self.assertFalse((self.vol / "MANIFEST.TMP").exists())
+        self.assertEqual(result["replaced"], ["MANIFEST.TXT"])
+        self.assertEqual(result["kept"], [])
+
+    def test_process_device_bad_changes_file_reports_and_unmounts(self):
+        bad = self.assets.parent / "changes.txt"
+        bad.write_text("explode X.PCX " + "a" * 64 + "\n")
+        with mock.patch.object(copy_assets, "ASSETS_DIR", self.assets), \
+                mock.patch.object(copy_assets, "CHANGES_FILE", bad), \
+                mock.patch.object(copy_assets, "mount_via_udisks", return_value=self.vol), \
+                mock.patch.object(copy_assets, "unmount_via_udisks") as unmount, \
+                mock.patch("sys.stderr") as err:
+            ok = copy_assets.process_device("/dev/x", "CYBR0001", quiet=True, update=True)
+        self.assertFalse(ok)
+        unmount.assert_called_once_with("/dev/x")
+        out = "".join(str(c.args[0]) for c in err.write.call_args_list)
+        self.assertIn("ERR", out)
+        self.assertIn("/dev/x", out)
+        self.assertIn("explode", out)
 
 
 if __name__ == "__main__":
