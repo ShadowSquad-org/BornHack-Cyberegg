@@ -1971,6 +1971,44 @@ mod tests {
         }
 
         #[test]
+        fn a_wake_with_an_unchanged_view_draws_the_same_screen() {
+            // A wake up to two minutes before a sky switch finds the same
+            // view. The firmware drives the panel only for pixels that differ
+            // (`partial_idle` on the SSD1675, `delta.build` on the SSD1680), so
+            // the whole screen (pet, status, scene) must be identical.
+            use crate::game::engine::TICKS_PER_MINUTE;
+            use crate::game::engine::scene::wake_view;
+
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let mut s = pet(Some(20 * 60 + 57)); // the switch is at 21:00
+            s.fullness = (60 * P) as u16;
+            s.hydration = (60 * P) as u16;
+            s.energy = (80 * P) as u16;
+            s.health = (95 * P) as u16;
+            s.mood = (90 * P) as u16;
+            s.fun = (60 * P) as u16;
+            s.dirt = 0;
+            s.booze = 0;
+            let t0 = s.last_update_tick;
+            lifecycle::set_state_for_test(Some(s.clone()));
+            let before = screen();
+            s.update(t0 + TICKS_PER_MINUTE);
+            let view = wake_view(&s);
+            lifecycle::set_state_for_test(Some(s.clone()));
+            let wake = screen();
+            let whole = boxed(0, 0, 152, 152);
+            same_in(&before, &wake, whole, "the screen at a same-view wake");
+            s.update(t0 + 3 * TICKS_PER_MINUTE);
+            assert_ne!(wake_view(&s), view, "21:00 switches the sky");
+            lifecycle::set_state_for_test(Some(s));
+            assert!(
+                differs_in(&wake, &screen(), boxed(0, 35, 152, 75)),
+                "the switch is on the screen"
+            );
+        }
+
+        #[test]
         fn hax_reads_at_night() {
             let _guard = lock_test_state();
             let _clear = ClearPet;

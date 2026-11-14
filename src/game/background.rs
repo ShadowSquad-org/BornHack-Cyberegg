@@ -546,15 +546,17 @@ mod budget {
     }
 
     /// Worst changed pixels between two consecutive frames of any idle-paced
-    /// animation of any roster pet, over `sky`. The loop wraps.
-    fn worst_frame_step(sky: Sky) -> u32 {
-        let mut worst = 0;
+    /// animation of any roster pet, over `sky`, and how many (pet, anim) pairs
+    /// were measured. The loop wraps.
+    fn worst_frame_step(sky: Sky) -> (u32, u32) {
+        let (mut worst, mut pairs) = (0, 0);
         for kind in roster() {
             for anim in IDLE_PACED {
                 let n = frame_count(kind, anim);
                 if n < 2 {
                     continue;
                 }
+                pairs += 1;
                 for f in 0..n {
                     let a = frame(sky, &anim_filename(kind, anim, f));
                     let b = frame(sky, &anim_filename(kind, anim, (f + 1) % n));
@@ -562,7 +564,7 @@ mod budget {
                 }
             }
         }
-        worst
+        (worst, pairs)
     }
 
     #[test]
@@ -578,57 +580,37 @@ mod budget {
         c
     }
 
+    /// Night is 21:00 to 07:00 (`scene::is_night`): 120 of the 288 idle frames.
+    const NIGHT_FRAMES: u32 = 10 * 3600 / pacing::IDLE_FRAME_SECS as u32;
+
     #[test]
     fn ssd1675_promotions_stay_bounded() {
         assert_eq!(IDLE_FRAMES_PER_DAY, 288);
+        assert_eq!(NIGHT_FRAMES, 120);
+        let day_frames = IDLE_FRAMES_PER_DAY - NIGHT_FRAMES;
         let switch_px = changed_px(&drawn_sky(Sky::Day), &drawn_sky(Sky::Night));
-        let day_worst = worst_frame_step(Sky::Day);
-        let night_worst = worst_frame_step(Sky::Night);
-        assert!(day_worst > 0, "no animated sprites found");
-        let night_px = IDLE_FRAMES_PER_DAY * night_worst + 2 * switch_px;
-        let day_px = IDLE_FRAMES_PER_DAY * day_worst;
-        let added = night_px.saturating_sub(day_px) as f32 / SSD1675_FULL_AFTER_PX as f32;
-        let total = night_px as f32 / SSD1675_FULL_AFTER_PX as f32;
-        eprintln!(
-            "ssd1675 worst frame step: day {day_worst} px, night {night_worst} px; \
-             full refreshes a day: added {added:.2}, total {total:.2}"
+        let (plain_worst, pairs) = worst_frame_step(Sky::Plain);
+        let (day_worst, day_pairs) = worst_frame_step(Sky::Day);
+        let (night_worst, night_pairs) = worst_frame_step(Sky::Night);
+        // The roster has 7 pets, each with several animated idle-paced anims.
+        assert!(
+            pairs >= 20 && day_pairs == pairs && night_pairs == pairs,
+            "{pairs} pairs measured"
         );
-        assert!(added <= 4.0, "added {added}");
-        assert!(total <= 24.0, "total {total}");
-    }
-
-    #[test]
-    fn a_wake_with_an_unchanged_view_draws_the_same_pixels() {
-        // A wake can come up to two minutes before a sky switch and find the
-        // same view. The firmware then skips the refresh when no pixel is
-        // dirty (`partial_idle` in `src/bin/embassy.rs`), so the two draws
-        // must be pixel-identical.
-        use crate::game::engine::needs::P;
-        use crate::game::engine::scene::{background_state, wake_view};
-        use crate::game::engine::{GameState, Phase, TICKS_PER_MINUTE};
-
-        let mut s = GameState::new_egg(7, PetKind(0));
-        s.phase = Phase::Active;
-        s.fullness = (60 * P) as u16;
-        s.hydration = (60 * P) as u16;
-        s.energy = (80 * P) as u16;
-        s.health = (95 * P) as u16;
-        s.mood = (90 * P) as u16;
-        s.fun = (60 * P) as u16;
-        s.dirt = 0;
-        s.booze = 0;
-        s.sync_clock(s.last_update_tick, Some(1257)); // 20:57, switch at 21:00
-        let draw = |s: &GameState| {
-            let mut c = Canvas::new();
-            draw_background(&mut c, &background_state(s).unwrap()).unwrap();
-            c
-        };
-        let (before_view, before) = (wake_view(&s), draw(&s));
-        s.update(s.last_update_tick + TICKS_PER_MINUTE);
-        assert_eq!(wake_view(&s), before_view, "one minute before the switch");
-        assert_eq!(changed_px(&before, &draw(&s)), 0);
-        s.update(s.last_update_tick + 2 * TICKS_PER_MINUTE);
-        assert_ne!(wake_view(&s), before_view, "the switch itself");
-        assert!(changed_px(&before, &draw(&s)) > 0);
+        assert!(plain_worst > 1_000, "plain worst {plain_worst} px");
+        let per_day = |px: u32| px as f32 / SSD1675_FULL_AFTER_PX as f32;
+        // Worst step on every frame: an upper bound. Baseline = backgrounds off.
+        let base = per_day(IDLE_FRAMES_PER_DAY * plain_worst);
+        let real = per_day(day_frames * day_worst + NIGHT_FRAMES * night_worst + 2 * switch_px);
+        let day_only = per_day(IDLE_FRAMES_PER_DAY * day_worst);
+        let added = real - base;
+        eprintln!(
+            "ssd1675 worst frame step ({pairs} pairs): plain {plain_worst} px, day {day_worst} px, night {night_worst} px"
+        );
+        eprintln!(
+            "ssd1675 full refreshes a day: real hours with background {real:.2}, without {base:.2} (added {added:.2}); \
+             day only with background {day_only:.2}, without {base:.2}"
+        );
+        assert!(added <= 0.5, "the background adds {added} a day");
     }
 }
