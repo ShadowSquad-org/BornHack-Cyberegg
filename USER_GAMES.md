@@ -364,6 +364,34 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DEMO_PICK_WATER_PCT` | 70 | 70 |
 | `DEMO_PICK_COLA_PCT` | 20 | 20 |
 | `DEMO_PICK_GAME_PCT` | 30 | 30 |
+| `BATTLE_POWER_BASE_PTS` | 22 | 22 |
+| `BATTLE_POWER_WEIGHT_PCT` | 28 | 28 |
+| `BATTLE_COURAGE_PEAK_PTS` | 8 | 8 |
+| `BATTLE_HIGH_MOOD_PCT` | 80 | 80 |
+| `BATTLE_HIGH_MOOD_PTS` | 3 | 3 |
+| `BATTLE_LOW_MOOD_PCT` | 40 | 40 |
+| `BATTLE_GUARD_WEIGHT_PCT` | 26 | 26 |
+| `BATTLE_GUARD_BASE_PTS` | 7 | 7 |
+| `BATTLE_SPEED_BASE_PTS` | 25 | 25 |
+| `BATTLE_SPEED_FIT_PCT` | 40 | 40 |
+| `BATTLE_RESTED_SPEED_PTS` | 5 | 5 |
+| `BATTLE_RESTED_FOCUS_PTS` | 5 | 5 |
+| `BATTLE_GROGGY_SPEED_PTS` | 10 | 10 |
+| `BATTLE_GROGGY_FOCUS_PTS` | 5 | 5 |
+| `BATTLE_HANGOVER_SPEED_PTS` | 8 | 8 |
+| `BATTLE_HANGOVER_FOCUS_PTS` | 12 | 12 |
+| `BATTLE_CRAVING_FOCUS_PTS` | 10 | 10 |
+| `BATTLE_CRAVING_POWER_PTS` | 3 | 3 |
+| `BATTLE_HEAVY_UNFIT_FIT_PCT` | 50 | 50 |
+| `BATTLE_SLOPPY_PCT` | 40 | 40 |
+| `BATTLE_FELT_BASE_PCT` | 150 | 150 |
+| `BATTLE_HP_BASE_PTS` | 45 | 45 |
+| `BATTLE_HP_WEIGHT_PCT` | 25 | 25 |
+| `BATTLE_POWER_FLOOR_PTS` | 33 | 33 |
+| `BATTLE_GUARD_FLOOR_PTS` | 14 | 14 |
+| `BATTLE_HP_FLOOR_PTS` | 60 | 60 |
+| `BATTLE_STAMINA_FLOOR_PTS` | 1 | 1 |
+| `BATTLE_INJURED_PCT` | 60 | 60 |
 
 Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. Unknown keys are logged and skipped.
 

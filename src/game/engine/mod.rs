@@ -13,6 +13,7 @@
 pub mod advance;
 pub mod anim_files;
 pub mod causes;
+pub mod combat;
 pub mod demo;
 pub mod debug;
 pub mod doses;
@@ -1707,6 +1708,11 @@ fn level_pct(v: u16) -> u8 {
 }
 
 impl GameState {
+    /// The pet as the fight sees it (plan 5): six numbers and the condition flags.
+    pub fn snapshot(&self) -> combat::Snapshot {
+        combat::derive(&combat::Body::of(self))
+    }
+
     /// Update the game state to `now_tick` and return a display snapshot.
     ///
     /// This is the primary API for the UI layer: it triggers a state update

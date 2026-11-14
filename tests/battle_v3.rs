@@ -1,0 +1,396 @@
+//! BornPets v3 battles (plan 5). Task 1: the snapshot.
+
+mod snapshot {
+    use bornhack_aegg::game::bornpets_cfg::apply_overrides;
+    use bornhack_aegg::game::engine::combat::{
+        Body, Factor, Flags, WIRE_FOCUS, WIRE_GUARD, WIRE_HP, WIRE_POWER, WIRE_SPEED, WIRE_STAMINA,
+        derive, derive_raw, felt,
+    };
+    use bornhack_aegg::game::engine::needs::P;
+    use bornhack_aegg::game::engine::thresholds::Thresholds;
+    use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
+
+    /// The prototype builds (`battle::builds`) as `Body`, traits 50.
+    fn builds() -> [(&'static str, Body); 20] {
+        let b = Body::REFERENCE;
+        let fit = Body {
+            fit: 90,
+            energy: 75,
+            mood: 85,
+            health: 95,
+            ..b
+        };
+        let sumo = Body {
+            weight: 80,
+            fit: 80,
+            energy: 75,
+            mood: 85,
+            health: 90,
+            ..b
+        };
+        let fat = Body {
+            weight: 85,
+            fit: 15,
+            energy: 65,
+            mood: 70,
+            health: 55,
+            ..b
+        };
+        [
+            ("fit, normal weight", fit),
+            ("fit, one beer", Body { booze: 15, ..fit }),
+            ("thin and fit", Body { weight: 30, ..fit }),
+            ("sumo (heavy, fit)", sumo),
+            ("sumo, two beers", Body { booze: 30, ..sumo }),
+            (
+                "well rested",
+                Body {
+                    fit: 75,
+                    energy: 95,
+                    mood: 85,
+                    health: 90,
+                    rested: true,
+                    ..b
+                },
+            ),
+            ("average", b),
+            ("fat and unfit", fat),
+            ("fat, unfit, three beers", Body { booze: 45, ..fat }),
+            (
+                "thin and unfit",
+                Body {
+                    weight: 25,
+                    fit: 20,
+                    health: 55,
+                    mood: 65,
+                    ..b
+                },
+            ),
+            (
+                "wasted",
+                Body {
+                    booze: 70,
+                    energy: 60,
+                    ..b
+                },
+            ),
+            (
+                "dependent, sober (craving)",
+                Body {
+                    craving: true,
+                    mood: 55,
+                    ..b
+                },
+            ),
+            (
+                "wired",
+                Body {
+                    fun: 92,
+                    energy: 55,
+                    ..b
+                },
+            ),
+            (
+                "bored",
+                Body {
+                    fun: 8,
+                    mood: 55,
+                    ..b
+                },
+            ),
+            (
+                "hungry",
+                Body {
+                    full: 18,
+                    mood: 60,
+                    ..b
+                },
+            ),
+            (
+                "stuffed",
+                Body {
+                    full: 95,
+                    energy: 60,
+                    ..b
+                },
+            ),
+            ("thirsty", Body { water: 25, ..b }),
+            (
+                "exhausted",
+                Body {
+                    energy: 15,
+                    mood: 55,
+                    ..b
+                },
+            ),
+            (
+                "hung over",
+                Body {
+                    hangover: true,
+                    energy: 45,
+                    mood: 50,
+                    water: 30,
+                    ..b
+                },
+            ),
+            (
+                "injured",
+                Body {
+                    injured: true,
+                    strain: 50,
+                    mood: 55,
+                    ..b
+                },
+            ),
+        ]
+    }
+
+    fn build(name: &str) -> Body {
+        builds().iter().find(|(n, _)| *n == name).unwrap().1
+    }
+
+    #[test]
+    fn builds_match_section_18_4() {
+        // (power, guard, speed, hp, stamina, focus), Classic preset, from
+        // `cargo run -- battle` at 5e59574.
+        let want = [
+            (39, 16, 71, 75, 4, 0),
+            (43, 15, 71, 75, 4, -2),
+            (33, 14, 75, 70, 4, 0),
+            (47, 23, 49, 80, 3, 0),
+            (52, 21, 49, 80, 3, -3),
+            (39, 16, 70, 72, 6, 5),
+            (36, 16, 59, 68, 3, 0),
+            (45, 25, 20, 60, 1, 0),
+            (52, 22, 20, 60, 1, -4),
+            (33, 14, 48, 60, 2, 0),
+            (36, 14, 59, 68, 3, -48),
+            (33, 16, 59, 68, 3, -10),
+            (36, 16, 59, 68, 3, -19),
+            (36, 16, 59, 68, 3, -12),
+            (36, 16, 59, 68, 1, 0),
+            (36, 16, 43, 68, 3, 0),
+            (36, 16, 59, 68, 2, -4),
+            (36, 16, 59, 68, 1, 0),
+            (36, 16, 51, 68, 1, -14),
+            (20, 16, 35, 68, 3, 0),
+        ];
+        for ((name, body), w) in builds().iter().zip(want) {
+            let s = derive(body);
+            let got = (
+                s.power as i32,
+                s.guard as i32,
+                s.speed as i32,
+                s.hp as i32,
+                s.stamina as i32,
+                s.focus as i32,
+            );
+            assert_eq!(got, w, "{name}");
+        }
+    }
+
+    #[test]
+    fn flags_name_the_conditions() {
+        let on = |name: &str| derive(&build(name)).flags;
+        let sumo = on("sumo, two beers");
+        assert!(sumo.has(Factor::Heavy) && sumo.has(Factor::Tipsy));
+        assert!(!sumo.has(Factor::Sloppy));
+        assert!(on("wasted").has(Factor::Sloppy));
+        let over = on("hung over");
+        assert!(over.has(Factor::HungOver) && over.has(Factor::Thirsty));
+        let hurt = on("injured");
+        assert!(hurt.has(Factor::Injured) && hurt.has(Factor::Sore));
+        assert!(on("well rested").has(Factor::Rested));
+        assert_eq!(on("average").0 & 0xF_FFFF, 0, "average pet has no factor");
+        assert!(!on("average").demo());
+        let demo = derive(&Body {
+            demo: true,
+            ..Body::REFERENCE
+        })
+        .flags;
+        assert!(demo.demo());
+        assert_eq!(demo.0 & (1 << 23), 1 << 23);
+        assert_eq!(demo.0 & (1 << 22), 0, "bit 22 stays reserved");
+        assert!(Flags::default().with(Factor::Filthy).has(Factor::Filthy));
+        assert!(Flags::default().with_demo(true).demo());
+    }
+
+    fn xorshift(s: &mut u32) -> u32 {
+        let mut x = *s;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *s = x;
+        x
+    }
+
+    fn body_from(fields: [i32; 14], flags: [bool; 7]) -> Body {
+        Body {
+            fit: fields[0],
+            energy: fields[1],
+            booze: fields[2],
+            mood: fields[3],
+            health: fields[4],
+            strain: fields[5],
+            full: fields[6],
+            water: fields[7],
+            fun: fields[8],
+            dirt: fields[9],
+            weight: fields[10],
+            vit: fields[11],
+            cur: fields[12],
+            res: fields[13],
+            rested: flags[0],
+            injured: flags[1],
+            groggy: flags[2],
+            hangover: flags[3],
+            craving: flags[4],
+            deprived: flags[5],
+            demo: flags[6],
+        }
+    }
+
+    fn check_raw(b: &Body) {
+        let r = derive_raw(b);
+        let inside = |v: i32, (lo, hi): (u8, u8)| (lo as i32..=hi as i32).contains(&v);
+        assert!(inside(r[0], WIRE_POWER), "power {} for {b:?}", r[0]);
+        assert!(inside(r[1], WIRE_GUARD), "guard {} for {b:?}", r[1]);
+        assert!(inside(r[2], WIRE_SPEED), "speed {} for {b:?}", r[2]);
+        assert!(inside(r[3], WIRE_HP), "hp {} for {b:?}", r[3]);
+        assert!(inside(r[4], WIRE_STAMINA), "stamina {} for {b:?}", r[4]);
+        // Only focus is clamped: it has no floor in the formula.
+        let s = derive(b);
+        assert_eq!(
+            s.focus as i32,
+            r[5].clamp(WIRE_FOCUS.0 as i32, WIRE_FOCUS.1 as i32)
+        );
+        assert_eq!(
+            [
+                s.power as i32,
+                s.guard as i32,
+                s.speed as i32,
+                s.hp as i32,
+                s.stamina as i32
+            ],
+            [r[0], r[1], r[2], r[3], r[4]]
+        );
+    }
+
+    #[test]
+    fn snapshot_stays_in_wire_ranges() {
+        let mut seed = 0x9E37_79B9;
+        for _ in 0..20_000 {
+            let mut f = [0i32; 14];
+            for v in &mut f {
+                *v = (xorshift(&mut seed) % 101) as i32;
+            }
+            let bits = xorshift(&mut seed);
+            let mut fl = [false; 7];
+            for (i, v) in fl.iter_mut().enumerate() {
+                *v = bits >> i & 1 == 1;
+            }
+            check_raw(&body_from(f, fl));
+        }
+        for level in [0, 100] {
+            for mask in 0..128u32 {
+                let mut fl = [false; 7];
+                for (i, v) in fl.iter_mut().enumerate() {
+                    *v = mask >> i & 1 == 1;
+                }
+                check_raw(&body_from([level; 14], fl));
+            }
+        }
+    }
+
+    #[test]
+    fn felt_is_the_one_formula() {
+        // booze * (150 - weight) / 100, at most 100
+        assert_eq!(
+            felt(&Body {
+                booze: 30,
+                weight: 80,
+                ..Body::REFERENCE
+            }),
+            21
+        );
+        assert_eq!(
+            felt(&Body {
+                booze: 100,
+                weight: 0,
+                ..Body::REFERENCE
+            }),
+            100
+        );
+        assert_eq!(
+            felt(&Body {
+                booze: 0,
+                ..Body::REFERENCE
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn snapshot_of_a_pet_reads_its_state() {
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.phase = Phase::Active;
+        s.weight = (80 * P) as u16;
+        s.fitness = (80 * P) as u16;
+        s.booze = (20 * P) as u16;
+        let b = Body::of(&s);
+        assert_eq!(b.weight, 80);
+        assert_eq!(b.fit, 80);
+        assert_eq!(b.booze, 20);
+        assert!(!b.demo && !b.injured && !b.rested);
+        assert_eq!(s.snapshot(), derive(&b));
+        s.injured_min = 5;
+        assert!(Body::of(&s).injured && s.snapshot().flags.has(Factor::Injured));
+    }
+
+    #[test]
+    fn bands_move_the_fight() {
+        // Classic FULL_LO is 38: 36 is hungry, 40 is not.
+        let hungry = |full| {
+            derive(&Body {
+                full,
+                ..Body::REFERENCE
+            })
+            .flags
+            .has(Factor::Hungry)
+        };
+        assert!(hungry(36));
+        assert!(!hungry(40));
+        // The accessors decide, not literals: none of the band literals of
+        // the prototype survive in the source (comments stripped).
+        let src: String = include_str!("../src/game/engine/combat.rs")
+            .lines()
+            .map(|l| l.split("//").next().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for lit in [" 78", " 83", " 38", " 33", " 73", " 58", " 63"] {
+            assert!(!src.contains(lit), "band literal{lit} in combat.rs");
+        }
+    }
+
+    #[test]
+    fn felt_base_survives_the_cfg_load() {
+        // A percent key would clamp to 1..=99 and break every cell.
+        let mut t = Thresholds::CLASSIC;
+        apply_overrides(&mut t, b"BATTLE_FELT_BASE_PCT=150\n");
+        assert_eq!(t.BATTLE_FELT_BASE_PCT, 150);
+        apply_overrides(&mut t, b"BATTLE_FELT_BASE_PCT=200\n");
+        assert_eq!(t.BATTLE_FELT_BASE_PCT, 200);
+    }
+
+    #[test]
+    fn factor_words_are_listed_once() {
+        let mut seen = std::collections::HashSet::new();
+        for (i, f) in Factor::ALL.iter().enumerate() {
+            assert!(seen.insert(f.text()), "duplicate {}", f.text());
+            assert_eq!(f.helps(), i < 4, "{}", f.text());
+            assert_eq!(*f as usize, i);
+            assert!(f.text().len() <= 11, "{} too wide", f.text());
+        }
+        assert_eq!(seen.len(), 20);
+    }
+}

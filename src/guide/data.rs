@@ -82,6 +82,10 @@ pub fn unit_of(field: &str) -> Unit {
         Unit::Min
     } else if field.ends_with("_TICKS") || field.ends_with("_DURATION") {
         Unit::Ticks
+    } else if field.ends_with("_PTS") {
+        Unit::Count
+    } else if field.ends_with("_HAX") {
+        Unit::Hax
     } else {
         // `_PM`, `_DIV`, `_MULT` and anything unknown.
         Unit::Raw

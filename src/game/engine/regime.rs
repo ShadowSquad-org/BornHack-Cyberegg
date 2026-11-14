@@ -264,13 +264,18 @@ pub fn mood_penalty(s: &GameState) -> i32 {
     pen += if s.rehab_min > 0 {
         flat(true, t::MOOD_PEN_REHAB_PCT())
     } else {
-        // craving: dependent, nearly sober and awake
-        flat(
-            s.dependent && (s.booze as i32) < lvl(t::MOOD_CRAVING_BOOZE_PCT()) && !s.is_sleeping,
-            t::MOOD_PEN_CRAVING_PCT(),
-        )
+        flat(craving(s), t::MOOD_PEN_CRAVING_PCT())
     };
     pen
+}
+
+/// Craving: dependent, nearly sober, awake and not in rehab. The mood
+/// penalty and the fight's snapshot read this one rule.
+pub fn craving(s: &GameState) -> bool {
+    s.rehab_min == 0
+        && s.dependent
+        && (s.booze as i32) < lvl(t::MOOD_CRAVING_BOOZE_PCT())
+        && !s.is_sleeping
 }
 
 /// Highest health the pet can recover to: steps up with fitness; an
