@@ -320,3 +320,35 @@ apply afterwards (via USB hub for asset copy).
 * [`../bootloader/`](../bootloader/) — the custom DFU bootloader source.
 * [`../assets/to-badge/`](../assets/to-badge/) — asset bundle
   `copy_assets.py` reads from.
+
+## BornPets v3 state-frame art (`bornpets_ai_frames.py`, `bornpets_art_check.py`)
+
+The ten new state frames of each art pet (tipsy ... throwing up) are drawn from the
+pet's own shipped frames, so the character stays consistent: idle plus two or three
+frames from the design table go to `/v1/images/edits` as `image[]`, every one at x6
+in the same rectangle of a 1536x1024 magenta canvas. The result is cut back to the
+exact 152x75 frame and the four badge colours.
+
+API key rules (the key never touches argv, only curl's stdin via `-K -`):
+
+- Sources in order: `--key-file`, `OPENAI_API_KEY_FILE`, `OPENAI_API_KEY`, then
+  `~/.config/openai/api-key`.
+- A key file is refused when it is inside the repo or has any group/other permission
+  bits (use `chmod 600`). The error names the path, never the content.
+
+Commands (one pet per process; `BORNPETS_PET=bartholomeus|cat|panda|badger|seastar`):
+
+```
+BORNPETS_PET=panda scripts/bornpets_ai_frames.py --key-file ~/.config/openai/api-key \
+    state --states tipsy,wired --quality medium          # raw/ -> frames/
+BORNPETS_PET=panda scripts/bornpets_ai_frames.py state --note-file notes.json
+                       # {frame_id: note}: only non-"ok" entries are redrawn with the note
+BORNPETS_PET=panda scripts/bornpets_ai_frames.py simplify --only panda_tipsy_0 --min-island 3
+                       # merge enclosed specks of frames/<id>.png in place
+BORNPETS_PET=panda scripts/bornpets_ai_frames.py list --states
+scripts/bornpets_art_check.py diff|budget|review ...     # export diff, FAT12 budget, review files
+```
+
+Working files live in `--work` (default `target/<pet>-gen`): `ref/` the reference
+canvases, `raw/` API results, `frames/` the cut frames. The owner gallery written by
+`bornpets_art_check.py review --round N` goes to `target/v3art/review`.

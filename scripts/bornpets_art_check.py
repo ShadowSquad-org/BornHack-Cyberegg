@@ -65,6 +65,12 @@ ART_PETS = {  # pet -> (prefix, json5, sheet, sequence prefix)
 }
 FRAME = (152, 75)
 CLUSTER_BYTES = 2048
+# FAT12 volume: 502 usable 2 KiB clusters, minus 429 used (after plan 7 removes the
+# Jellyfish), minus 2 for the files that grow (BPETS_V3.CFG, plans 5 and 7), minus
+# a 16-cluster guard = 55 for the 50 new PCX. The 429 is an assumption about the
+# volume: used_clusters() recomputes it from the real tree and budget reports drift.
+USABLE_CLUSTERS = 502
+ASSUMED_USED = 429
 NEW_PCX_BUDGET = 55
 REVIEW_DIR = REPO / "target/v3art/review"
 LITTER_DIR = REPO / "target/v3art/litter"   # written by bornpets_litter.py (Task A2b)
@@ -141,7 +147,12 @@ def diff_exports(old_dir, new_dir, prefixes=tuple(p for p, *_ in ART_PETS.values
             "protected": protected}
 
 
-def budget(export_dir) -> dict:
+def used_clusters(to_badge_dir=TO_BADGE) -> int:
+    """Clusters the files of a to-badge tree occupy (what the 429 assumption counts)."""
+    return sum(clusters(p.stat().st_size) for p in Path(to_badge_dir).iterdir() if p.is_file())
+
+
+def budget(export_dir, to_badge_dir=TO_BADGE) -> dict:
     files, missing = [], []
     for name in new_files():
         p = Path(export_dir) / name
@@ -156,6 +167,7 @@ def budget(export_dir) -> dict:
     return {"files": files, "total": total,
             "over": [n for n, b, _ in files if b > CLUSTER_BYTES],
             "missing": missing, "protected_clusters": prot,
+            "assumed_used": ASSUMED_USED, "measured_used": used_clusters(to_badge_dir),
             "fits": total <= NEW_PCX_BUDGET and not missing}
 
 
@@ -410,6 +422,9 @@ def main(argv=None) -> int:
             print(f"{name}  {n:6d} B  {c} cl{'  OVER 2048' if n > CLUSTER_BYTES else ''}")
         for name in res["missing"]:
             print(f"{name}  MISSING")
+        if res["measured_used"] != res["assumed_used"]:
+            print(f"note: assumed_used {res['assumed_used']}, measured_used {res['measured_used']} "
+                  "(plan 7 removes the Jellyfish; re-derive the budget if this stays off)")
         print(f"total {res['total']} / {NEW_PCX_BUDGET} clusters: "
               f"{'fits' if res['fits'] else 'DOES NOT FIT'}")
         return 0 if res["fits"] and not res["missing"] else 1

@@ -131,6 +131,16 @@ class Checker(unittest.TestCase):
             self.assertEqual(res["total"], 50)
             self.assertEqual(res["protected_clusters"], 3)
 
+    def test_used_clusters_counts_files_and_budget_reports_drift(self):
+        with tempfile.TemporaryDirectory() as t, tempfile.TemporaryDirectory() as e:
+            pad_file(Path(t, "a.PCX"), 1)
+            pad_file(Path(t, "b.PCX"), 2049)
+            Path(t, "sub").mkdir()
+            self.assertEqual(ac.used_clusters(t), 3)
+            res = ac.budget(e, t)
+            self.assertEqual((res["assumed_used"], res["measured_used"]), (429, 3))
+        self.assertEqual(ac.used_clusters(), ac.budget(e)["measured_used"])
+
     def test_budget_counts_and_lists_files_over_2048(self):
         with tempfile.TemporaryDirectory() as t:
             names = ac.new_files()
