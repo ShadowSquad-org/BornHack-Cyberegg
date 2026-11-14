@@ -7,7 +7,11 @@
 //! `GAME_GOLDEN` is the format-2 save (97 bytes, kv key `state`); the v3
 //! save (177 bytes, key `state_v3`) is pinned by `V3_GOLDEN`.
 
-use bornhack_aegg::game::battle::{BattleResultMsg, KIND_UNKNOWN};
+use bornhack_aegg::game::battle::{
+    AcceptMsg, BattleResultMsg, ChallengeMsg, DeclineMsg, KIND_UNKNOWN,
+};
+use bornhack_aegg::game::engine::combat::{Flags, Snapshot};
+use bornhack_aegg::game::engine::doses::Reason;
 use bornhack_aegg::game::engine::advance::SLOW_SCALE;
 use bornhack_aegg::game::engine::thresholds;
 use bornhack_aegg::game::engine::{
@@ -680,6 +684,12 @@ fn pet_beacon_v3_golden_bytes() {
 }
 
 #[test]
+fn beacon_v3_starts_with_the_old_beacon() {
+    // Old firmware reads the first 22 bytes of a v3 beacon.
+    assert_eq!(BEACON_V3_GOLDEN[..22], BEACON_GOLDEN);
+}
+
+#[test]
 fn pet_beacon_old_still_decodes() {
     let b = PetBeacon::from_bytes(&BEACON_GOLDEN).unwrap();
     assert_eq!(b.device_id, [0xE5, 0xF6]);
@@ -771,4 +781,121 @@ fn pet_name_prefers_name_v3_and_falls_back_to_the_old_key() {
     // A present but empty v3 name is a real answer, not "missing".
     assert_eq!(pick_name(Some(b""), Some(b"Old")), Some(&b""[..]));
     assert_eq!(pick_name(None, None), None);
+}
+
+// ---------------------------------------------------------------------------
+// v3 fight packets (on-air): snapshot, CHALLENGE, ACCEPT, DECLINE
+// ---------------------------------------------------------------------------
+
+/// power 40, guard 20, speed 50, hp 80, stamina 6, focus -10, flags 0x800005
+/// (bits 0 and 2, demo).
+const SNAPSHOT_GOLDEN: [u8; 9] = [0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80];
+/// Same numbers, flags 0x880201 (bits 0, 9, 19 and demo): all three flag bytes.
+const SNAPSHOT_FLAGS_GOLDEN: [u8; 9] = [0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x01, 0x02, 0x88];
+
+fn snap(flags: u32) -> Snapshot {
+    Snapshot {
+        power: 40,
+        guard: 20,
+        speed: 50,
+        hp: 80,
+        stamina: 6,
+        focus: -10,
+        flags: Flags(flags),
+    }
+}
+
+#[test]
+fn snapshot_golden_bytes() {
+    for (g, flags) in [(SNAPSHOT_GOLDEN, 0x80_0005u32), (SNAPSHOT_FLAGS_GOLDEN, 0x88_0201)] {
+        assert_eq!(snap(flags).to_wire(), g);
+        assert_eq!(Snapshot::from_wire(&g), Some(snap(flags)));
+        assert_eq!(Snapshot::from_wire(&g[..g.len() - 1]), None);
+    }
+}
+
+const CHALLENGE_GOLDEN: [u8; 29] = [
+    0x01, 0x02, 0x03, 0x04, 0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80, 0xEF, 0xBE, 0x05,
+    0x42, 0x72, 0x61, 0x6D, 0, 0, 0, 0, 0, 0, 0, 0, 0x04,
+];
+const ACCEPT_GOLDEN: [u8; 15] = [
+    0x01, 0x02, 0x03, 0x04, 0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80, 0x34, 0x12,
+];
+const DECLINE_GOLDEN: [u8; 7] = [0x01, 0x02, 0x03, 0x04, 0x06, 0x02, 0x01];
+
+#[test]
+fn challenge_golden_bytes() {
+    let msg = ChallengeMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        snap: snap(0x80_0005),
+        nonce: 0xBEEF,
+        kind: 5,
+        name: name12("Bram"),
+        name_len: 4,
+    };
+    assert_eq!(msg.to_bytes(), CHALLENGE_GOLDEN);
+    assert_eq!(ChallengeMsg::from_bytes(&CHALLENGE_GOLDEN), Some(msg));
+    assert_eq!(ChallengeMsg::from_bytes(&CHALLENGE_GOLDEN[..28]), None);
+}
+
+#[test]
+fn accept_golden_bytes() {
+    let msg = AcceptMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        snap: snap(0x80_0005),
+        nonce: 0x1234,
+    };
+    assert_eq!(msg.to_bytes(), ACCEPT_GOLDEN);
+    assert_eq!(AcceptMsg::from_bytes(&ACCEPT_GOLDEN), Some(msg));
+    assert_eq!(AcceptMsg::from_bytes(&ACCEPT_GOLDEN[..14]), None);
+}
+
+#[test]
+fn decline_golden_bytes() {
+    let msg = DeclineMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        why: 6,
+        secs: 0x0102,
+    };
+    assert_eq!(msg.to_bytes(), DECLINE_GOLDEN);
+    assert_eq!(DeclineMsg::from_bytes(&DECLINE_GOLDEN), Some(msg));
+    assert_eq!(DeclineMsg::from_bytes(&DECLINE_GOLDEN[..6]), None);
+    assert_eq!(msg.reason(), Some(Reason::Wait(0x0102)));
+}
+
+#[test]
+fn decline_new_saturates_a_long_wait() {
+    let msg = DeclineMsg::new([1, 2], [3, 4], Reason::Wait(70_000));
+    assert_eq!(msg.secs, u16::MAX);
+    assert_eq!(msg.why, 6);
+    assert_eq!(msg.reason(), Some(Reason::Wait(u16::MAX as u32)));
+    let short = DeclineMsg::new([1, 2], [3, 4], Reason::Wait(90));
+    assert_eq!(short.secs, 90);
+    assert_eq!(short.to_bytes()[5..7], [90, 0]);
+    let busy = DeclineMsg::new([1, 2], [3, 4], Reason::Busy);
+    assert_eq!((busy.why, busy.secs), (8, 0));
+    assert_eq!(busy.reason(), Some(Reason::Busy));
+}
+
+#[test]
+fn player_decline_has_no_reason() {
+    let mut b = DECLINE_GOLDEN;
+    b[4] = bornhack_aegg::game::battle::WHY_DECLINED;
+    assert_eq!(DeclineMsg::from_bytes(&b).unwrap().reason(), None);
+}
+
+#[test]
+fn longer_packets_are_tolerated() {
+    let mut c = CHALLENGE_GOLDEN.to_vec();
+    c.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(ChallengeMsg::from_bytes(&c).unwrap().to_bytes(), CHALLENGE_GOLDEN);
+    let mut a = ACCEPT_GOLDEN.to_vec();
+    a.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(AcceptMsg::from_bytes(&a).unwrap().to_bytes(), ACCEPT_GOLDEN);
+    let mut d = DECLINE_GOLDEN.to_vec();
+    d.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(DeclineMsg::from_bytes(&d).unwrap().to_bytes(), DECLINE_GOLDEN);
 }

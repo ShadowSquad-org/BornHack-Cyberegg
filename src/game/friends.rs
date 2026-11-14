@@ -52,6 +52,10 @@ pub struct PetBeacon {
 /// focus, flags (bit 0 demo).
 const BEACON_SIZE: usize = 25;
 /// An older badge's beacon: 2 + 1 + 2 + 12 + 1 + 4.
+/// Stamina assumed for a pre-v3 beacon, which does not carry one: a middling
+/// value, so an old badge neither dominates nor collapses in a fight.
+const OLD_BEACON_STAMINA: u8 = 3;
+
 const BEACON_SIZE_OLD: usize = 22;
 
 impl PetBeacon {
@@ -89,7 +93,7 @@ impl PetBeacon {
             guard: buf[19],
             speed: buf[20],
             hp: buf[21],
-            stamina: if v3 { buf[22] } else { 3 },
+            stamina: if v3 { buf[22] } else { OLD_BEACON_STAMINA },
             focus: if v3 { buf[23] as i8 } else { 0 },
             demo: v3 && buf[24] & 1 != 0,
             v3,
@@ -124,8 +128,8 @@ pub struct FriendRecord {
     /// the "Last seen" line on the detail screen and the most-recently-
     /// seen-first ordering of the list.
     pub last_seen_tick: u32,
-    /// Cached combat-stat snapshot from this friend's most recent beacon —
-    /// see `crate::game::battle::CombatStats`. Used to battle them without
+    /// Cached combat numbers (power, guard, speed, hp) from this friend's
+    /// most recent beacon — see `Snapshot::from_beacon`. Used to battle them without
     /// needing their badge in range at that exact moment.
     pub power: u8,
     pub guard: u8,

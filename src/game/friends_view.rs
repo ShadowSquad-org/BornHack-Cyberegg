@@ -248,9 +248,10 @@ where
     Text::with_text_style(seen.as_str(), Point::new(6, y), TEXT_BLACK, left).draw(display)?;
     y += 13 + 2;
 
-    // Cached combat-stat snapshot — see `battle::CombatStats`. Attack/
-    // Defense/Speed are already 1-100; HP (20-150) is normalized to the
-    // same 0-100 scale purely for this bar, not a raw stat value.
+    // Cached combat numbers (power, guard, speed, hp) from the friend's
+    // beacon. Power/guard/speed are shown as stored; hp (old badges send
+    // 20-150) is normalized to the same 0-100 scale purely for this bar,
+    // not a raw stat value.
     const BAR_H: u32 = 12;
     const BAR_X: i32 = 36;
     let bars: [(&str, u8); 4] = [
