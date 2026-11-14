@@ -48,7 +48,7 @@ The night sky is only a picture of the hour. It is *not* the pet's bedtime. A
 pet can be up and about at night, and it can nap in broad daylight.
 
 The sky costs no extra screen flashes. It changes when the clock crosses
-the line, and the badge does it with the redraw it was doing anyway.
+the line, with an ordinary quiet redraw, not a flash.
 
 === The floor
 
@@ -56,7 +56,7 @@ the line, and the badge does it with the redraw it was doing anyway.
   screen("floor", width: shot-m, caption: [A filthy floor.]),
   [
     A dirty pet leaves a mess. Things pile up on the floor as dirt rises,
-    one more each time dirt passes a line:
+    one more each time dirt reaches a line:
 
     #word-table(see: false,
       table.header([*On the floor*], [*Dirt reaches*]),
