@@ -419,9 +419,10 @@ The prefix (decimal) picks the sprite slot:
 | `0` `1` `2` | The built-ins (Bartholomeus, Cat, Slug) — listing one just **renames** it |
 | `3` `4` | Reserved (sponsor slides, menu icons) — ignored      |
 | `5` `6` `7` | **New pets** — appear in the hatchery roster     |
-| `8`+    | Out of range — ignored                               |
+| `8`     | Free pet slot (the Jellyfish used it; no shipped pet) |
+| `9`+    | Out of range — ignored                               |
 
-The Jellyfish (prefix `8`) has left the shipped roster; a `8=` line is ignored like any other out-of-range prefix.
+The Jellyfish (prefix `8`) has left the shipped roster. An old badge whose `PETS.CFG` still lists `8=Jellyfish` keeps that name for the Unicorn Realm. With no `08` sprites the Jellyfish cannot be picked, and a live one moves to the Realm.
 
 Names are ASCII only, max 16 characters (longer is truncated, a
 non-ASCII character truncates at that point). Malformed lines are
