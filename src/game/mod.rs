@@ -14,6 +14,7 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod background;
 pub mod battle;
 pub mod battle_view;
 pub mod blackhole;
@@ -43,7 +44,6 @@ pub mod stat_bar;
 pub mod stats_pages;
 pub mod station;
 pub mod tictactoe;
-pub mod background;
 #[cfg(test)]
 mod test_canvas;
 pub mod timed_flag;
@@ -685,9 +685,6 @@ pub(crate) fn draw_backdrop<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
 {
-    // Clear first, as `draw_screen_game` does: an expired alert is gone.
-    DIABETES_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
-    ALCOHOLISM_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
     if sprite_loader::frame_count() == 0
         || full_screen_view_up()
         || DIABETES_ALERT.is_active()
@@ -1139,8 +1136,14 @@ where
         // After hatching completes, prompt the player to name their pet.
         prompt_for_name();
 
-        // The background goes down first; the sprite blits on top.
-        let _ = draw_backdrop(display);
+        // The background goes down first; the sprite blits on top. Drop an
+        // expired alert first (as `draw_screen_game` does), or the backdrop
+        // would skip this frame while the game screen is drawn anyway.
+        DIABETES_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
+        ALCOHOLISM_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
+        if draw_backdrop(display).is_err() {
+            defmt::warn!("game: backdrop draw failed");
+        }
     }
 
     // Blit sprite from flash.
@@ -1920,186 +1923,238 @@ mod tests {
     }
 
     /// The background behind the pet, on the game screen (simulator draws it
-/// in-line, the firmware in `render`).
-#[cfg(feature = "simulator")]
-mod backdrop {
-    use crate::game::test_canvas::Canvas;
-    use crate::game::*;
-    use crate::game::engine::needs::P;
-    use crate::game::engine::{GameState, PetKind, Phase};
-    use crate::BLACK;
+    /// in-line, the firmware in `render`).
+    #[cfg(feature = "simulator")]
+    mod backdrop {
+        use crate::BLACK;
+        use crate::game::engine::needs::P;
+        use crate::game::engine::{GameState, PetKind, Phase};
+        use crate::game::test_canvas::Canvas;
+        use crate::game::*;
 
-    struct ClearPet;
-    impl Drop for ClearPet {
-        fn drop(&mut self) {
-            lifecycle::set_state_for_test(None);
-        }
-    }
-
-    const NIGHT_MIN: Option<u16> = Some(23 * 60);
-
-    fn pet(day_min: Option<u16>) -> GameState {
-        let mut s = GameState::new_egg(7, PetKind(0));
-        s.phase = Phase::Active;
-        s.day_min = day_min;
-        s.money_enabled = true;
-        s.money = 120;
-        s
-    }
-
-    fn screen() -> Canvas {
-        let mut c = Canvas::new();
-        draw_screen_game(&mut c, nav::get_nav()).unwrap();
-        c
-    }
-
-    fn boxed(x: i32, y: i32, w: i32, h: i32) -> Rectangle {
-        Rectangle::new(Point::new(x, y), Size::new(w as u32, h as u32))
-    }
-
-    fn same_in(a: &Canvas, b: &Canvas, area: Rectangle, what: &str) {
-        for p in area.points() {
-            assert_eq!(a.get(p.x, p.y), b.get(p.x, p.y), "{what} differs at {p:?}");
-        }
-    }
-
-    fn differs_in(a: &Canvas, b: &Canvas, area: Rectangle) -> bool {
-        area.points().any(|p| a.get(p.x, p.y) != b.get(p.x, p.y))
-    }
-
-    #[test]
-    fn hax_reads_at_night() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        lifecycle::set_state_for_test(Some(pet(None)));
-        let plain = screen();
-        lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
-        let night = screen();
-        let w = backing_width("120 H");
-        let hax = boxed(HAX_POS.x - w, 35, w, 11);
-        assert!(
-            differs_in(&night, &plain, boxed(0, 50, 100, 40)),
-            "the night dither is on the screen"
-        );
-        same_in(&night, &plain, hax, "HAX backing");
-        assert!(!differs_in(&night, &plain, boxed(0, 0, 152, 34)), "header untouched");
-    }
-
-    #[test]
-    fn ui_boxes_stay_clear() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        let busy = || show_reason(engine::doses::Reason::Busy);
-        let cause = || show_cause(engine::causes::Cause::FoodComa);
-        for (name, raise) in [("reason toast", &busy as &dyn Fn()), ("cause toast", &cause)] {
-            let mut shots = [None, None];
-            for (i, day_min) in [None, NIGHT_MIN].into_iter().enumerate() {
-                let mut s = pet(day_min);
-                s.dirt = (95 * P) as u16;
-                s.health = (5 * P) as u16;
-                s.demo.on = true;
-                lifecycle::set_state_for_test(Some(s));
-                raise();
-                shots[i] = Some(screen());
+        struct ClearPet;
+        impl Drop for ClearPet {
+            fn drop(&mut self) {
+                lifecycle::set_state_for_test(None);
             }
-            let [Some(plain), Some(night)] = shots else { unreachable!() };
+        }
+
+        const NIGHT_MIN: Option<u16> = Some(23 * 60);
+
+        fn pet(day_min: Option<u16>) -> GameState {
+            let mut s = GameState::new_egg(7, PetKind(0));
+            s.phase = Phase::Active;
+            s.day_min = day_min;
+            s.money_enabled = true;
+            s.money = 120;
+            s
+        }
+
+        fn screen() -> Canvas {
+            let mut c = Canvas::new();
+            draw_screen_game(&mut c, nav::get_nav()).unwrap();
+            c
+        }
+
+        fn boxed(x: i32, y: i32, w: i32, h: i32) -> Rectangle {
+            Rectangle::new(Point::new(x, y), Size::new(w as u32, h as u32))
+        }
+
+        fn same_in(a: &Canvas, b: &Canvas, area: Rectangle, what: &str) {
+            for p in area.points() {
+                assert_eq!(a.get(p.x, p.y), b.get(p.x, p.y), "{what} differs at {p:?}");
+            }
+        }
+
+        fn differs_in(a: &Canvas, b: &Canvas, area: Rectangle) -> bool {
+            area.points().any(|p| a.get(p.x, p.y) != b.get(p.x, p.y))
+        }
+
+        #[test]
+        fn hax_reads_at_night() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let plain = screen();
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let night = screen();
+            let w = backing_width("120 H");
+            let hax = boxed(HAX_POS.x - w, 35, w, 11);
             assert!(
-                differs_in(&night, &plain, boxed(0, 50, 100, 30)),
-                "{name}: the night dither is on the screen"
+                differs_in(&night, &plain, boxed(0, 50, 100, 40)),
+                "the night dither is on the screen"
             );
-            let bar = boxed(152 - crate::BATTERY_BAR_W as i32, BATTERY_Y, crate::BATTERY_BAR_W as i32, crate::BATTERY_BAR_H as i32);
-            same_in(&night, &plain, bar, "battery bar");
-            same_in(&night, &plain, boxed(DEMO_MARK_POS.x, DEMO_MARK_POS.y, 4, 5), "demo mark");
-            // Toast backings, one per line.
-            let lines: std::vec::Vec<std::string::String> = if name == "reason toast" {
-                std::vec![engine::doses::Reason::Busy.text().as_str().into()]
-            } else {
-                let c = engine::causes::Cause::FoodComa;
-                std::vec![c.what().into(), c.why().into()]
-            };
-            for (i, line) in lines.iter().enumerate() {
-                let y = TOAST_POS.y + i as i32 * TOAST_LINE_DY;
-                let w = backing_width(line);
-                same_in(&night, &plain, boxed(TOAST_POS.x - STATUS_BACKING_PAD / 2, y, w, STATUS_LINE_H), name);
-            }
-            // Status backing, one per line.
-            lifecycle::set_state_for_test(Some({
-                let mut s = pet(NIGHT_MIN);
-                s.dirt = (95 * P) as u16;
-                s.health = (5 * P) as u16;
-                s.demo.on = true;
-                s
-            }));
-            let text = match lifecycle::pet_line().unwrap() {
-                engine::PetLine::Status(l) => l.text().as_str().into(),
-                engine::PetLine::Note(n) => std::string::String::from(n.text()),
-                engine::PetLine::Help => std::string::String::from(HELP_TEXT),
-            };
-            let count = text.split('\n').count() as i32;
-            for (i, row) in text.split('\n').enumerate() {
-                let base = STATUS_BASE_Y - (count - 1 - i as i32) * STATUS_LINE_H;
-                let w = backing_width(row);
-                let area = boxed(STATUS_CENTER_X - w / 2, base - (STATUS_LINE_H - 1), w, STATUS_LINE_H);
-                same_in(&night, &plain, area, "status backing");
+            same_in(&night, &plain, hax, "HAX backing");
+            assert!(
+                !differs_in(&night, &plain, boxed(0, 0, 152, 34)),
+                "header untouched"
+            );
+        }
+
+        #[test]
+        fn ui_boxes_stay_clear() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let busy = || show_reason(engine::doses::Reason::Busy);
+            let cause = || show_cause(engine::causes::Cause::FoodComa);
+            for (name, raise) in [
+                ("reason toast", &busy as &dyn Fn()),
+                ("cause toast", &cause),
+            ] {
+                let mut shots = [None, None];
+                for (i, day_min) in [None, NIGHT_MIN].into_iter().enumerate() {
+                    let mut s = pet(day_min);
+                    s.dirt = (95 * P) as u16;
+                    s.health = (5 * P) as u16;
+                    s.demo.on = true;
+                    lifecycle::set_state_for_test(Some(s));
+                    raise();
+                    shots[i] = Some(screen());
+                }
+                let [Some(plain), Some(night)] = shots else {
+                    unreachable!()
+                };
+                assert!(
+                    differs_in(&night, &plain, boxed(0, 50, 100, 30)),
+                    "{name}: the night dither is on the screen"
+                );
+                // The demo mark is on screen (the check is not vacuous) and
+                // the whole header above the pet area is untouched.
+                let mark = boxed(DEMO_MARK_POS.x, DEMO_MARK_POS.y, 4, 5);
+                assert!(night.any(mark, BLACK), "{name}: demo mark drawn");
+                same_in(&night, &plain, boxed(0, 0, 152, 34), "header");
+                // Toast backings, one per line.
+                let lines: std::vec::Vec<std::string::String> = if name == "reason toast" {
+                    std::vec![engine::doses::Reason::Busy.text().as_str().into()]
+                } else {
+                    let c = engine::causes::Cause::FoodComa;
+                    std::vec![c.what().into(), c.why().into()]
+                };
+                for (i, line) in lines.iter().enumerate() {
+                    let y = TOAST_POS.y + i as i32 * TOAST_LINE_DY;
+                    let w = backing_width(line);
+                    same_in(
+                        &night,
+                        &plain,
+                        boxed(TOAST_POS.x - STATUS_BACKING_PAD / 2, y, w, STATUS_LINE_H),
+                        name,
+                    );
+                }
+                // Status backing, one per line.
+                lifecycle::set_state_for_test(Some({
+                    let mut s = pet(NIGHT_MIN);
+                    s.dirt = (95 * P) as u16;
+                    s.health = (5 * P) as u16;
+                    s.demo.on = true;
+                    s
+                }));
+                let text = match lifecycle::pet_line().unwrap() {
+                    engine::PetLine::Status(l) => l.text().as_str().into(),
+                    engine::PetLine::Note(n) => std::string::String::from(n.text()),
+                    engine::PetLine::Help => std::string::String::from(HELP_TEXT),
+                };
+                let count = text.split('\n').count() as i32;
+                for (i, row) in text.split('\n').enumerate() {
+                    let base = STATUS_BASE_Y - (count - 1 - i as i32) * STATUS_LINE_H;
+                    let w = backing_width(row);
+                    let area = boxed(
+                        STATUS_CENTER_X - w / 2,
+                        base - (STATUS_LINE_H - 1),
+                        w,
+                        STATUS_LINE_H,
+                    );
+                    same_in(&night, &plain, area, "status backing");
+                }
             }
         }
-    }
 
-    #[test]
-    fn backdrop_sits_under_the_sprite() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
-        let night = screen();
-        lifecycle::set_state_for_test(Some(pet(None)));
-        let plain = screen();
-        // Where the sprite is transparent the dither shows, where it is
-        // opaque the night screen matches the plain one.
-        let area = boxed(0, 35, 152, 49);
-        let opaque_same = area.points().filter(|p| night.get(p.x, p.y) == plain.get(p.x, p.y)).count();
-        let dither = area.points().filter(|p| night.get(p.x, p.y) != plain.get(p.x, p.y)).count();
-        assert!(opaque_same > 100, "an opaque sprite covers the dither ({opaque_same})");
-        assert!(dither > 500, "the dither shows round the sprite ({dither})");
-    }
+        #[test]
+        fn backdrop_sits_under_the_sprite() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let night = screen();
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let plain = screen();
+            // The idle sprite alone, on white and on black: a pixel is opaque
+            // when it is not the canvas colour on at least one of them.
+            let name = engine::anim_files::anim_filename(
+                lifecycle::pet_kind(),
+                lifecycle::display_anim(),
+                0,
+            );
+            let (mut on_white, mut on_black) = (Canvas::new(), Canvas::new());
+            on_black.fill(BLACK);
+            sprite_loader::blit_pcx_sim(&mut on_white, &name, 0, PET_AREA_TOP as i32, false);
+            sprite_loader::blit_pcx_sim(&mut on_black, &name, 0, PET_AREA_TOP as i32, false);
+            let area = boxed(0, 35, 152, 49);
+            let (mut opaque, mut transparent_dither) = (0, 0);
+            for p in area.points() {
+                let (w, b) = (on_white.get(p.x, p.y), on_black.get(p.x, p.y));
+                if w != crate::WHITE || b != BLACK {
+                    // Opaque (black, red or white): the sprite colour, whatever
+                    // the sky. Skip pixels the UI overdraws on the plain screen.
+                    let colour = if w != crate::WHITE { w } else { b };
+                    if plain.get(p.x, p.y) == colour {
+                        opaque += 1;
+                        assert_eq!(
+                            night.get(p.x, p.y),
+                            colour,
+                            "dither over the sprite at {p:?}"
+                        );
+                    }
+                } else if night.get(p.x, p.y) != plain.get(p.x, p.y) {
+                    transparent_dither += 1;
+                }
+            }
+            assert!(opaque > 100, "the sprite has pixels to check ({opaque})");
+            assert!(
+                transparent_dither > 500,
+                "the dither shows round it ({transparent_dither})"
+            );
+        }
 
-    #[test]
-    fn hibernating_has_no_background() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        let mut s = pet(NIGHT_MIN);
-        s.hibernating = true;
-        lifecycle::set_state_for_test(Some(s));
-        let night = screen();
-        let mut s = pet(None);
-        s.hibernating = true;
-        lifecycle::set_state_for_test(Some(s));
-        let plain = screen();
-        same_in(&night, &plain, boxed(0, 35, 152, 75), "pet area");
-    }
+        #[test]
+        fn hibernating_has_no_background() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let mut s = pet(NIGHT_MIN);
+            s.hibernating = true;
+            lifecycle::set_state_for_test(Some(s));
+            let night = screen();
+            let mut s = pet(None);
+            s.hibernating = true;
+            lifecycle::set_state_for_test(Some(s));
+            let plain = screen();
+            same_in(&night, &plain, boxed(0, 35, 152, 75), "pet area");
+        }
 
-    #[test]
-    fn dirt_pct_shows_floor_items() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        lifecycle::set_state_for_test(Some(pet(None)));
-        let clean = screen();
-        lifecycle::debug_set_dirt_pct(95);
-        let dirty = screen();
-        assert!(differs_in(&clean, &dirty, boxed(0, 100, 152, 10)));
-    }
+        #[test]
+        fn dirt_pct_shows_floor_items() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let clean = screen();
+            lifecycle::debug_set_dirt_pct(95);
+            let dirty = screen();
+            assert!(differs_in(&clean, &dirty, boxed(0, 100, 152, 10)));
+        }
 
-    #[test]
-    fn backdrop_draws_nothing_for_a_takeover() {
-        let _guard = lock_test_state();
-        let _clear = ClearPet;
-        lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
-        let mut c = Canvas::new();
-        draw_backdrop(&mut c).unwrap();
-        assert!(c.any(boxed(0, 35, 152, 65), BLACK), "the night sky");
-        DIABETES_ALERT.start();
-        let mut c = Canvas::new();
-        draw_backdrop(&mut c).unwrap();
-        assert!(!c.any(boxed(0, 0, 152, 152), BLACK), "no sky behind an alert");
+        #[test]
+        fn backdrop_draws_nothing_for_a_takeover() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let mut c = Canvas::new();
+            draw_backdrop(&mut c).unwrap();
+            assert!(c.any(boxed(0, 35, 152, 65), BLACK), "the night sky");
+            DIABETES_ALERT.start();
+            let mut c = Canvas::new();
+            draw_backdrop(&mut c).unwrap();
+            assert!(
+                !c.any(boxed(0, 0, 152, 152), BLACK),
+                "no sky behind an alert"
+            );
+        }
     }
-}
 }
