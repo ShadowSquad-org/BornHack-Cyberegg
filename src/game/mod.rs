@@ -1274,6 +1274,7 @@ const FULL_SCREEN_VIEWS: [(&str, fn(), fn()); 12] = [
 #[cfg(test)]
 impl Drop for TestState {
     fn drop(&mut self) {
+        crate::platform::set_fake_unix(None);
         TOAST.clear();
         DIABETES_ALERT.clear();
         ALCOHOLISM_ALERT.clear();

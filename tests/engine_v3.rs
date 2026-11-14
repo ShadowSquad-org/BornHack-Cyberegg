@@ -2148,9 +2148,7 @@ mod status_wake {
     use bornhack_aegg::game::engine::needs::P;
     use bornhack_aegg::game::engine::status::{INFO_WORDS, StatusLine, StatusWord, Word, status, status_line};
     use bornhack_aegg::game::engine::thresholds::{HATCHING_TICKS, MAX_SLEEP_TICKS};
-    use bornhack_aegg::game::engine::{
-        DisplayAnim, GameState, MiniGame, PetKind, Phase, doses,
-    };
+    use bornhack_aegg::game::engine::{DisplayAnim, GameState, MiniGame, PetKind, Phase, doses};
 
     fn pct(v: i32) -> u16 {
         (v * P) as u16

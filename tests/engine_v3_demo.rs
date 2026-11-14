@@ -1306,7 +1306,6 @@ mod policy {
 mod wake {
     use bornhack_aegg::game::engine::demo;
     use bornhack_aegg::game::engine::needs::{MAX, P};
-    use bornhack_aegg::game::engine::status::status_line;
     use bornhack_aegg::game::engine::thresholds::MAX_SLEEP_TICKS;
     use bornhack_aegg::game::engine::{GameState, PetKind, Phase, TICKS_PER_MINUTE};
 

@@ -26,8 +26,7 @@ pub fn fake_uptime_ms() -> Option<u64> {
 /// The host's pinned wall clock: unix seconds, or `i64::MIN` for the system
 /// time.
 #[cfg(feature = "simulator")]
-static FAKE_UNIX: core::sync::atomic::AtomicI64 =
-    core::sync::atomic::AtomicI64::new(i64::MIN);
+static FAKE_UNIX: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(i64::MIN);
 
 /// 2026-08-01 12:00 local at the default `TZ_OFFSET_QH` (8, +2 h): the instant
 /// lib tests and guide shots start from.
