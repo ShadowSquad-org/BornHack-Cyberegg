@@ -1154,3 +1154,146 @@ mod save {
         assert!(b[160..177].iter().all(|&x| x == 0));
     }
 }
+
+mod decline {
+    use bornhack_aegg::game::engine::needs::P;
+    use bornhack_aegg::game::engine::regime::mood_target;
+    use bornhack_aegg::game::engine::status::status_line;
+    use bornhack_aegg::game::engine::thresholds as t;
+    use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
+
+    fn pct(v: i32) -> u16 {
+        (v * P) as u16
+    }
+
+    /// A content adult with the mood on its target.
+    fn content() -> GameState {
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.update(t::HATCHING_TICKS() as u32);
+        assert_eq!(s.phase, Phase::Active);
+        s.is_sleeping = false;
+        s.tick_rem = 0;
+        s.money_enabled = false;
+        s.energy = pct(80);
+        s.fullness = pct(60);
+        s.hydration = pct(60);
+        s.fun = pct(50);
+        s.dirt = pct(20);
+        s.health = pct(80);
+        s.weight = pct(50);
+        s.fitness = pct(50);
+        s.strain = 0;
+        s.booze = 0;
+        s.mood = mood_target(&s) as u16;
+        s
+    }
+
+    fn rng(seed: u64) -> impl FnMut(u64) -> u64 {
+        let mut r = seed;
+        move |bound| {
+            r = r
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (r >> 33) % (bound + 1)
+        }
+    }
+
+    #[test]
+    fn decline_lowers_the_mood_target_for_an_hour() {
+        let mut s = content();
+        let before = mood_target(&s);
+        s.declined();
+        assert_eq!(s.decline_min, t::BATTLE_DECLINE_MIN());
+        assert_eq!(
+            before - mood_target(&s),
+            t::BATTLE_DECLINE_MOOD_PCT() as i32 * P
+        );
+        let t0 = s.last_update_tick;
+        s.update(t0 + t::BATTLE_DECLINE_MIN() as u32 * 6);
+        assert_eq!(s.decline_min, 0);
+        assert_eq!(mood_target(&s), before);
+    }
+
+    #[test]
+    fn decline_end_is_exact() {
+        // (a) one update across the minute decline_min reaches 0 equals the
+        // same span cut at that minute.
+        let mut s = content();
+        s.declined();
+        s.decline_min = 5;
+        let t0 = s.last_update_tick;
+        let end = t0 + 5 * 6;
+        let mut whole = s.clone();
+        whole.update(end + 60);
+        let mut cut = s.clone();
+        cut.update(end);
+        assert_eq!(cut.decline_min, 0);
+        cut.update(end + 60);
+        assert_eq!(whole.to_bytes(), cut.to_bytes());
+        // (b) the target term is exactly 3 * P at decline_min = 1.
+        let mut a = content();
+        a.decline_min = 1;
+        let mut b = a.clone();
+        b.decline_min = 0;
+        assert_eq!(
+            mood_target(&b) - mood_target(&a),
+            t::BATTLE_DECLINE_MOOD_PCT() as i32 * P
+        );
+    }
+
+    fn obs(s: &GameState) -> impl PartialEq + use<> {
+        (
+            status_line(s),
+            s.display_anim(),
+            s.is_sleeping,
+            s.phase,
+            s.active_action,
+            s.onset_bits(),
+        )
+    }
+
+    #[test]
+    fn decline_wake_is_exact_on_random_states() {
+        let mut next = rng(11);
+        for i in 0..1000 {
+            let mut s = content();
+            s.fullness = pct(next(100) as i32);
+            s.hydration = pct(next(100) as i32);
+            s.fun = pct(next(100) as i32);
+            s.mood = pct(next(100) as i32);
+            s.decline_min = next(60) as u16;
+            let t0 = s.last_update_tick;
+            let o = obs(&s);
+            let mut c = s.clone();
+            let first = (1..=120u32).find(|m| {
+                c.update(t0 + m * 6);
+                obs(&c) != o
+            });
+            let expect = first.map_or(t0 + 120 * 6, |m| t0 + m * 6);
+            assert_eq!(s.next_wake_tick(), expect, "random state {i}");
+        }
+    }
+
+    #[test]
+    fn decline_is_split_invariant() {
+        let mut next = rng(5);
+        for i in 0..200 {
+            let mut s = content();
+            s.mood = pct(next(100) as i32);
+            s.fun = pct(next(100) as i32);
+            s.decline_min = next(60) as u16;
+            let t0 = s.last_update_tick;
+            let span = 3 * 360u32;
+            let mut whole = s.clone();
+            whole.update(t0 + span);
+            let mut cuts: Vec<u32> = (0..30).map(|_| t0 + next(span as u64) as u32).collect();
+            cuts.sort_unstable();
+            let mut cut = s.clone();
+            for c in cuts {
+                cut.update(c);
+            }
+            cut.update(t0 + span);
+            assert_eq!(whole.to_bytes(), cut.to_bytes(), "seed {i}");
+        }
+    }
+}

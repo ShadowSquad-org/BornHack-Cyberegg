@@ -1929,6 +1929,13 @@ impl GameState {
         doses::friend(self, big);
     }
 
+    /// A fight was declined: the mood target drops for `BATTLE_DECLINE_MIN`
+    /// minutes (spec 17 row 16).
+    pub fn declined(&mut self) {
+        self.decline_min = BATTLE_DECLINE_MIN();
+        self.request_save();
+    }
+
     /// A fight this pet took part in is over (spec 12.2, 12.5, 18.8). With
     /// `costs` the costs land (`doses::battle`); every call starts the rest
     /// (only fighters reach it), records the result in the league the pet is

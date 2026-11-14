@@ -913,6 +913,11 @@ pub fn friend_boost(big: bool) {
     with_game_now(|s| s.friend_boost(big));
 }
 
+/// A fight was declined: mood target -3 for an hour.
+pub fn declined() {
+    with_game_now(|s| s.declined());
+}
+
 pub fn rehab() -> bool {
     with_state(|s| s.rehab())
 }

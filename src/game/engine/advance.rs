@@ -174,6 +174,7 @@ pub fn advance(s: &mut GameState, dt: u32) {
     for timer in [
         &mut s.rested_min,
         &mut s.injured_min,
+        &mut s.decline_min,
         &mut s.groggy_min,
         &mut s.med_cd_min,
         &mut s.recovering_min,

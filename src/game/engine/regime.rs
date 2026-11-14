@@ -261,6 +261,7 @@ pub fn mood_penalty(s: &GameState) -> i32 {
     let flat = |on: bool, pct: u16| if on { pct as i32 * P } else { 0 };
     let mut pen: i32 = penalty_terms(s).iter().sum();
     pen += flat(s.deprived, t::MOOD_PEN_DEPRIVED_PCT());
+    pen += flat(s.decline_min > 0, t::BATTLE_DECLINE_MOOD_PCT() as u16);
     pen += if s.rehab_min > 0 {
         flat(true, t::MOOD_PEN_REHAB_PCT())
     } else {
