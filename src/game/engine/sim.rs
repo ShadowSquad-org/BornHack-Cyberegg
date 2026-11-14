@@ -191,8 +191,9 @@ pub(super) struct Snap {
     sleeping: bool,
     day_min: Option<u16>,
     phase: Phase,
-    scene: u8,
-    rest: Rest,
+    /// The scene byte and the rest of the view; `None` on a muted look-ahead
+    /// clone, which `note_segment` never reads.
+    view: Option<(u8, Rest)>,
 }
 
 /// Everything in `Visible` but the scene byte.
@@ -216,11 +217,10 @@ impl Snap {
             sleeping: s.is_sleeping,
             day_min: s.day_min,
             phase: s.phase,
-            scene: super::scene::wake_view(s),
-            rest: {
+            view: (!muted()).then(|| {
                 let (a, b, c, d, e, f, g, _) = s.visible();
-                (a, b, c, d, e, f, g)
-            },
+                (super::scene::wake_view(s), (a, b, c, d, e, f, g))
+            }),
         }
     }
 }
@@ -336,7 +336,7 @@ pub(super) fn note_segment(before: Snap, after: Snap, dt: u32) {
         let mut v = p.get();
         v.mood_sum2 += (before.mood as i64 + after.mood as i64) * dt as i64;
         v.minutes += dt as u64;
-        for (scene, rest) in [(before.scene, before.rest), (after.scene, after.rest)] {
+        for (scene, rest) in [before.view, after.view].into_iter().flatten() {
             if let Some((last, last_rest)) = v.last_scene
                 && last != scene
             {
