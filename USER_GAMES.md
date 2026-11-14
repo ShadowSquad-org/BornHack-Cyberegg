@@ -417,6 +417,8 @@ The prefix (decimal) picks the sprite slot:
 | `5` `6` `7` | **New pets** — appear in the hatchery roster     |
 | `8`+    | Out of range — ignored                               |
 
+The Jellyfish (prefix `8`) has left the shipped roster; a `8=` line is ignored like any other out-of-range prefix.
+
 Names are ASCII only, max 16 characters (longer is truncated, a
 non-ASCII character truncates at that point). Malformed lines are
 skipped silently. Applied at boot — eject the drive properly and

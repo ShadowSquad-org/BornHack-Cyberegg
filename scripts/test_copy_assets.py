@@ -322,5 +322,36 @@ class CopyAssetsTest(unittest.TestCase):
         self.assertIn("explode", out)
 
 
+class RepoAssetsTest(unittest.TestCase):
+    """Checks on the real assets/to-badge and assets/asset-changes.txt."""
+
+    def test_repo_assets_fit_the_volume(self):
+        clusters, entries = copy_assets.volume_budget(copy_assets.ASSETS_DIR)
+        self.assertLessEqual(clusters, 502 - 16)  # keep 16 clusters for later plans
+        self.assertLessEqual(entries, 511)
+
+    def test_hand_added_pcx_are_kept(self):
+        import re
+        pat = re.compile(r"^(0[012]2[0-8][0-9A-F]{2}|040[67][0-9A-F]{2})\.PCX$")
+        kept = {p.name for p in copy_assets.ASSETS_DIR.iterdir() if pat.match(p.name)}
+        self.assertEqual(len(kept), 61)
+        removed = {n.upper() for op, n, _ in copy_assets.load_changes(copy_assets.CHANGES_FILE)
+                   if op == "remove"}
+        self.assertFalse(kept & removed)
+
+    def test_repo_changes_load_and_touch_no_protected_file(self):
+        changes = copy_assets.load_changes(copy_assets.CHANGES_FILE)
+        for _op, name, _hashes in changes:
+            self.assertNotIn(name.lower(), copy_assets.PROTECTED)
+
+    def test_no_jellyfish_left(self):
+        d = copy_assets.ASSETS_DIR
+        self.assertEqual(list(d.glob("08*.PCX")), [])
+        cfg = (d / "PETS.CFG").read_text().splitlines()
+        self.assertFalse([l for l in cfg if l.startswith("8=")])
+        man = (d / "MANIFEST.TXT").read_text().splitlines()
+        self.assertFalse([l for l in man if l.startswith("08")])
+
+
 if __name__ == "__main__":
     unittest.main()
