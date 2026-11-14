@@ -430,7 +430,7 @@ def main(argv=None) -> int:
             print(f"{name}  MISSING")
         if res["measured_used"] != res["assumed_used"]:
             print(f"note: assumed_used {res['assumed_used']}, measured_used {res['measured_used']} "
-                  "(plan 7 removes the Jellyfish; re-derive the budget if this stays off)")
+                  "(plan 7 removes the Jellyfish PCX and their MANIFEST lines; re-derive the budget if this stays off)")
         print(f"total {res['total']} / {NEW_PCX_BUDGET} clusters: "
               f"{'fits' if res['fits'] else 'DOES NOT FIT'}")
         return 0 if res["fits"] and not res["missing"] else 1

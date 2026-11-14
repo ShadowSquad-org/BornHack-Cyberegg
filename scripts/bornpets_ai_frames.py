@@ -29,6 +29,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -920,6 +921,13 @@ def reference_png(frame: Image.Image, path: Path) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 
+def _checked(key: str, source: str) -> str:
+    """A key that would corrupt the curl config (quote, newline, ...) is refused."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", key):
+        sys.exit(f"{source} does not hold a plain API key (unexpected characters)")
+    return key
+
+
 def _read_key_file(path: Path) -> str:
     """Read a key file, refusing one in the repo or readable by others.
 
@@ -933,10 +941,12 @@ def _read_key_file(path: Path) -> str:
         sys.exit(f"key file {path} is inside the repository; keep it outside")
     if resolved.stat().st_mode & 0o077:
         sys.exit(f"key file {path} is accessible by others; run chmod 600 on it")
+    if resolved.stat().st_nlink > 1:
+        sys.exit(f"key file {path} has several hard links; one of them may be in the repository")
     key = resolved.read_text(encoding="utf-8").strip()
     if not key:
         sys.exit(f"key file {path} is empty")
-    return key
+    return _checked(key, f"key file {path}")
 
 
 def api_key(key_file: str | None = None) -> str:
@@ -952,7 +962,7 @@ def api_key(key_file: str | None = None) -> str:
         return _read_key_file(Path(explicit))
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if key:
-        return key
+        return _checked(key, "OPENAI_API_KEY")
     default = Path.home() / ".config/openai/api-key"
     if default.is_file():
         return _read_key_file(default)
@@ -999,7 +1009,9 @@ def call_api(
     if MODEL.startswith("gpt-image-1"):
         cmd += ["-F", f"input_fidelity={fidelity}"]
     curl_cfg = f'header = "Authorization: Bearer {key}"\n'
-    res = subprocess.run(cmd, input=curl_cfg.encode(), capture_output=True)
+    # curl needs the key on stdin only, so keep it out of its environment too.
+    env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+    res = subprocess.run(cmd, input=curl_cfg.encode(), capture_output=True, env=env)
     if res.returncode != 0:
         raise RuntimeError(f"curl failed ({res.returncode}): {res.stderr.decode()[:400]}")
     payload = json.loads(res.stdout)
@@ -1508,11 +1520,18 @@ def cut_back(raw: Image.Image) -> Image.Image:
     return despeckle(small, MIN_BLOB)
 
 
+_N8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
 def merge_islands(img: Image.Image, min_island: int) -> Image.Image:
     """Recolour small one-colour islands enclosed by exactly one other colour.
 
-    Repeats until nothing changes. A component with a transparent neighbour or
-    on the frame edge is never changed, so silhouette and outline stay.
+    Islands and their surroundings use 8-connectivity, so a diagonal 1-px line
+    is one component and is not mistaken for specks. Repeats until nothing
+    changes. A component with a transparent neighbour or on the frame edge is
+    never changed, so silhouette and outline stay. Within a pass a component
+    that touches a pixel recoloured in that pass waits for the next pass, so
+    sizes are never stale.
     """
     out = img.convert("RGBA").copy()
     w, h = out.size
@@ -1521,6 +1540,7 @@ def merge_islands(img: Image.Image, min_island: int) -> Image.Image:
     while changed:
         changed = False
         seen = [[False] * w for _ in range(h)]
+        dirty: set[tuple[int, int]] = set()
         for sy in range(h):
             for sx in range(w):
                 if seen[sy][sx] or px[sx, sy][3] < 128:
@@ -1529,10 +1549,11 @@ def merge_islands(img: Image.Image, min_island: int) -> Image.Image:
                 comp, stack, edge = [], [(sx, sy)], False
                 seen[sy][sx] = True
                 around: set = set()
+                touched: set[tuple[int, int]] = set()
                 while stack:
                     x, y = stack.pop()
                     comp.append((x, y))
-                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    for dx, dy in _N8:
                         nx, ny = x + dx, y + dy
                         if not (0 <= nx < w and 0 <= ny < h):
                             edge = True
@@ -1541,16 +1562,25 @@ def merge_islands(img: Image.Image, min_island: int) -> Image.Image:
                                 seen[ny][nx] = True
                                 stack.append((nx, ny))
                         else:
+                            touched.add((nx, ny))
                             around.add(px[nx, ny] if px[nx, ny][3] >= 128 else TRANSPARENT)
                 if len(comp) >= min_island or edge or len(around) != 1:
                     continue
                 (other,) = around
                 if other == TRANSPARENT:
                     continue
+                if dirty and (dirty & touched or dirty.intersection(comp)):
+                    changed = True      # look again next pass
+                    continue
                 for x, y in comp:
                     px[x, y] = other
+                dirty.update(comp)
                 changed = True
     return out
+
+
+def _is_ok(value: object) -> bool:
+    return not isinstance(value, str) or value.strip().rstrip(".").casefold() in ("", "ok")
 
 
 def cmd_state(args: argparse.Namespace) -> None:
@@ -1562,8 +1592,11 @@ def cmd_state(args: argparse.Namespace) -> None:
         sys.exit(f"unknown states: {unknown}; known: {', '.join(STATES)}")
 
     notes: dict | None = None
+    note_mtime = 0.0
     if args.note_file:
-        notes = json.loads(Path(args.note_file).read_text(encoding="utf-8"))
+        nf = Path(args.note_file)
+        notes = json.loads(nf.read_text(encoding="utf-8"))
+        note_mtime = nf.stat().st_mtime
         if not isinstance(notes, dict):
             sys.exit("--note-file must hold a JSON object {frame_id: note}")
 
@@ -1574,32 +1607,44 @@ def cmd_state(args: argparse.Namespace) -> None:
     for n, state in enumerate(wanted, 1):
         fid = ids[state]
         note = None
-        force = args.force
+        raw_path = work / "raw" / f"{fid}.png"
+        frame_path = work / "frames" / f"{fid}.png"
         if notes is not None:
             # Feedback run: only frames with a note other than "ok" are redrawn;
             # a frame that is absent from the file is left alone.
-            value = notes.get(fid)
-            if not isinstance(value, str) or value.strip() in ("", "ok"):
+            if _is_ok(notes.get(fid)):
                 print(f"[{n}/{len(wanted)}] {fid}: skipped")
                 continue
-            note, force = value.strip(), True
-        raw_path = work / "raw" / f"{fid}.png"
-        if raw_path.exists() and not force:
-            print(f"[{n}/{len(wanted)}] {fid}: cached")
+            note = notes[fid].strip()
+        # A raw newer than the note file already answers that note: re-running
+        # the same file buys nothing.
+        if args.force:
+            generate = True
+        elif note is not None:
+            generate = not raw_path.exists() or raw_path.stat().st_mtime < note_mtime
         else:
-            print(f"[{n}/{len(wanted)}] {fid}: generating...", flush=True)
-            try:
+            generate = not raw_path.exists()
+        try:
+            if generate:
+                print(f"[{n}/{len(wanted)}] {fid}: generating...", flush=True)
                 raw_path.write_bytes(
                     call_api(state_refs(prefix, state, work), state_prompt(state, note),
                              args.quality, CANVAS)
                 )
-            except RuntimeError as exc:
-                failed.append(fid)
-                print(f"[{n}/{len(wanted)}] {fid}: FAILED - {exc}", flush=True)
+            elif not frame_path.exists():
+                print(f"[{n}/{len(wanted)}] {fid}: cutting cached raw")
+            else:
+                # Never re-cut over an existing frame: that would undo `simplify`.
+                print(f"[{n}/{len(wanted)}] {fid}: cached")
                 continue
-        cut_back(Image.open(raw_path).convert("RGBA")).save(work / "frames" / f"{fid}.png")
+            cut_back(Image.open(raw_path).convert("RGBA")).save(frame_path)
+        except Exception as exc:   # one bad frame must not abandon the others
+            failed.append(fid)
+            print(f"[{n}/{len(wanted)}] {fid}: FAILED - {type(exc).__name__}: {str(exc)[:300]}",
+                  flush=True)
     if failed:
         print(f"\n{len(failed)} frame(s) failed: {', '.join(failed)}")
+        sys.exit(1)
 
 
 def cmd_simplify(args: argparse.Namespace) -> None:

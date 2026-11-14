@@ -100,6 +100,32 @@ class KeyHandling(Base):
                 afm.api_key(str(kf))
             self.assertNotIn(TOKEN, str(cm.exception))
 
+    def test_symlink_outside_repo_pointing_inside_is_refused(self):
+        (afm.REPO / "target").mkdir(exist_ok=True)
+        d = tempfile.mkdtemp(dir=afm.REPO / "target")
+        self.addCleanup(shutil.rmtree, d, True)
+        real = make_key_file(d)
+        with tempfile.TemporaryDirectory() as t:
+            link = Path(t, "link")
+            link.symlink_to(real)
+            with self.assertRaises(SystemExit) as cm:
+                afm.api_key(str(link))
+            self.assertNotIn(TOKEN, str(cm.exception))
+
+    def test_key_with_odd_characters_is_refused_without_echo(self):
+        with tempfile.TemporaryDirectory() as t:
+            kf = make_key_file(t, text='abc"\nheader = x')
+            with self.assertRaises(SystemExit) as cm:
+                afm.api_key(str(kf))
+            self.assertNotIn("abc", str(cm.exception))
+
+    def test_curl_does_not_inherit_the_key_variable(self):
+        fake = FakeRun()
+        os.environ["OPENAI_API_KEY"] = TOKEN
+        with mock.patch.object(subprocess, "run", fake):
+            afm.call_api([], "p", "low", afm.CANVAS)
+        self.assertNotIn("OPENAI_API_KEY", fake.calls[0][1]["env"])
+
     def test_key_source_order(self):
         with tempfile.TemporaryDirectory() as t:
             a = Path(t, "a")
@@ -242,6 +268,37 @@ class StateFlow(Base):
         self.assertEqual(out.getpixel((0, 0)), afm.RED)
         self.assertEqual(out.getpixel((5, 11)), afm.TRANSPARENT)
 
+    def test_merge_islands_keeps_a_diagonal_stroke(self):
+        img = Image.new("RGBA", (14, 14), afm.TRANSPARENT)
+        for y in range(2, 12):
+            for x in range(2, 12):
+                img.putpixel((x, y), afm.WHITE)
+        for i in range(6):
+            img.putpixel((4 + i, 4 + i), afm.BLACK)
+        out = afm.merge_islands(img, 3)
+        self.assertEqual([out.getpixel((4 + i, 4 + i)) for i in range(6)], [afm.BLACK] * 6)
+
+    def test_merge_islands_keeps_a_plus_whole(self):
+        img = Image.new("RGBA", (14, 14), afm.TRANSPARENT)
+        for y in range(2, 12):
+            for x in range(2, 12):
+                img.putpixel((x, y), afm.WHITE)
+        cells = [(6, 6), (5, 6), (7, 6), (6, 5), (6, 7)]
+        for c in cells:
+            img.putpixel(c, afm.BLACK)
+        img.putpixel((6, 6), afm.RED)
+        for m in (3, 5, 9):
+            out = afm.merge_islands(img, m)
+            self.assertEqual(list(out.getdata()), list(img.getdata()), m)
+
+    def test_merge_islands_edge_rule_alone(self):
+        img = Image.new("RGBA", (8, 8), afm.WHITE)      # no transparency anywhere
+        img.putpixel((0, 4), afm.BLACK)                 # speck on the frame edge
+        img.putpixel((4, 4), afm.BLACK)                 # speck inside
+        out = afm.merge_islands(img, 3)
+        self.assertEqual(out.getpixel((0, 4)), afm.BLACK)
+        self.assertEqual(out.getpixel((4, 4)), afm.WHITE)
+
     def test_merge_islands_leaves_a_mixed_neighbourhood(self):
         img = Image.new("RGBA", (6, 3), afm.WHITE)
         for y in range(3):
@@ -252,13 +309,14 @@ class StateFlow(Base):
 
 
 class StateCommand(Base):
-    def run_state(self, work, note=None, extra=()):
+    def run_state(self, work, note=None, extra=(), runner=None):
         argv = ["x", "--work", str(work), "state", "--quality", "low", *extra]
         if note is not None:
             nf = Path(work) / "notes.json"
-            nf.write_text(json.dumps(note))
+            if not nf.exists() or json.loads(nf.read_text()) != note:
+                nf.write_text(json.dumps(note))
             argv += ["--note-file", str(nf)]
-        fake = FakeRun()
+        fake = runner or FakeRun()
         os.environ["OPENAI_API_KEY"] = TOKEN
         with mock.patch.object(subprocess, "run", fake), \
                 mock.patch.object(sys, "argv", argv), \
@@ -282,6 +340,67 @@ class StateCommand(Base):
             self.assertEqual(len(self.run_state(t, extra=["--states", "tipsy,sore"]).calls), 2)
             self.assertEqual(len(self.run_state(t, extra=["--states", "tipsy,sore"]).calls), 0)
             self.assertEqual(len(self.run_state(t, extra=["--states", "tipsy", "--force"]).calls), 1)
+
+    def test_rerun_never_undoes_simplify(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.run_state(t, extra=["--states", "tipsy"])
+            frame = Path(t, "frames/panda_tipsy_0.png")
+            marked = Image.new("RGBA", ac.FRAME, afm.WHITE)
+            marked.save(frame)
+            self.assertEqual(len(self.run_state(t, extra=["--states", "tipsy"]).calls), 0)
+            self.assertEqual(list(Image.open(frame).convert("RGBA").getdata()),
+                             list(marked.getdata()))
+            self.run_state(t, extra=["--states", "tipsy", "--force"])
+            self.assertNotEqual(list(Image.open(frame).convert("RGBA").getdata()),
+                                list(marked.getdata()))
+
+    def test_missing_frame_is_cut_from_cached_raw_without_a_call(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.run_state(t, extra=["--states", "tipsy"])
+            Path(t, "frames/panda_tipsy_0.png").unlink()
+            self.assertEqual(len(self.run_state(t, extra=["--states", "tipsy"]).calls), 0)
+            self.assertTrue(Path(t, "frames/panda_tipsy_0.png").is_file())
+
+    def test_same_note_file_twice_costs_nothing_the_second_time(self):
+        with tempfile.TemporaryDirectory() as t:
+            note = {"panda_wired_0": "bigger can"}
+            self.assertEqual(len(self.run_state(t, note).calls), 1)
+            self.assertEqual(len(self.run_state(t, note).calls), 0)
+
+    def test_note_newer_than_cached_raw_redraws(self):
+        with tempfile.TemporaryDirectory() as t:
+            note = {"panda_wired_0": "bigger can"}
+            self.run_state(t, note)
+            future = Path(t, "raw/panda_wired_0.png").stat().st_mtime + 100
+            nf = Path(t, "notes.json")
+            os.utime(nf, (future, future))
+            argv = ["x", "--work", t, "state", "--quality", "low", "--note-file", str(nf)]
+            fake = FakeRun()
+            with mock.patch.object(subprocess, "run", fake), mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                afm.main()
+            self.assertEqual(len(fake.calls), 1)
+
+    def test_ok_note_is_case_and_dot_insensitive(self):
+        with tempfile.TemporaryDirectory() as t:
+            fake = self.run_state(t, {"panda_wired_0": "OK.", "panda_sore_0": " ok "})
+            self.assertEqual(len(fake.calls), 0)
+
+    def test_one_failing_frame_does_not_stop_the_others_and_exits_1(self):
+        good = FakeRun()
+
+        def flaky(cmd, **kw):
+            if any("prompt=Draw" in a and "Tipsy." in a for a in cmd):
+                raise ValueError("bad json")
+            return good(cmd, **kw)
+
+        with tempfile.TemporaryDirectory() as t:
+            with self.assertRaises(SystemExit) as cm:
+                self.run_state(t, extra=["--states", "tipsy,sore"], runner=flaky)
+            self.assertEqual(cm.exception.code, 1)
+            self.assertEqual(len(good.calls), 1)
+            self.assertTrue(Path(t, "frames/panda_sore_0.png").is_file())
+            self.assertFalse(Path(t, "frames/panda_tipsy_0.png").exists())
 
     def test_simplify_rewrites_frames_in_place(self):
         with tempfile.TemporaryDirectory() as t:
@@ -312,14 +431,17 @@ class StateCommand(Base):
 
 
 class Profiles(unittest.TestCase):
-    def test_new_profiles_load_and_pair_without_panda(self):
+    def test_profiles_load_and_pair_only_when_anchored(self):
         code = (
             "import sys; sys.path.insert(0, %r)\n"
-            "import bornpets_ai_frames as afm\n"
+            "import bornpets_ai_frames as afm, bornpets_art_check as ac\n"
+            "pet=sys.argv[1]\n"
             "idx=afm.frame_index()\n"
-            "assert idx and 'panda_idle_0' not in idx or sys.argv[1]=='panda', sorted(idx)[:3]\n"
-            "assert all('panda_id' not in v for v in idx.values()) or sys.argv[1] in ('badger','seastar','jellyfish','panda')\n"
-            "print(len(idx))\n" % str(SCRIPTS)
+            "assert idx, 'no frames'\n"
+            "paired=any('panda_id' in v for v in idx.values())\n"
+            "assert paired == ('anchor_prompt' in afm.PROFILE), (pet, paired)\n"
+            "assert any(k.startswith(ac.ART_PETS[pet][3] + '_') for k in idx) if pet in ac.ART_PETS else True\n"
+            % str(SCRIPTS)
         )
         for pet in ("bartholomeus", "cat", "panda", "badger", "seastar", "jellyfish"):
             env = {k: v for k, v in os.environ.items() if k != "BORNPETS_PET"}
