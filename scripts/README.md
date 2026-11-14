@@ -16,6 +16,7 @@ deps beyond stdlib.
 | `fix_badge_pcx.py`    | dev (assets)       | Re-packs a wrong-depth PCX (4bpp/8bpp, incl. ones Pillow can't open) to badge 2bpp, **preserving dimensions** |
 | `check_badge_pcx.py`  | dev (assets)       | Validates a directory of `PPAAFF.PCX` against the badge decoder rules |
 | `bornpets_art_check.py` | dev (assets)     | BornPets v3 new-state art: `diff` two exports, `budget` (FAT12 clusters), `review` files for the owner gallery |
+| `bornpets_litter.py`  | dev (assets)       | BornPets floor litter in the pets' style via the OpenAI images API: `generate` (5 items, `--note-file` feedback), `assemble` the strip, `rust` (only from a committed strip) / `check` the firmware source |
 
 ---
 
