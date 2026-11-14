@@ -13,6 +13,7 @@ still the best listener on the badge.])
     a jellyfish, that pet moves to the Realm, with its record, the first
     time the badge starts without the jellyfish pictures. The screen says
     #w("Moved to the") #w("Unicorn Realm"), and #w("Press Fire") starts a
-    new egg. The jellyfish stays in the Realm list under its name.
+    new egg. The screen shows a unicorn under a rainbow above the words. The
+    jellyfish stays in the Realm list under its name.
   ],
   screen("to-the-realm", width: shot-m, caption: [The jellyfish has gone.]))

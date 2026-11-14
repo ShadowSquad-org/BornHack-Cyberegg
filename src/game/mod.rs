@@ -37,6 +37,7 @@ pub mod pacing;
 pub mod pet_registry;
 pub mod pets_cfg;
 pub mod pet_select;
+pub mod realm_picture;
 pub mod realm_view;
 pub mod settings;
 pub mod sprite_loader;
@@ -1043,17 +1044,25 @@ where
             modal::close();
         }
         // Farewell animation blitted by embassy.rs if available.
-        if lifecycle::is_hidden_kind(lifecycle::pet_kind()) {
-            for (line, y) in RETIRED_LINES.into_iter().zip([50, 66]) {
+        // Where the prompt goes: a pet moved to the Realm gets the unicorn
+        // picture on top, so its lines sit lower.
+        let prompt_ys = if lifecycle::is_hidden_kind(lifecycle::pet_kind()) {
+            realm_picture::draw_realm_picture(display, Point::new(28, 4))?;
+            for (line, y) in RETIRED_LINES.into_iter().zip([84, 100]) {
                 Text::with_text_style(line, Point::new(76, y), font_red, centered)
                     .draw(display)?;
             }
-        } else if sprite_loader::frame_count() == 0 {
-            Text::with_text_style(GONE_LEFT, Point::new(76, 50), font_red, centered)
-                .draw(display)?;
-        }
-        Text::with_text_style(GONE_PROMPT[0], Point::new(76, 90), font_red, centered).draw(display)?;
-        Text::with_text_style(GONE_PROMPT[1], Point::new(76, 106), font_red, centered)
+            [122, 138]
+        } else {
+            if sprite_loader::frame_count() == 0 {
+                Text::with_text_style(GONE_LEFT, Point::new(76, 50), font_red, centered)
+                    .draw(display)?;
+            }
+            [90, 106]
+        };
+        Text::with_text_style(GONE_PROMPT[0], Point::new(76, prompt_ys[0]), font_red, centered)
+            .draw(display)?;
+        Text::with_text_style(GONE_PROMPT[1], Point::new(76, prompt_ys[1]), font_red, centered)
             .draw(display)?;
         return Ok(());
     }
@@ -1573,7 +1582,7 @@ mod tests {
     use super::test_canvas::Canvas;
     use super::{SEP_BOT, draw_status_line};
     use crate::game::engine::status::{StatusLine, Word};
-    use crate::{BLACK, RED};
+    use crate::{BLACK, RED, WHITE};
     use embedded_graphics::prelude::*;
     use embedded_graphics::primitives::Rectangle;
 
@@ -1746,14 +1755,44 @@ mod tests {
             c
         };
         let retired = draw(8);
-        assert!(retired.any(rows(42, 54), RED), "first line");
-        assert!(retired.any(rows(58, 70), RED), "second line");
-        assert!(retired.any(rows(82, 96), RED), "Press Fire");
-        assert!(retired.any(rows(98, 112), RED), "for a new egg");
+        assert!(retired.any(rows(76, 88), RED), "first line");
+        assert!(retired.any(rows(92, 104), RED), "second line");
+        assert!(retired.any(rows(114, 128), RED), "Press Fire");
+        assert!(retired.any(rows(130, 144), RED), "for a new egg");
         // frame_count() is u8::MAX on the simulator, so a farewell-less kind 0
         // draws no text of its own in these rows.
         let left = draw(0);
         assert!(!left.any(rows(42, 70), RED), "no retired lines for a known kind");
+        // The normal gone screen is unchanged: no picture, prompt where it was.
+        assert!(left.any(rows(82, 96), RED), "Press Fire stays put");
+        assert!(left.any(rows(98, 112), RED), "for a new egg stays put");
+        assert!(!left.any(rows(114, 151), RED), "nothing lower");
+        // The retired screen carries the picture, and no text touches its box.
+        let (pw, ph) = (
+            crate::game::realm_picture::WIDTH as i32,
+            crate::game::realm_picture::HEIGHT as i32,
+        );
+        let mut want = Canvas::new();
+        crate::game::realm_picture::draw_realm_picture(&mut want, Point::new(28, 4)).unwrap();
+        // (The test canvas also draws the sky backdrop, which the picture sits on.)
+        let (mut ink, mut on_retired, mut on_left) = (0, 0, 0);
+        for y in 4..4 + ph {
+            for x in 28..28 + pw {
+                if want.get(x, y) != WHITE {
+                    ink += 1;
+                    on_retired += (retired.get(x, y) == want.get(x, y)) as u32;
+                    on_left += (left.get(x, y) == want.get(x, y)) as u32;
+                }
+            }
+        }
+        assert!(ink > 200, "the picture has ink");
+        assert_eq!(on_retired, ink, "every picture pixel is on the realm screen");
+        assert!(on_left < ink / 10, "the normal gone screen has no picture");
+        assert!(!retired.any(rows(68, 75), RED), "gap between picture and text");
+        assert!(want.any(rows(4, 67), RED), "the picture has red");
+        assert!(want.any(rows(4, 67), BLACK), "the picture has black");
+        // All text rows stay on the screen: the last row of ink is above 152.
+        assert!(retired.any(rows(140, 151), RED));
         pet_registry::set_dropped_for_test(0);
         for line in super::RETIRED_LINES {
             assert!(line.len() <= 21, "{line}");
