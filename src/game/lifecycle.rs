@@ -72,6 +72,14 @@ pub fn background_state() -> Option<super::engine::scene::BackgroundState> {
     super::engine::scene::background_state(s)
 }
 
+/// Set the live pet's dirt (guide shots and tests only).
+#[cfg(any(test, feature = "simulator"))]
+pub fn debug_set_dirt_pct(pct: u8) {
+    if let Some(s) = unsafe { (*GAME.get()).as_mut() } {
+        s.dirt = (pct.min(100) as i32 * super::engine::needs::P) as u16;
+    }
+}
+
 /// A clock sync from `before` to `after` (local minutes of day) needs an
 /// immediate redraw: the sky differs, or the next switch moved earlier by
 /// more than a minute (a later switch waits for the planned wake).
