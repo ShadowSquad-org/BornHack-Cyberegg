@@ -1178,6 +1178,8 @@ The PCX format already has transparency: palette index 3 is skipped by the blitt
 - Bartholomeus, Cat, Slug: transparent around the pet in nearly every frame. White touching the frame edge is a prop or body part cut off by the edge (Slug's body, thought bubbles, "NOM NOM", the MISSING poster, the Bye sign, the bed), not background, and must stay white. An automatic flood fill from the edge was tried in preview and rejected: it hollows those shapes out.
 - **Three frames paint a whole scene and would hide any background:** Cat sleeping frames 3 and 4 (`011002`, `011003`: black night sky, moon, hill) and Slug hibernating (`021300`: the "HYBERSTATION" scene, no transparent pixels). **Owner decision:** no redraw. The hibernating screen draws no background at all (14.2), so the Slug frame is fine as it is; the Cat sleeping frames keep their night scene and the interference with the background is accepted.
 
+Owner tweak (2026-11-15): the grass is dropped, and the day sky gets a small cloud beside the sun.
+
 ### 14.2 Layers
 
 Drawn in this order on every pet-screen render:

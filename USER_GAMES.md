@@ -33,7 +33,7 @@ If you're putting the badge away for more than a few hours, open the action menu
 
 ### Sky and floor
 
-The game screen has a background. By day the sky is white with a sun; at night it is a dark dither with a moon and stars, following the badge clock (the night hours are `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` in `BPETS_V3.CFG`). With no clock set the sky stays plain white. The night sky is only the hour, not the pet's bedtime. As dirt rises, items pile up on the floor, one more at each of the `FLOOR_*_DIRT_PCT` lines, and a wash clears them. A healthy, content pet gets grass; a poorly one gets a small red cross. A hibernating pet has no sky. The sky costs no extra screen flashes.
+The game screen has a background. By day the sky is white with a sun and a small cloud; at night it is a dark dither with a moon and stars, following the badge clock (the night hours are `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` in `BPETS_V3.CFG`). With no clock set the sky stays plain white. The night sky is only the hour, not the pet's bedtime. As dirt rises, items pile up on the floor, one more at each of the `FLOOR_*_DIRT_PCT` lines, and a wash clears them. A poorly pet gets a small red cross. A hibernating pet has no sky. The sky costs no extra screen flashes.
 
 ### Demo mode
 
