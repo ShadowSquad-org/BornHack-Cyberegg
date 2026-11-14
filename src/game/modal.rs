@@ -967,14 +967,9 @@ pub fn menu_words() -> std::vec::Vec<(&'static str, std::string::String)> {
         };
         out.push(("menu", name.to_string()));
     }
-    for t in [
-        "Battle: <form>",
-        "top form",
-        "in form",
-        "off form",
-        "poor form",
-    ] {
-        out.push(("menu", t.to_string()));
+    out.push(("menu", "Battle: <form>".to_string()));
+    for form in super::engine::combat::Form::ALL {
+        out.push(("menu", form.text().to_string()));
     }
     for t in ["<price>H", "risk: <what>", "!"] {
         out.push(("menu", t.to_string()));

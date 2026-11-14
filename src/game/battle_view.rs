@@ -103,7 +103,7 @@ pub fn words() -> std::vec::Vec<&'static str> {
         "They ran out of steam",
     ]);
     out.extend(STAT_LABELS);
-    out.extend([Form::Top, Form::In, Form::Off, Form::Poor].map(Form::text));
+    out.extend(Form::ALL.map(Form::text));
     out.extend(super::engine::combat::Factor::ALL.map(super::engine::combat::Factor::text));
     out
 }
@@ -741,41 +741,9 @@ fn hint_line(p: &PreBattle) -> Option<&'static str> {
     }
 }
 
-/// Where a FONT_6X10 line sits relative to its x.
-#[derive(Clone, Copy)]
-enum Anchor {
-    Left,
-    Centre,
-    Right,
-}
-
-/// Draw a FONT_6X10 line. `ui::draw_text` measures 7 px a column for the
-/// alignments, so the 6 px font works out its own left edge.
-fn draw_small<D>(
-    display: &mut D,
-    text: &str,
-    x: i32,
-    y: i32,
-    anchor: Anchor,
-    color: TriColor,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = TriColor>,
-{
-    let w = text.chars().count() as i32 * 6;
-    let left = match anchor {
-        Anchor::Left => x,
-        Anchor::Centre => x - w / 2,
-        Anchor::Right => x - w,
-    };
-    ui::draw_text(
-        display,
-        text,
-        Point::new(left, y),
-        MonoTextStyle::new(&FONT_6X10, color),
-        ui::TOP_LEFT,
-    )?;
-    Ok(())
+/// FONT_6X10 in `color`.
+fn small(color: TriColor) -> MonoTextStyle<'static, TriColor> {
+    MonoTextStyle::new(&FONT_6X10, color)
 }
 
 /// Up to two factor lines for the pre-battle screen (y 86 and 97), `+word`
@@ -784,16 +752,16 @@ fn draw_side_factors<D>(display: &mut D, s: &Snapshot, right: bool) -> Result<()
 where
     D: DrawTarget<Color = TriColor>,
 {
-    let (x, anchor) = if right {
-        (150, Anchor::Right)
+    let (x, ts) = if right {
+        (150, ui::TOP_RIGHT)
     } else {
-        (2, Anchor::Left)
+        (2, ui::TOP_LEFT)
     };
     for (i, f) in factors(s).into_iter().flatten().enumerate() {
         let mut line = heapless::String::new();
         push_factor(&mut line, f);
         let color = if f.helps() { BLACK } else { RED };
-        draw_small(display, line.as_str(), x, 86 + 11 * i as i32, anchor, color)?;
+        ui::draw_text(display, line.as_str(), Point::new(x, 86 + 11 * i as i32), small(color), ts)?;
     }
     Ok(())
 }
@@ -807,8 +775,8 @@ where
     use core::fmt::Write;
     let cut = |s| crate::truncate_str(s, PET_NAME_MAX);
 
-    draw_small(display, cut(own), 2, 1, Anchor::Left, BLACK)?;
-    draw_small(display, cut(peer_label(p)), 150, 1, Anchor::Right, BLACK)?;
+    ui::draw_text(display, cut(own), Point::new(2, 1), small(BLACK), ui::TOP_LEFT)?;
+    ui::draw_text(display, cut(peer_label(p)), Point::new(150, 1), small(BLACK), ui::TOP_RIGHT)?;
 
     let rows: [(i32, i32, i32, i32); 5] = [
         (
@@ -844,17 +812,17 @@ where
     ];
     for (i, (mine, theirs, lo, hi)) in rows.into_iter().enumerate() {
         let y = 14 + 12 * i as i32;
-        draw_small(display, STAT_LABELS[i], 76, y, Anchor::Centre, BLACK)?;
+        ui::draw_text(display, STAT_LABELS[i], Point::new(76, y), small(BLACK), ui::CENTERED_TOP)?;
         super::stat_bar::draw_mirrored_bar(display, 2, y + 2, 60, range_pct(mine, lo, hi), false, BLACK)?;
         super::stat_bar::draw_mirrored_bar(display, 90, y + 2, 60, range_pct(theirs, lo, hi), true, BLACK)?;
     }
 
     let mut hp: heapless::String<12> = heapless::String::new();
     let _ = write!(hp, "HP {}", p.mine.hp);
-    draw_small(display, hp.as_str(), 2, 74, Anchor::Left, BLACK)?;
+    ui::draw_text(display, hp.as_str(), Point::new(2, 74), small(BLACK), ui::TOP_LEFT)?;
     hp.clear();
     let _ = write!(hp, "{}", p.theirs.hp);
-    draw_small(display, hp.as_str(), 150, 74, Anchor::Right, BLACK)?;
+    ui::draw_text(display, hp.as_str(), Point::new(150, 74), small(BLACK), ui::TOP_RIGHT)?;
 
     draw_side_factors(display, &p.mine, false)?;
     draw_side_factors(display, &p.theirs, true)?;
@@ -866,9 +834,9 @@ where
         TEXT_BOLD_BLACK,
         ui::CENTERED_TOP,
     )?;
-    draw_small(display, status_line(p).as_str(), 76, 126, Anchor::Centre, BLACK)?;
+    ui::draw_text(display, status_line(p).as_str(), Point::new(76, 126), small(BLACK), ui::CENTERED_TOP)?;
     if let Some(hint) = hint_line(p) {
-        draw_small(display, hint, 76, 140, Anchor::Centre, BLACK)?;
+        ui::draw_text(display, hint, Point::new(76, 140), small(BLACK), ui::CENTERED_TOP)?;
     }
     Ok(())
 }
@@ -1087,9 +1055,9 @@ where
     // What the chance was, and what decided it.
     let mut chance: heapless::String<24> = heapless::String::new();
     let _ = write!(chance, "chance was {}%", result.fight.chance);
-    draw_small(display, chance.as_str(), 76, 114, Anchor::Centre, BLACK)?;
+    ui::draw_text(display, chance.as_str(), Point::new(76, 114), small(BLACK), ui::CENTERED_TOP)?;
     if let Some(why) = result.fight.why {
-        draw_small(display, decisive_line(why).as_str(), 76, 125, Anchor::Centre, BLACK)?;
+        ui::draw_text(display, decisive_line(why).as_str(), Point::new(76, 125), small(BLACK), ui::CENTERED_TOP)?;
     }
 
     let hint = crate::ui::CENTERED_BOTTOM;
@@ -1283,7 +1251,8 @@ mod pre_tests {
         hi.hp = 15;
         let row = picker_row(&hi, &mine(), 1 + 6 * 1440 * 99, false);
         assert!(row.len() <= 21, "{row}");
-        assert!(row.contains('%'));
+        assert_eq!(win_chance(&mine(), &hi.estimate_snapshot()), 100, "the worst case");
+        assert!(row.contains("~100%"), "{row}");
     }
 
     #[test]
@@ -1616,6 +1585,69 @@ mod pre_tests {
             crate::game::reason_toast(),
             Some(Reason::Refused(Refusal::Injured))
         );
+        lifecycle::set_state_for_test(None);
+        battle_link::reset_for_test();
+    }
+
+    #[test]
+    fn six_pixel_text_centres_and_right_aligns_through_draw_text() {
+        use embedded_graphics::text::Text;
+        let style = MonoTextStyle::new(&FONT_6X10, BLACK);
+        let same = |a: &Canvas, b: &Canvas| {
+            (0..152).all(|y| (0..152).all(|x| a.get(x, y) == b.get(x, y)))
+        };
+        // "HHHHH" is 30 px wide: centred at 76 it starts at 61.
+        let mut got = Canvas::new();
+        ui::draw_text(&mut got, "HHHHH", Point::new(76, 10), style, ui::CENTERED_TOP).unwrap();
+        let mut want = Canvas::new();
+        Text::with_text_style("HHHHH", Point::new(61, 10), style, ui::TOP_LEFT)
+            .draw(&mut want)
+            .unwrap();
+        assert!(same(&got, &want), "centred");
+        // Right-aligned at 150 it starts at 120.
+        let mut got = Canvas::new();
+        ui::draw_text(&mut got, "HHHHH", Point::new(150, 10), style, ui::TOP_RIGHT).unwrap();
+        let mut want = Canvas::new();
+        Text::with_text_style("HHHHH", Point::new(120, 10), style, ui::TOP_LEFT)
+            .draw(&mut want)
+            .unwrap();
+        assert!(same(&got, &want), "right");
+    }
+
+    #[test]
+    fn the_picker_layout_keeps_its_bands_apart() {
+        let _guard = lock_test_state();
+        battle_link::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        for i in 0..4u8 {
+            let mut f = friend(b"Bartholomeus", 1);
+            f.device_id = [0xC0, i];
+            friends::insert_for_test(f);
+        }
+        open();
+        set_picker_reason(Reason::Wait(120));
+        let mut c = Canvas::new();
+        draw(&mut c).unwrap();
+        let band = |y0: i32, y1: i32, x0: i32, x1: i32| {
+            Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32))
+        };
+        // Rows are 20 px: the selected one is a 148 px highlight from y 21.
+        assert_eq!(c.get(2, 22), BLACK);
+        assert_eq!(c.get(149, 22), BLACK);
+        assert_eq!(c.get(150, 22), WHITE, "the highlight ends at x 149");
+        assert_eq!(c.get(5, 40), WHITE, "the next row starts clear of it");
+        // Its text starts at x 3 and stays inside the highlight: white ink.
+        assert!(c.any(band(24, 36, 3, 12), WHITE));
+        assert!(c.any(band(24, 36, 100, 149), WHITE));
+        // Nothing is drawn right of the highlight in the rows' area.
+        assert!(!c.any(band(21, 100, 150, 152), BLACK));
+        // Form word, message and hint have their own bands.
+        assert!(c.any(band(101, 114, 0, 152), BLACK), "form word");
+        assert!(c.any(band(125, 137, 0, 152), BLACK), "message line");
+        assert!(c.any(band(138, 151, 0, 152), BLACK), "hint");
+        // Between the last row and the form word, and under the hint: clear.
+        assert!(!c.any(band(100, 101, 0, 152), BLACK));
+        reset_for_test();
         lifecycle::set_state_for_test(None);
         battle_link::reset_for_test();
     }

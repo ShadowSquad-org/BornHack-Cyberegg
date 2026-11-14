@@ -657,6 +657,8 @@ pub enum Form {
 }
 
 impl Form {
+    pub const ALL: [Form; 4] = [Form::Top, Form::In, Form::Off, Form::Poor];
+
     pub fn text(self) -> &'static str {
         match self {
             Form::Top => "top form",
