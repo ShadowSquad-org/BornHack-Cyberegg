@@ -2073,6 +2073,10 @@ pub fn validate(t: &Thresholds, preset: &Thresholds) -> Thresholds {
         r.BOOZE_HI_PCT = preset.BOOZE_HI_PCT;
         r.BOOZE_DANGER_PCT = preset.BOOZE_DANGER_PCT;
     }
+    if r.BATTLE_LOW_MOOD_PCT >= r.BATTLE_HIGH_MOOD_PCT {
+        r.BATTLE_LOW_MOOD_PCT = preset.BATTLE_LOW_MOOD_PCT;
+        r.BATTLE_HIGH_MOOD_PCT = preset.BATTLE_HIGH_MOOD_PCT;
+    }
     if r.DIABETES_WEIGHT_LO_PCT >= r.DIABETES_WEIGHT_HI_PCT {
         r.DIABETES_WEIGHT_LO_PCT = preset.DIABETES_WEIGHT_LO_PCT;
         r.DIABETES_WEIGHT_HI_PCT = preset.DIABETES_WEIGHT_HI_PCT;

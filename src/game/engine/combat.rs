@@ -65,7 +65,7 @@ impl Body {
     /// The pet's state now: each level as whole percent, the traits as
     /// percent, a flag for each running timer.
     pub fn of(s: &GameState) -> Body {
-        let pct = |v: u16| needs::pct(v as i32).min(100);
+        let pct = |v: u16| super::level_pct(v) as i32;
         Body {
             fit: pct(s.fitness),
             energy: pct(s.energy),
@@ -230,11 +230,17 @@ pub const WIRE_STAMINA: (u8, u8) = (0, 10);
 pub const WIRE_FOCUS: (i8, i8) = (-100, 20);
 
 /// How much of the drink the pet feels: a light pet feels more of it.
-/// `booze * (base - weight) / 100`, at most 100. The one copy of the rule;
+/// `booze * (base - weight) / 100`, kept in 0..=100 (a custom base below the
+/// weight must not turn the drink into a bonus). The one copy of the rule;
 /// the snapshot, its `Tipsy` and `Sloppy` flags and the too-drunk refusal
 /// all read it.
 pub fn felt(b: &Body) -> i32 {
-    (b.booze * (t::BATTLE_FELT_BASE_PCT() as i32 - b.weight) / 100).min(100)
+    felt_with(b, t::BATTLE_FELT_BASE_PCT() as i32)
+}
+
+/// [`felt`] for an explicit base (the config's `BATTLE_FELT_BASE_PCT`).
+pub fn felt_with(b: &Body, base: i32) -> i32 {
+    (b.booze * (base - b.weight) / 100).clamp(0, 100)
 }
 
 /// Liquid courage: a tent over the felt drink, its peak at 30, gone at 60.
@@ -248,8 +254,8 @@ fn courage(load: i32) -> i32 {
 }
 
 /// The prototype's `derive`: `[power, guard, speed, hp, stamina, focus]`
-/// with the prototype's floors, before the wire clamp. Only focus has no
-/// floor, so only focus can leave its wire range.
+/// with the prototype's floors, before the wire clamp. Under the presets only
+/// focus has no floor, so only focus can leave its wire range.
 pub fn derive_raw(b: &Body) -> [i32; 6] {
     let pts = |v: u8| v as i32;
     let load = felt(b);

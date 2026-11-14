@@ -4,7 +4,7 @@ mod snapshot {
     use bornhack_aegg::game::bornpets_cfg::apply_overrides;
     use bornhack_aegg::game::engine::combat::{
         Body, Factor, Flags, WIRE_FOCUS, WIRE_GUARD, WIRE_HP, WIRE_POWER, WIRE_SPEED, WIRE_STAMINA,
-        derive, derive_raw, felt,
+        derive, derive_raw, felt, felt_with,
     };
     use bornhack_aegg::game::engine::needs::P;
     use bornhack_aegg::game::engine::thresholds::Thresholds;
@@ -302,6 +302,107 @@ mod snapshot {
         }
     }
 
+    /// One body per number that reaches its true maximum under the presets.
+    /// Pins the headroom of the WIRE ranges: random sampling never gets there.
+    #[test]
+    fn worst_cases_reach_the_wire_maxima() {
+        let b = Body::REFERENCE;
+        let cases = [
+            (
+                "power",
+                Body {
+                    weight: 100,
+                    booze: 60,
+                    mood: 85,
+                    ..b
+                },
+                0,
+                61,
+                WIRE_POWER,
+            ),
+            (
+                "guard",
+                Body {
+                    res: 100,
+                    weight: 100,
+                    ..b
+                },
+                1,
+                39,
+                WIRE_GUARD,
+            ),
+            (
+                "speed",
+                Body {
+                    weight: 0,
+                    fit: 100,
+                    vit: 100,
+                    rested: true,
+                    ..b
+                },
+                2,
+                100,
+                WIRE_SPEED,
+            ),
+            (
+                "hp",
+                Body {
+                    vit: 100,
+                    health: 100,
+                    weight: 100,
+                    ..b
+                },
+                3,
+                117,
+                WIRE_HP,
+            ),
+            (
+                "stamina",
+                Body {
+                    energy: 100,
+                    fit: 100,
+                    vit: 100,
+                    rested: true,
+                    ..b
+                },
+                4,
+                9,
+                WIRE_STAMINA,
+            ),
+        ];
+        for (name, body, i, max, (lo, hi)) in cases {
+            let v = derive_raw(&body)[i];
+            assert_eq!(v, max, "{name}");
+            assert!(
+                (lo as i32..=hi as i32).contains(&v),
+                "{name} {v} outside wire"
+            );
+        }
+    }
+
+    #[test]
+    fn felt_never_goes_negative() {
+        // A custom base below the weight: booze * (base - weight) is negative.
+        let heavy_drunk = Body {
+            booze: 100,
+            weight: 100,
+            ..Body::REFERENCE
+        };
+        assert_eq!(felt_with(&heavy_drunk, 20), 0);
+        assert_eq!(felt_with(&heavy_drunk, 1000), 100);
+        assert_eq!(felt_with(&heavy_drunk, 150), felt(&heavy_drunk));
+    }
+
+    #[test]
+    fn mood_band_pair_is_validated() {
+        use bornhack_aegg::game::engine::thresholds::validate;
+        let mut t = Thresholds::CLASSIC;
+        t.BATTLE_LOW_MOOD_PCT = 80;
+        t.BATTLE_HIGH_MOOD_PCT = 60;
+        let v = validate(&t, &Thresholds::CLASSIC);
+        assert_eq!((v.BATTLE_LOW_MOOD_PCT, v.BATTLE_HIGH_MOOD_PCT), (40, 80));
+    }
+
     #[test]
     fn felt_is_the_one_formula() {
         // booze * (150 - weight) / 100, at most 100
@@ -369,6 +470,16 @@ mod snapshot {
             .join("\n");
         for lit in [" 78", " 83", " 38", " 33", " 73", " 58", " 63"] {
             assert!(!src.contains(lit), "band literal{lit} in combat.rs");
+        }
+        // Stricter: the number as a whole token, whatever precedes it.
+        let b = src.as_bytes();
+        for lit in ["78", "83", "38", "33", "73", "58", "63"] {
+            for (i, _) in src.match_indices(lit) {
+                let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+                let before = i > 0 && word(b[i - 1]);
+                let after = b.get(i + 2).is_some_and(|&c| word(c));
+                assert!(before || after, "band literal {lit} in combat.rs");
+            }
         }
     }
 
