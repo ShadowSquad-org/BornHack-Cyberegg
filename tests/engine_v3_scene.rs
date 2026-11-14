@@ -340,3 +340,92 @@ mod wake {
         assert_eq!(background_state(&s).unwrap().floor, 0);
     }
 }
+
+mod budget {
+    use bornhack_aegg::game::engine::sim::{self, Driver, Setup};
+
+    #[test]
+    fn backgrounds_add_few_wakes() {
+        let demo = sim::run_with(
+            &sim::absent,
+            10,
+            Driver::Delta,
+            1,
+            Setup {
+                demo: true,
+                clock: true,
+                animated: false,
+            },
+        )
+        .outcome;
+        eprintln!(
+            "absent, demo, clock: {:.2} scene changes a day, {:.2} engine wakes a day, {:.2} refreshes a day",
+            demo.scene_changes_per_day, demo.engine_wakes_per_day, demo.refreshes_per_day
+        );
+        assert!(
+            demo.scene_changes_per_day > 0.0,
+            "the counter sees the sky switch"
+        );
+        assert!(demo.scene_changes_per_day <= 8.0);
+        assert!(demo.engine_wakes_per_day <= 60.0);
+        let care = sim::run_with(
+            &sim::balanced,
+            10,
+            Driver::Delta,
+            1,
+            Setup {
+                clock: true,
+                ..Default::default()
+            },
+        )
+        .outcome;
+        eprintln!(
+            "balanced, clock: {:.2} scene changes a day, {:.2} engine wakes a day, {:.2} refreshes a day",
+            care.scene_changes_per_day, care.engine_wakes_per_day, care.refreshes_per_day
+        );
+        assert!(care.scene_changes_per_day <= 6.0);
+    }
+
+    #[test]
+    fn the_cross_shows_whenever_the_pet_is_poorly() {
+        use bornhack_aegg::game::engine::needs::P;
+        use bornhack_aegg::game::engine::scene::background_state;
+        use bornhack_aegg::game::engine::status::poorly;
+        use bornhack_aegg::game::engine::{GameState, PetKind, Phase};
+
+        let mut x = 5u64;
+        let mut next = |bound: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % (bound + 1)
+        };
+        let pct = |p: u64| (p as i32 * P) as u16;
+        let (mut with_bg, mut sick) = (0, 0);
+        for i in 0..2000 {
+            let mut s = GameState::new_egg(7, PetKind(0));
+            s.phase = Phase::Active;
+            s.fullness = pct(next(100));
+            s.hydration = pct(next(100));
+            s.energy = pct(next(100));
+            s.fun = pct(next(100));
+            s.dirt = pct(next(100));
+            s.booze = pct(next(100));
+            s.health = pct(next(100));
+            s.mood = pct(next(100));
+            s.is_sleeping = next(1) == 1;
+            s.demo.on = i % 2 == 0;
+            s.set_demo_rng(1 + next(1_000_000) as u32);
+            let Some(bg) = background_state(&s) else {
+                continue;
+            };
+            with_bg += 1;
+            sick += poorly(&s) as u32;
+            assert_eq!(bg.poorly, poorly(&s), "random state {i}");
+        }
+        assert!(
+            with_bg > 1000 && sick > 100,
+            "{with_bg} states, {sick} poorly"
+        );
+    }
+}

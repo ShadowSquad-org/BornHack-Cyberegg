@@ -476,3 +476,159 @@ mod draw {
         );
     }
 }
+
+/// What the background adds to the refresh and battery cost (plan 7, task 4).
+/// The SSD1680 runs every runtime refresh as `Fast`, which never flashes. The
+/// SSD1675 promotes a partial refresh to a flashing full one once the vendor's
+/// changed-pixel counter passes `full_after_screens` screens of changed
+/// pixels, so what matters there is changed pixels per idle frame.
+#[cfg(test)]
+mod budget {
+    use super::*;
+    use crate::game::engine::anim_files::{anim_filename, frame_count};
+    use crate::game::engine::{DisplayAnim, PetKind};
+    use crate::game::pacing;
+    use crate::game::pet_registry::{MAX_PETS, PetDef};
+    use crate::game::sprite_loader::blit_pcx_sim;
+    use crate::game::test_canvas::Canvas;
+
+    /// Vendor `PartialConfig::default().full_after_screens` (3) full screens.
+    const SSD1675_FULL_AFTER_PX: u32 = 3 * 152 * 152;
+    const IDLE_FRAMES_PER_DAY: u32 = 24 * 3600 / pacing::IDLE_FRAME_SECS as u32;
+
+    const IDLE_PACED: [DisplayAnim; 10] = [
+        DisplayAnim::Idle,
+        DisplayAnim::Happy,
+        DisplayAnim::Sleeping,
+        DisplayAnim::WarningSick,
+        DisplayAnim::WarningTired,
+        DisplayAnim::WarningHungry,
+        DisplayAnim::WarningMiserable,
+        DisplayAnim::CriticalSick,
+        DisplayAnim::CriticalTired,
+        DisplayAnim::CriticalHungry,
+    ];
+
+    /// Differing pixels in the pet area rows (y 35 to 109).
+    fn changed_px(a: &Canvas, b: &Canvas) -> u32 {
+        let mut n = 0;
+        for y in SKY_TOP..=FLOOR_BOTTOM {
+            for x in 0..152 {
+                n += (a.get(x, y) != b.get(x, y)) as u32;
+            }
+        }
+        n
+    }
+
+    fn sky_only(sky: Sky) -> BackgroundState {
+        BackgroundState {
+            sky,
+            floor: 0,
+            grass: false,
+            poorly: false,
+        }
+    }
+
+    /// The backdrop of `sky`, then the sprite file on top, as the game draws.
+    fn frame(sky: Sky, name: &[u8; 11]) -> Canvas {
+        let mut c = Canvas::new();
+        draw_background(&mut c, &sky_only(sky)).unwrap();
+        blit_pcx_sim(&mut c, name, 0, SKY_TOP, false);
+        c
+    }
+
+    /// The pets of the repo roster, parsed from the shipped `PETS.CFG`. The
+    /// registry installs once per process, so it is never touched here.
+    fn roster() -> std::vec::Vec<PetKind> {
+        let mut pets: heapless::Vec<PetDef, MAX_PETS> = heapless::Vec::new();
+        crate::game::pets_cfg::parse(include_bytes!("../../assets/to-badge/PETS.CFG"), &mut pets);
+        pets.iter().map(|p| PetKind(p.id)).collect()
+    }
+
+    /// Worst changed pixels between two consecutive frames of any idle-paced
+    /// animation of any roster pet, over `sky`. The loop wraps.
+    fn worst_frame_step(sky: Sky) -> u32 {
+        let mut worst = 0;
+        for kind in roster() {
+            for anim in IDLE_PACED {
+                let n = frame_count(kind, anim);
+                if n < 2 {
+                    continue;
+                }
+                for f in 0..n {
+                    let a = frame(sky, &anim_filename(kind, anim, f));
+                    let b = frame(sky, &anim_filename(kind, anim, (f + 1) % n));
+                    worst = worst.max(changed_px(&a, &b));
+                }
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn the_sky_switch_is_cheap() {
+        let px = changed_px(&drawn_sky(Sky::Day), &drawn_sky(Sky::Night));
+        eprintln!("sky switch changes {px} px");
+        assert!(px <= 6_000, "{px} px");
+    }
+
+    fn drawn_sky(sky: Sky) -> Canvas {
+        let mut c = Canvas::new();
+        draw_background(&mut c, &sky_only(sky)).unwrap();
+        c
+    }
+
+    #[test]
+    fn ssd1675_promotions_stay_bounded() {
+        assert_eq!(IDLE_FRAMES_PER_DAY, 288);
+        let switch_px = changed_px(&drawn_sky(Sky::Day), &drawn_sky(Sky::Night));
+        let day_worst = worst_frame_step(Sky::Day);
+        let night_worst = worst_frame_step(Sky::Night);
+        assert!(day_worst > 0, "no animated sprites found");
+        let night_px = IDLE_FRAMES_PER_DAY * night_worst + 2 * switch_px;
+        let day_px = IDLE_FRAMES_PER_DAY * day_worst;
+        let added = night_px.saturating_sub(day_px) as f32 / SSD1675_FULL_AFTER_PX as f32;
+        let total = night_px as f32 / SSD1675_FULL_AFTER_PX as f32;
+        eprintln!(
+            "ssd1675 worst frame step: day {day_worst} px, night {night_worst} px; \
+             full refreshes a day: added {added:.2}, total {total:.2}"
+        );
+        assert!(added <= 4.0, "added {added}");
+        assert!(total <= 24.0, "total {total}");
+    }
+
+    #[test]
+    fn a_wake_with_an_unchanged_view_draws_the_same_pixels() {
+        // A wake can come up to two minutes before a sky switch and find the
+        // same view. The firmware then skips the refresh when no pixel is
+        // dirty (`partial_idle` in `src/bin/embassy.rs`), so the two draws
+        // must be pixel-identical.
+        use crate::game::engine::needs::P;
+        use crate::game::engine::scene::{background_state, wake_view};
+        use crate::game::engine::{GameState, Phase, TICKS_PER_MINUTE};
+
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.phase = Phase::Active;
+        s.fullness = (60 * P) as u16;
+        s.hydration = (60 * P) as u16;
+        s.energy = (80 * P) as u16;
+        s.health = (95 * P) as u16;
+        s.mood = (90 * P) as u16;
+        s.fun = (60 * P) as u16;
+        s.dirt = 0;
+        s.booze = 0;
+        s.sync_clock(s.last_update_tick, Some(1257)); // 20:57, switch at 21:00
+        let draw = |s: &GameState| {
+            let mut c = Canvas::new();
+            draw_background(&mut c, &background_state(s).unwrap()).unwrap();
+            c
+        };
+        let (before_view, before) = (wake_view(&s), draw(&s));
+        s.update(s.last_update_tick + TICKS_PER_MINUTE);
+        assert_eq!(wake_view(&s), before_view, "one minute before the switch");
+        assert_eq!(changed_px(&before, &draw(&s)), 0);
+        s.update(s.last_update_tick + 2 * TICKS_PER_MINUTE);
+        assert_ne!(wake_view(&s), before_view, "the switch itself");
+        assert!(changed_px(&before, &draw(&s)) > 0);
+    }
+}

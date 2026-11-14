@@ -100,6 +100,11 @@ pub struct Outcome {
     /// simulator does not load. Idle frames are not counted. The Oracle has no
     /// wakes, so its figure is the action frames alone: not comparable.
     pub refreshes_per_day: f32,
+    /// Times `scene::wake_view` changed (sky switch, floor item, grass,
+    /// cross), per day. Counted from every segment snapshot against the last
+    /// one seen, so a change between updates (a wash, a player action) counts
+    /// too. One change is at most one background-caused refresh.
+    pub scene_changes_per_day: f32,
 }
 
 /// How a run starts. `run_full` is `run_with` and `Setup::default()`.
@@ -148,6 +153,9 @@ struct Probe {
     /// Causes queued, and action ticks run, since the run began.
     causes: u32,
     action_ticks: u64,
+    /// The last `scene::wake_view` seen, and how often it changed.
+    last_scene: Option<u8>,
+    scene_changes: u32,
 }
 
 const PROBE_NEW: Probe = Probe {
@@ -164,6 +172,8 @@ const PROBE_NEW: Probe = Probe {
     leaving: false,
     causes: 0,
     action_ticks: 0,
+    last_scene: None,
+    scene_changes: 0,
 };
 
 /// The figures `note_segment` reads off the pet at one end of a segment.
@@ -176,6 +186,7 @@ pub(super) struct Snap {
     sleeping: bool,
     day_min: Option<u16>,
     phase: Phase,
+    scene: u8,
 }
 
 impl Snap {
@@ -188,6 +199,7 @@ impl Snap {
             sleeping: s.is_sleeping,
             day_min: s.day_min,
             phase: s.phase,
+            scene: super::scene::wake_view(s),
         }
     }
 }
@@ -303,6 +315,12 @@ pub(super) fn note_segment(before: Snap, after: Snap, dt: u32) {
         let mut v = p.get();
         v.mood_sum2 += (before.mood as i64 + after.mood as i64) * dt as i64;
         v.minutes += dt as u64;
+        for scene in [before.scene, after.scene] {
+            if v.last_scene.is_some_and(|last| last != scene) {
+                v.scene_changes += 1;
+            }
+            v.last_scene = Some(scene);
+        }
         v.min_health = v.min_health.min(before.health).min(after.health);
         for (acc, m) in v
             .band_min
@@ -589,6 +607,7 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
                 + probe.action_ticks as f64 * pacing::SECS_PER_TICK as f64
                     / pacing::MIN_FRAME_SECS as f64) as f32
                 / days_run,
+            scene_changes_per_day: probe.scene_changes as f32 / days_run,
         },
         wake_queries: queries,
         wake_calls_total: calls_total,
