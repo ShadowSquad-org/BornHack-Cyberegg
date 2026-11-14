@@ -382,6 +382,8 @@ fn try_challenge() {
 /// The pre-battle screen opens or changes (the Session has its numbers).
 /// Until the dedicated screen exists this only makes the Battle view active.
 pub fn open_pre_battle() {
+    // A fresh state, so the card of an old fight never reopens.
+    STATE.store(STATE_PICKING, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
 
@@ -413,7 +415,7 @@ pub fn handle_input(btn: ButtonId) {
         if elapsed >= RESULT_DISMISS_GUARD_MS {
             close();
             // The card is done with: the Session forgets its finished screen.
-            super::battle_link::cancel();
+            super::battle_link::dismiss_finished();
         }
         return;
     }

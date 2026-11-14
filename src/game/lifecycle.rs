@@ -336,6 +336,7 @@ pub fn start_new_game(kind: super::engine::PetKind, money_enabled: bool, hard_mo
     egg.hard_mode = hard_mode;
     forget_boot_gap(&BOOT_SAVED_UNIX, &CATCH_UP_DONE);
     clear_diary();
+    super::battle_link::cancel();
     unsafe {
         *GAME.get() = Some(egg);
     }
@@ -1024,6 +1025,7 @@ fn win_jingle_due(muted: bool, demo: bool) -> bool {
 /// same as `kind`.
 pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mode: bool) {
     use super::engine::Phase;
+    super::battle_link::cancel();
     let state = unsafe { (*GAME.get()).as_mut() };
     let Some(s) = state else {
         // Nothing to succeed — "Reset Pet" can be confirmed on a badge

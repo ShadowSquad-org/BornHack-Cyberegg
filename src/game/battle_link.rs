@@ -43,6 +43,14 @@ pub fn ms_until(deadline: u32, now: u32) -> u32 {
     if d <= 0 { 0 } else { d as u32 }
 }
 
+/// A screen change that came from the radio or the timer, not a button: wake
+/// the display loop (the event-driven signal the toasts and the battle
+/// animation use) so the e-paper redraws now, not at the next minute tick.
+fn wake_display() {
+    #[cfg(feature = "embassy-core")]
+    crate::TOAST_SIGNAL.signal(());
+}
+
 fn changed() {
     #[cfg(feature = "embassy-core")]
     DEADLINE_CHANGED.signal(());
@@ -50,7 +58,9 @@ fn changed() {
 
 /// Run `f` on the Session with a caught-up pet, then carry out what it says.
 fn run(f: impl FnOnce(&Me, &mut super::engine::GameState, &mut Session) -> Outs) {
-    let nonce = u16::from_le_bytes([crate::platform::entropy_byte(), crate::platform::entropy_byte()]);
+    // Two clock bytes are weak alone; the uptime's low bits move the rest.
+    let nonce = u16::from_le_bytes([crate::platform::entropy_byte(), crate::platform::entropy_byte()])
+        ^ (crate::platform::uptime_ms_u32() as u16).rotate_left(5);
     let me = Me {
         id: friends::local_device_id(),
         kind: lifecycle::pet_kind().id(),
@@ -80,7 +90,10 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
                     crate::fw::buzzer::play(crate::PET_WARN_INDEX);
                 }
             }
-            Out::Show => super::battle_view::open_pre_battle(),
+            Out::Show => {
+                super::battle_view::open_pre_battle();
+                wake_display();
+            }
             Out::Close => closed = true,
             Out::Fought(f) => {
                 fought = true;
@@ -102,13 +115,14 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
     }
     if fought {
         // The result card replaces the pre-battle screen, so a `Close` must
-        // not shut it. The challenger's side emits no `Close` and keeps its
-        // resolved screen: it is done once the fight is played.
+        // not shut it. The challenger's side emits no `Close`: its resolved
+        // screen is dropped here, since the fight is played.
         if !closed {
             let _ = session().cancel();
         }
     } else if closed {
         super::battle_view::close();
+        wake_display();
     }
 }
 
@@ -167,6 +181,22 @@ fn send(_p: &Packet) {}
 /// Challenge the friend at `friend_index`. `Err` says why not (the Battle
 /// screen shows it); "Friend not ready" stays the view's own check.
 pub fn challenge(friend_index: usize) -> Result<(), Reason> {
+    // Firmware without the mesh cannot send, so no Session is left waiting
+    // for an answer that can never come (the view says "Friend not ready").
+    #[cfg(all(feature = "embassy-core", not(feature = "mesh")))]
+    {
+        let _ = friend_index;
+        Err(Reason::Refused(Refusal::NoNeed))
+    }
+    #[cfg(not(all(feature = "embassy-core", not(feature = "mesh"))))]
+    challenge_inner(friend_index)
+}
+
+#[cfg(not(all(feature = "embassy-core", not(feature = "mesh"))))]
+fn challenge_inner(friend_index: usize) -> Result<(), Reason> {
+    if !lifecycle::is_started() {
+        return Err(Reason::Gone);
+    }
     let Some(f) = friends::get(friend_index) else {
         return Err(Reason::Refused(Refusal::NoNeed));
     };
@@ -252,11 +282,32 @@ pub fn last_fight() -> Option<Fight> {
 
 /// The screen was dismissed, or demo mode was switched: drop what is pending.
 pub fn cancel() {
+    // A live incoming challenge is declined (busy), not left to time out.
+    if let Some(p) = session().view().filter(|p| {
+        p.role == super::battle::Role::Target && p.note == super::battle::Note::Waiting
+    }) {
+        if session().deadline_ms().is_some() {
+            send(&Packet::Decline(DeclineMsg::new(
+                p.peer_id,
+                friends::local_device_id(),
+                Reason::Busy,
+            )));
+        }
+    }
     let outs = session().cancel();
     if !outs.is_empty() {
         super::battle_view::close();
+        wake_display();
     }
     changed();
+}
+
+/// A result card or notice was dismissed: forget the finished screen, but
+/// never a challenge that is still waiting for an answer.
+pub fn dismiss_finished() {
+    if deadline_ms().is_none() {
+        cancel();
+    }
 }
 
 /// When the firmware timer must wake (uptime ms), while a challenge waits.
@@ -393,6 +444,82 @@ mod tests {
         assert!(b.demo);
         assert_eq!(b.to_bytes().len(), 25);
         lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn dismissing_a_card_keeps_a_live_challenge() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        crate::game::battle_view::show_result_for_test();
+        inject_challenge_for_shot("Bram", 1);
+        assert!(deadline_ms().is_some(), "the challenge is live");
+        dismiss_finished();
+        assert!(view().is_some() && deadline_ms().is_some());
+        assert!(!crate::game::battle_view::wants_full_refresh(), "no old card reopens");
+        lifecycle::set_state_for_test(None);
+        reset_for_test();
+        crate::game::battle_view::reset_for_test();
+    }
+
+    #[test]
+    fn dismissing_a_finished_screen_clears_it() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        inject_challenge_for_shot("Bram", 1);
+        answer(true);
+        assert!(view().is_none());
+        assert!(last_fight().is_some(), "the target fought");
+        dismiss_finished();
+        assert!(view().is_none());
+        lifecycle::set_state_for_test(None);
+        reset_for_test();
+        crate::game::battle_view::reset_for_test();
+    }
+
+    #[test]
+    fn a_malformed_packet_is_dropped() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        handle_challenge(&[1, 2, 3]);
+        assert!(view().is_none());
+        lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn an_accept_plays_the_fight_and_records_it() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        let id = [0xA2, 0x09];
+        friends::insert_for_test(friend(id));
+        assert!(challenge(0).is_ok());
+        assert!(deadline_ms().is_some());
+        let snap = lifecycle::snapshot().unwrap();
+        let acc = crate::game::battle::AcceptMsg {
+            challenger_id: friends::local_device_id(),
+            target_id: id,
+            snap,
+            nonce: 7,
+        };
+        handle_accept(&acc.to_bytes());
+        assert!(last_fight().is_some());
+        assert!(view().is_none(), "the challenger's screen is dropped");
+        assert!(friends::by_id(id).unwrap().fought_tick != 0);
+        lifecycle::set_state_for_test(None);
+        reset_for_test();
+        crate::game::battle_view::reset_for_test();
+    }
+
+    #[test]
+    fn challenging_without_a_pet_says_gone() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        lifecycle::set_state_for_test(None);
+        friends::insert_for_test(friend([0xA3, 0x0A]));
+        assert_eq!(challenge(0), Err(Reason::Gone));
     }
 
     #[test]

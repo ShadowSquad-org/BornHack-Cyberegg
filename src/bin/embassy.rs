@@ -624,7 +624,7 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(advert_ticker_task());
     #[cfg(all(feature = "mesh", feature = "game"))]
     spawner.must_spawn(pet_beacon_ticker_task());
-    #[cfg(all(feature = "mesh", feature = "game"))]
+    #[cfg(feature = "game")]
     spawner.must_spawn(battle_timer_task());
 
     // ── USB mass storage ──────────────────────────────────────────────────
@@ -1708,7 +1708,7 @@ async fn pet_beacon_ticker_task() {
 /// target's window closing, the challenger's fallback fight). A one-shot
 /// timer set to that single instant, re-armed when the deadline moves; with
 /// no challenge pending it waits on the signal and costs nothing.
-#[cfg(all(feature = "mesh", feature = "game"))]
+#[cfg(feature = "game")]
 #[embassy_executor::task]
 async fn battle_timer_task() {
     use bornhack_aegg::game::battle_link;
