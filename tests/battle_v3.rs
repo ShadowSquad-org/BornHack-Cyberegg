@@ -763,3 +763,394 @@ mod fight {
         );
     }
 }
+
+mod rules {
+    use bornhack_aegg::game::engine::causes::{Cause, StrainWhy};
+    use bornhack_aegg::game::engine::doses::{Reason, Refusal};
+    use bornhack_aegg::game::engine::needs::P;
+    use bornhack_aegg::game::engine::thresholds as t;
+    use bornhack_aegg::game::engine::{Fought, GameState, PetKind, Phase};
+
+    fn pct(v: i32) -> u16 {
+        (v * P) as u16
+    }
+
+    /// A fit adult: nothing hungry, tired, thirsty or rested, no strain.
+    fn fit() -> GameState {
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.update(t::HATCHING_TICKS() as u32);
+        assert_eq!(s.phase, Phase::Active);
+        s.is_sleeping = false;
+        s.tick_rem = 0;
+        s.money_enabled = false;
+        s.energy = pct(80);
+        s.fullness = pct(60);
+        s.hydration = pct(60);
+        s.fun = pct(50);
+        s.dirt = pct(20);
+        s.mood = pct(50);
+        s.health = pct(80);
+        s.weight = pct(50);
+        s.fitness = pct(50);
+        s.strain = 0;
+        s.booze = 0;
+        s
+    }
+
+    fn won(hp: u8) -> Fought {
+        Fought {
+            won: true,
+            hp_left_pct: hp,
+            costs: true,
+            paid: false,
+        }
+    }
+
+    #[test]
+    fn refusals_follow_the_list() {
+        assert_eq!(fit().battle_refusal(), None);
+
+        let mut s = fit();
+        s.hibernating = true;
+        assert_eq!(s.battle_refusal(), Some(Reason::Hibernating));
+
+        let mut s = fit();
+        s.is_sleeping = true;
+        assert_eq!(s.battle_refusal(), Some(Reason::Refused(Refusal::Asleep)));
+
+        let mut s = fit();
+        s.injured_min = 30;
+        assert_eq!(s.battle_refusal(), Some(Reason::Refused(Refusal::Injured)));
+
+        let mut s = fit();
+        s.health = pct(29);
+        assert_eq!(s.battle_refusal(), Some(Reason::Refused(Refusal::TooWeak)));
+        s.health = pct(30);
+        assert_eq!(s.battle_refusal(), None);
+
+        // Felt drink: booze * (150 - weight) / 100.
+        let mut s = fit();
+        s.booze = pct(60);
+        s.weight = pct(50);
+        assert_eq!(s.battle_refusal(), None);
+        s.booze = pct(50);
+        s.weight = 0;
+        assert_eq!(s.battle_refusal(), Some(Reason::Refused(Refusal::TooDrunk)));
+
+        // No age limit: a pet just past hatching fights.
+        let mut s = fit();
+        s.age_ticks = 60;
+        assert_eq!(s.battle_refusal(), None);
+
+        let mut s = fit();
+        s.cooldown_battle = 6;
+        assert_eq!(s.battle_refusal(), Some(Reason::Wait(60)));
+    }
+
+    #[test]
+    fn refusals_have_a_fixed_order() {
+        // Asleep and injured: asleep comes first for the challenger ...
+        let mut s = fit();
+        s.is_sleeping = true;
+        s.injured_min = 30;
+        s.health = pct(10);
+        s.booze = pct(90);
+        s.cooldown_battle = 6;
+        assert_eq!(s.battle_refusal(), Some(Reason::Refused(Refusal::Asleep)));
+        // ... but the body check alone names the injury first.
+        assert_eq!(s.body_refusal(), Some(Reason::Refused(Refusal::Injured)));
+        s.injured_min = 0;
+        assert_eq!(s.body_refusal(), Some(Reason::Refused(Refusal::TooWeak)));
+        s.health = pct(80);
+        assert_eq!(s.body_refusal(), Some(Reason::Refused(Refusal::TooDrunk)));
+        s.booze = 0;
+        assert_eq!(s.body_refusal(), None);
+        // The cooldown is last.
+        s.is_sleeping = false;
+        assert_eq!(s.battle_refusal(), Some(Reason::Wait(60)));
+    }
+
+    #[test]
+    fn injured_pet_cannot_battle() {
+        let mut s = fit();
+        assert!(s.stats(s.last_update_tick).can_battle);
+        s.injured_min = 10;
+        assert!(!s.stats(s.last_update_tick).can_battle);
+    }
+
+    #[test]
+    fn a_fight_costs_what_the_spec_says() {
+        let mut s = fit();
+        let before = s.clone();
+        assert_eq!(s.fight_over(won(80)), 0);
+        assert_eq!(s.energy as i32, before.energy as i32 - 10 * P);
+        assert_eq!(s.hydration as i32, before.hydration as i32 - 8 * P);
+        assert_eq!(s.fun as i32, before.fun as i32 + 20 * P);
+        assert_eq!(s.dirt as i32, before.dirt as i32 + 8 * P);
+        assert_eq!(s.strain as i32, 20 * P);
+        assert_eq!(s.mood as i32, before.mood as i32 + 8 * P);
+        // (100 - 80) * 5 / 100 = 1 %
+        assert_eq!(s.health as i32, before.health as i32 - P);
+        assert_eq!(s.cooldown_battle, 180);
+        assert_eq!(s.wins, 1);
+        assert_eq!(s.losses, 0);
+
+        let mut s = fit();
+        s.fight_over(Fought {
+            won: false,
+            hp_left_pct: 0,
+            costs: true,
+            paid: false,
+        });
+        assert_eq!(s.mood as i32, 42 * P);
+        assert_eq!(s.health as i32, 75 * P);
+        assert_eq!((s.wins, s.losses), (0, 1));
+    }
+
+    #[test]
+    fn a_tired_fighter_strains_more_and_can_tear() {
+        let mut s = fit();
+        s.fullness = pct(5);
+        s.fight_over(won(100));
+        assert_eq!(s.strain as i32, 30 * P);
+        assert_eq!(s.injured_min, 0);
+
+        let mut s = fit();
+        s.fullness = pct(5);
+        s.strain = pct(45);
+        s.fight_over(won(100));
+        assert_eq!(s.injured_min, t::DOSE_INJURY_MIN());
+        let causes: Vec<Cause> = s.take_causes().iter().copied().collect();
+        assert_eq!(causes, vec![Cause::TornMuscle(StrainWhy::Fight)]);
+
+        let mut s = fit();
+        s.rested_min = 60;
+        s.fight_over(won(100));
+        assert_eq!(s.strain as i32, 14 * P);
+    }
+
+    #[test]
+    fn a_sore_fighter_is_told_so() {
+        let mut s = fit();
+        s.strain = pct(30);
+        s.fight_over(won(100));
+        let causes: Vec<Cause> = s.take_causes().iter().copied().collect();
+        assert_eq!(causes, vec![Cause::Strained(StrainWhy::Fight)]);
+        // Below the sore line nothing is said.
+        let mut s = fit();
+        s.fight_over(won(100));
+        assert!(s.take_causes().is_empty());
+    }
+
+    #[test]
+    fn sport_injury_is_unchanged() {
+        let mut s = fit();
+        s.strain = pct(55);
+        let health = s.health;
+        assert!(s.exercise());
+        s.update(s.last_update_tick + t::EXERCISE_DURATION() as u32);
+        assert_eq!(s.injured_min, t::DOSE_INJURY_MIN());
+        assert_eq!(
+            s.health as i32,
+            health as i32 - t::DOSE_INJURY_HEALTH_PCT() as i32 * P
+        );
+        let causes: Vec<Cause> = s.take_causes().iter().copied().collect();
+        assert_eq!(causes, vec![Cause::TornMuscle(StrainWhy::Overdone)]);
+    }
+
+    #[test]
+    fn first_win_of_the_day_pays_100_then_20() {
+        let mut s = fit();
+        s.money_enabled = true;
+        s.money = 0;
+        s.sync_clock(s.last_update_tick, Some(20 * 60));
+        let paid = Fought { paid: true, ..won(100) };
+        assert_eq!(s.fight_over(paid), 100);
+        assert_eq!(s.prize_min, 240);
+        assert_eq!(s.fight_over(paid), 20);
+        assert_eq!(s.money, 120);
+        assert_eq!(s.prize_min, 240);
+        // The clock runs the prize timer down; at midnight the first prize is back.
+        s.update(s.last_update_tick + 240 * 6);
+        assert_eq!(s.prize_min, 0);
+        assert_eq!(s.fight_over(paid), 100);
+
+        // No wall clock: a day.
+        let mut s = fit();
+        s.money_enabled = true;
+        assert_eq!(s.fight_over(paid), 100);
+        assert_eq!(s.prize_min, 1440);
+
+        // A loss pays nothing and leaves the timer.
+        let mut s = fit();
+        s.money_enabled = true;
+        let lost = Fought { won: false, ..paid };
+        assert_eq!(s.fight_over(lost), 0);
+        assert_eq!(s.prize_min, 0);
+        assert_eq!(s.money, 100);
+    }
+
+    #[test]
+    fn fallback_target_is_never_paid() {
+        let mut s = fit();
+        s.money_enabled = true;
+        s.money = 50;
+        let (energy, mood) = (s.energy, s.mood);
+        s.record_only(true);
+        assert_eq!(s.money, 50);
+        assert_eq!(s.wins, 1);
+        assert_eq!((s.energy, s.mood, s.cooldown_battle), (energy, mood, 0));
+        s.record_only(false);
+        assert_eq!((s.wins, s.losses), (1, 1));
+        assert_eq!(s.prize_min, 0);
+    }
+
+    #[test]
+    fn unpaid_fight_pays_nothing() {
+        let mut s = fit();
+        s.money_enabled = true;
+        s.money = 50;
+        assert_eq!(s.fight_over(won(90)), 0);
+        assert_eq!(s.money, 50);
+        assert_eq!(s.prize_min, 0);
+        assert_eq!(s.cooldown_battle, 180);
+        assert!(s.strain > 0);
+    }
+
+    #[test]
+    fn a_fight_without_costs_still_rests_the_pet() {
+        let mut s = fit();
+        let (energy, mood) = (s.energy, s.mood);
+        let f = Fought {
+            costs: false,
+            ..won(100)
+        };
+        s.fight_over(f);
+        assert_eq!((s.energy, s.mood, s.strain), (energy, mood, 0));
+        assert_eq!(s.cooldown_battle, 180);
+        assert_eq!(s.wins, 1);
+    }
+
+    #[test]
+    fn demo_fights_have_their_own_record() {
+        let mut s = fit();
+        s.money_enabled = true;
+        s.demo.on = true;
+        s.health = pct(26);
+        let paid = Fought { paid: true, ..won(0) };
+        assert_eq!(s.fight_over(paid), 0);
+        assert_eq!((s.demo_wins, s.demo_losses), (1, 0));
+        assert_eq!((s.wins, s.losses), (0, 0));
+        assert_eq!(s.battle_record(), (1, 0));
+        assert_eq!(s.health as i32, 25 * P, "the demo floor holds");
+        s.record_only(false);
+        assert_eq!(s.battle_record(), (1, 1));
+        s.demo.on = false;
+        assert_eq!(s.battle_record(), (0, 0));
+    }
+
+    #[test]
+    fn battle_reasons_fit() {
+        for r in [
+            Refusal::TooWeak,
+            Refusal::TooDrunk,
+            Refusal::DemoOnly,
+            Refusal::NoDemo,
+        ] {
+            let why = Reason::Refused(r);
+            assert!(why.text().len() <= 16, "{}", why.text());
+            let (kind, secs) = why.pack();
+            assert_eq!(Reason::unpack(kind, secs), why);
+        }
+        assert_eq!(Refusal::TooWeak.text(), "too weak");
+        assert_eq!(Refusal::TooDrunk.text(), "too drunk");
+        assert_eq!(Refusal::DemoOnly.text(), "demo pets only");
+        assert_eq!(Refusal::NoDemo.text(), "no demo pets");
+    }
+
+    #[test]
+    fn fight_word_fits() {
+        let c = Cause::TornMuscle(StrainWhy::Fight);
+        assert_eq!(c.why(), "in a fight");
+        assert!(c.why().len() <= 15 && c.what().len() <= 12);
+        assert!(StrainWhy::ALL.contains(&StrainWhy::Fight));
+        assert_eq!(Cause::unpack(c.pack()), Some(c));
+        let c = Cause::Strained(StrainWhy::Fight);
+        assert_eq!(Cause::unpack(c.pack()), Some(c));
+    }
+
+    #[test]
+    fn battle_keys_load_and_validate() {
+        use bornhack_aegg::game::bornpets_cfg::apply_overrides;
+        use bornhack_aegg::game::engine::thresholds::{Thresholds, validate};
+        let mut v = Thresholds::CLASSIC;
+        apply_overrides(&mut v, b"BATTLE_STRAIN_NEED_PCT=150\nBATTLE_STRAIN_RESTED_PCT=70\n");
+        assert_eq!((v.BATTLE_STRAIN_NEED_PCT, v.BATTLE_STRAIN_RESTED_PCT), (150, 70));
+        assert_eq!(Thresholds::CASUAL.BATTLE_BRUISE_MAX_PCT, 2);
+        assert_eq!(Thresholds::CLASSIC.BATTLE_BRUISE_MAX_PCT, 5);
+        let mut bad = Thresholds::CLASSIC;
+        bad.BATTLE_PRIZE_LATER_HAX = 101;
+        bad.BATTLE_COOLDOWN = 0;
+        let ok = validate(&bad, &Thresholds::CLASSIC);
+        assert_eq!(
+            (ok.BATTLE_PRIZE_FIRST_HAX, ok.BATTLE_PRIZE_LATER_HAX),
+            (100, 20)
+        );
+        assert_eq!(ok.BATTLE_COOLDOWN, 1);
+    }
+}
+
+mod save {
+    use bornhack_aegg::game::engine::{GameState, PetKind, SAVE_SIZE};
+
+    fn state() -> GameState {
+        let mut s = GameState::new_egg(7, PetKind(0));
+        s.demo_wins = 0x1234;
+        s.demo_losses = 0x0567;
+        s.prize_min = 777;
+        s.decline_min = 59;
+        s
+    }
+
+    #[test]
+    fn battle_fields_round_trip() {
+        let s = state();
+        let b = s.to_bytes();
+        assert_eq!(&b[38..40], &0x1234u16.to_le_bytes());
+        assert_eq!(&b[42..44], &0x0567u16.to_le_bytes());
+        assert_eq!(&b[44..46], &777u16.to_le_bytes());
+        assert_eq!(&b[46..48], &59u16.to_le_bytes());
+        let back = GameState::from_bytes(&b).expect("decodes");
+        assert_eq!(
+            (back.demo_wins, back.demo_losses, back.prize_min, back.decline_min),
+            (0x1234, 0x0567, 777, 59)
+        );
+        assert_eq!(back.to_bytes(), b);
+    }
+
+    #[test]
+    fn plan3_save_loads_with_empty_battle_slots() {
+        let mut b = state().to_bytes();
+        // 40..42 is med_cd_min: it stays.
+        b[38..40].fill(0);
+        b[42..48].fill(0);
+        let s = GameState::from_bytes(&b).expect("decodes");
+        assert_eq!((s.demo_wins, s.demo_losses, s.prize_min, s.decline_min), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn tail_stays_zero_for_plan_6() {
+        let mut s = state();
+        s.demo_wins = u16::MAX;
+        s.demo_losses = u16::MAX;
+        s.prize_min = u16::MAX;
+        s.decline_min = u16::MAX;
+        s.wins = u16::MAX;
+        s.losses = u16::MAX;
+        let b = s.to_bytes();
+        assert_eq!(b.len(), SAVE_SIZE);
+        assert_eq!(SAVE_SIZE, 177);
+        assert_eq!(b[0], 3);
+        assert!(b[160..177].iter().all(|&x| x == 0));
+    }
+}

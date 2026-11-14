@@ -38,7 +38,7 @@ const GAME_GOLDEN: [u8; 97] = [
 const V3_GOLDEN: [u8; 177] = [
     0x03, 0x92, 0xC7, 0x8C, 0xED, 0x89, 0xEC, 0x86, 0xEB, 0xAC, 0x8A, 0x7F, 0x16, 0x82, 0x17, 0x85,
     0x18, 0x88, 0x19, 0x8C, 0x6A, 0x49, 0x2A, 0x8D, 0x6B, 0x4A, 0x2B, 0x01, 0x94, 0x1D, 0x15, 0x14,
-    0x13, 0x12, 0x9A, 0x1F, 0x0A, 0x09, 0x00, 0x00, 0x01, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x13, 0x12, 0x9A, 0x1F, 0x0A, 0x09, 0x01, 0x51, 0x01, 0x41, 0x02, 0x52, 0x23, 0x01, 0x33, 0x00,
     0x02, 0x42, 0x03, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x0D, 0x0C, 0x0B, 0x0A, 0x11, 0x10, 0x0F, 0x0E, 0x01, 0x00, 0x01, 0x01, 0xA5, 0x83, 0x62, 0x43,
     0xA6, 0x84, 0x63, 0x44, 0x05, 0xDF, 0x36, 0xE2, 0x37, 0xE5, 0x38, 0xAB, 0x89, 0x68, 0x49, 0x01,
@@ -108,6 +108,10 @@ fn v3_state() -> GameState {
     s.saved_unix = 0x2122_2324;
     s.active_food = Some(FoodKind::Pizza);
     s.active_drink = Some(DrinkKind::Whiskey);
+    s.demo_wins = 0x5101;
+    s.demo_losses = 0x5202;
+    s.prize_min = 0x0123;
+    s.decline_min = 0x0033;
     s
 }
 
@@ -133,7 +137,12 @@ fn v3_golden_bytes_round_trip() {
     assert_eq!(&bytes[40..42], &s.med_cd_min.to_le_bytes()); // old cooldown_heal
     assert_eq!(&bytes[48..50], &s.insulin_min.to_le_bytes()); // old cooldown_medicate
     assert_eq!(&bytes[50..52], &s.ozempic_cd_min.to_le_bytes()); // old cooldown_ozempic
-    for ofs in [38usize, 42, 44, 46, 52, 54] {
+    // The battle fields sit in the old feed, relax, play and exercise slots.
+    assert_eq!(&bytes[38..40], &0x5101u16.to_le_bytes()); // demo_wins
+    assert_eq!(&bytes[42..44], &0x5202u16.to_le_bytes()); // demo_losses
+    assert_eq!(&bytes[44..46], &0x0123u16.to_le_bytes()); // prize_min
+    assert_eq!(&bytes[46..48], &0x0033u16.to_le_bytes()); // decline_min
+    for ofs in [52usize, 54] {
         assert_eq!(&bytes[ofs..ofs + 2], &[0, 0], "removed cooldown slot {ofs}");
     }
     assert_eq!(&bytes[56..64], &[0u8; 8]); // removed interval counters
@@ -288,6 +297,17 @@ fn v2_upgrade_scales_slow_counters() {
 }
 
 #[test]
+fn v2_upgrade_leaves_battle_slots_zero() {
+    // A format-2 save has old cooldowns in the slots format 3 reuses.
+    let mut b = GAME_GOLDEN;
+    for (i, byte) in b[38..48].iter_mut().enumerate() {
+        *byte = 0x10 + i as u8;
+    }
+    let s = GameState::from_bytes_v2(&b).unwrap();
+    assert_eq!((s.demo_wins, s.demo_losses, s.prize_min, s.decline_min), (0, 0, 0, 0));
+}
+
+#[test]
 fn v2_upgrade_maps_alcoholic_to_dependent() {
     let mut b = GAME_GOLDEN;
     b[FLAGS_OFS + 3] = 1;
@@ -334,7 +354,12 @@ fn game_state_decode_normalises_out_of_range_bytes() {
     b[FLAGS_OFS + 1] = 0x02; // hibernating
     b[V3_FOOD_OFS] = 0x55; // unknown food -> None
     b[V3_DRINK_OFS] = 0x55;
+    b[44..48].fill(0xFF); // prize_min, decline_min: held to their limits
+    b[38..40].fill(0xFF); // the record counters are not limited
     let s = GameState::from_bytes(&b).unwrap();
+    assert_eq!(s.prize_min, bornhack_aegg::game::engine::demo::MINUTES_PER_DAY);
+    assert_eq!(s.decline_min, thresholds::BATTLE_DECLINE_MIN());
+    assert_eq!(s.demo_wins, u16::MAX);
     assert_eq!(s.phase, Phase::Gone);
     assert_eq!(s.active_action, None);
     assert!(s.is_sleeping);

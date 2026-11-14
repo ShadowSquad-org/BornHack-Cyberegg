@@ -88,6 +88,8 @@ struct ResultDisplay {
     friend_name: [u8; PET_NAME_MAX],
     friend_name_len: u8,
     outcome: BattleOutcome,
+    /// The HAX the win paid (0 when none).
+    hax: u32,
 }
 
 static RESULT: SyncCell<Option<ResultDisplay>> = SyncCell::new(None);
@@ -369,7 +371,7 @@ fn try_challenge() {
     let Some(friend) = super::friends::get(idx) else {
         return;
     };
-    let Some(outcome) = super::battle::challenge(&friend) else {
+    let Some((outcome, hax)) = super::battle::challenge(&friend) else {
         // Friend hasn't broadcast combat stats yet (or no local stats).
         set_picker_msg(MSG_NOT_READY, 0);
         return;
@@ -381,6 +383,7 @@ fn try_challenge() {
             friend_name: friend.name,
             friend_name_len: friend.name_len,
             outcome,
+            hax,
         });
     }
     RESULT_SHOWN_MS.store(crate::platform::uptime_ms_u32(), Ordering::Relaxed);
@@ -580,12 +583,12 @@ where
     };
     Text::with_text_style(banner, Point::new(76, 112), banner_color, centered).draw(display)?;
 
-    // On a win with money mode on, show the HAX reward that was credited.
-    if result.outcome.challenger_won && super::lifecycle::money_enabled() {
+    // Show the HAX the win paid.
+    if result.hax > 0 {
         let mut reward: heapless::String<16> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(
             &mut reward,
-            format_args!("+{} HAX", super::engine::BATTLE_HAX_REWARD),
+            format_args!("+{} HAX", result.hax),
         );
         Text::with_text_style(
             reward.as_str(),

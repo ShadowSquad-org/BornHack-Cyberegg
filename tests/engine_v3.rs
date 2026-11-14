@@ -2969,15 +2969,15 @@ mod fix_round_1 {
     #[test]
     fn game_rows_wait_out_their_cooldown() {
         let mut s = pet();
-        assert_eq!(s.game_refusal(Some(MiniGame::Nim)), None);
+        assert_eq!(s.game_refusal(MiniGame::Nim), None);
         s.cooldown_nim = 18;
-        assert_eq!(s.game_refusal(Some(MiniGame::Nim)), Some(Reason::Wait(180)));
-        assert_eq!(s.game_refusal(Some(MiniGame::TicTacToe)), None);
+        assert_eq!(s.game_refusal(MiniGame::Nim), Some(Reason::Wait(180)));
+        assert_eq!(s.game_refusal(MiniGame::TicTacToe), None);
         s.cooldown_battle = 6;
-        assert_eq!(s.game_refusal(None), Some(Reason::Wait(60)));
+        assert_eq!(s.battle_refusal(), Some(Reason::Wait(60)));
         s.is_sleeping = true;
         assert_eq!(
-            s.game_refusal(Some(MiniGame::TicTacToe)),
+            s.game_refusal(MiniGame::TicTacToe),
             Some(Reason::Refused(Refusal::Asleep))
         );
     }
@@ -4653,16 +4653,17 @@ mod causes {
             assert!(!c.what().is_empty() && !c.why().is_empty());
             assert_eq!(Cause::unpack(c.pack()), Some(c));
         }
-        assert_eq!(n, 36, "every variant once");
-        assert_eq!(Cause::all().count(), 36);
+        assert_eq!(n, 38, "every variant once");
+        assert_eq!(Cause::all().count(), 38);
         let mut codes: Vec<u8> = Cause::all().map(|c| c.pack()).collect();
         codes.sort();
         codes.dedup();
-        assert_eq!(codes.len(), 36, "every code is distinct");
+        assert_eq!(codes.len(), 38, "every code is distinct");
         assert_eq!(Cause::unpack(255), None);
         assert_eq!(Cause::TornMuscle(StrainWhy::WornOut).why(), "sport: worn out");
         assert_eq!(Cause::Strained(StrainWhy::Overdone).why(), "sport: too much");
         assert_eq!(Cause::BadNight(Unsettled::Unknown).why(), "slept badly");
+        assert_eq!(Cause::Strained(StrainWhy::Fight).why(), "in a fight");
         assert_eq!(Cause::WellRested.what(), "well rested");
     }
 }
@@ -4991,7 +4992,7 @@ mod hint {
                 Remedy::Sleep => (c.sleep(), None),
                 Remedy::Play => (c.play(), doses::price(Action::Play, None, None, s.hard_mode)),
                 Remedy::Game => (
-                    MiniGame::ALL.iter().any(|&g| s.game_refusal(Some(g)).is_none()),
+                    MiniGame::ALL.iter().any(|&g| s.game_refusal(g).is_none()),
                     None,
                 ),
                 Remedy::Relax => (c.relax(), None),

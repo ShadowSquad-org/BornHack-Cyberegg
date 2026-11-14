@@ -395,6 +395,24 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `BATTLE_FORM_TOP_PCT` | 65 | 65 |
 | `BATTLE_FORM_IN_PCT` | 50 | 50 |
 | `BATTLE_FORM_OFF_PCT` | 30 | 30 |
+| `BATTLE_COOLDOWN` | 180 | 180 |
+| `BATTLE_PAIR_COOLDOWN_MIN` | 60 | 60 |
+| `BATTLE_ENERGY_PCT` | 10 | 10 |
+| `BATTLE_WATER_PCT` | 8 | 8 |
+| `BATTLE_FUN_PCT` | 20 | 20 |
+| `BATTLE_DIRT_PCT` | 8 | 8 |
+| `BATTLE_STRAIN_PCT` | 20 | 20 |
+| `BATTLE_STRAIN_NEED_PCT` | 150 | 150 |
+| `BATTLE_STRAIN_RESTED_PCT` | 70 | 70 |
+| `BATTLE_BRUISE_MAX_PCT` | 5 | 2 |
+| `BATTLE_MOOD_PCT` | 8 | 8 |
+| `BATTLE_MIN_HEALTH_PCT` | 30 | 30 |
+| `BATTLE_DRUNK_PCT` | 70 | 70 |
+| `BATTLE_PRIZE_FIRST_HAX` | 100 | 100 |
+| `BATTLE_PRIZE_LATER_HAX` | 20 | 20 |
+| `BATTLE_PRIZE_BEACON_MIN` | 30 | 30 |
+| `BATTLE_DECLINE_MOOD_PCT` | 3 | 3 |
+| `BATTLE_DECLINE_MIN` | 60 | 60 |
 
 Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. Unknown keys are logged and skipped.
 

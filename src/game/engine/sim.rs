@@ -410,7 +410,7 @@ fn perform(s: &mut GameState, a: Act) -> bool {
             true
         }
         Act::Mini(g) => {
-            if s.game_refusal(Some(MiniGame::TicTacToe)).is_some() {
+            if s.game_refusal(MiniGame::TicTacToe).is_some() {
                 return false;
             }
             s.award_inspiration(MiniGame::TicTacToe, g.min(2));

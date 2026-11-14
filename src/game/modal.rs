@@ -495,12 +495,12 @@ impl Item {
             return Reason::Hibernating;
         }
         let engine_says = match self {
-            Self::Battle => lifecycle::game_refusal(None),
-            Self::TicTacToe => lifecycle::game_refusal(Some(MiniGame::TicTacToe)),
-            Self::LightsOut => lifecycle::game_refusal(Some(MiniGame::LightsOut)),
-            Self::BlackHole => lifecycle::game_refusal(Some(MiniGame::BlackHole)),
-            Self::Nim => lifecycle::game_refusal(Some(MiniGame::Nim)),
-            Self::BornJeweled => lifecycle::game_refusal(Some(MiniGame::BornJeweled)),
+            Self::Battle => lifecycle::battle_refusal(),
+            Self::TicTacToe => lifecycle::game_refusal(MiniGame::TicTacToe),
+            Self::LightsOut => lifecycle::game_refusal(MiniGame::LightsOut),
+            Self::BlackHole => lifecycle::game_refusal(MiniGame::BlackHole),
+            Self::Nim => lifecycle::game_refusal(MiniGame::Nim),
+            Self::BornJeweled => lifecycle::game_refusal(MiniGame::BornJeweled),
             Self::Sleep => lifecycle::sleep_refusal(),
             Self::WakeFromSleep => (!stats.is_sleeping).then_some(Reason::Refused(Refusal::NoNeed)),
             _ => match self.action() {

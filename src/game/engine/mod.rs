@@ -127,8 +127,6 @@ pub const GRADE_DRAW: u8 = 1;
 pub const GRADE_WIN: u8 = 2;
 /// HAX earned for winning a mini-game.
 pub const MINIGAME_HAX_REWARD: u32 = 15;
-/// HAX earned for winning a mesh Battle.
-pub const BATTLE_HAX_REWARD: u32 = 20;
 /// HAX cost of the basic Play action.
 pub const PLAY_HAX_COST: u32 = 10;
 /// HAX cost of a drug dose (Ozempic / Medicate / Rehab).
@@ -348,6 +346,15 @@ pub struct GameState {
     // other than a fresh egg (see `new_egg`/`new_generation`).
     pub wins: u16,
     pub losses: u16,
+    /// The record of fights while demo mode is on, apart from the player's.
+    pub demo_wins: u16,
+    pub demo_losses: u16,
+    /// Minutes until a win pays the first prize of the day again; counts
+    /// down with time. Not a solver boundary: nothing visible reads it.
+    pub prize_min: u16,
+    /// Minutes left of the mood penalty for declining a challenge
+    /// (the mood term is Task 4's).
+    pub decline_min: u16,
 
     // HAX currency — belongs to the current pet, resets with a new egg.
     /// HAX balance. New egg starts at 100.
@@ -508,6 +515,10 @@ impl GameState {
 
             wins: 0,
             losses: 0,
+            demo_wins: 0,
+            demo_losses: 0,
+            prize_min: 0,
+            decline_min: 0,
 
             money: 100,
             money_enabled: true,
@@ -1253,16 +1264,47 @@ impl GameState {
         })
     }
 
-    /// Why a mini-game (`Some`) or a mesh Battle (`None`) cannot start now.
-    pub fn game_refusal(&self, game: Option<MiniGame>) -> Option<doses::Reason> {
+    /// Why a mini-game cannot start now.
+    pub fn game_refusal(&self, game: MiniGame) -> Option<doses::Reason> {
         if let Some(why) = self.cannot_act() {
             return Some(why);
         }
         if self.is_sleeping {
             return Some(doses::Reason::Refused(doses::Refusal::Asleep));
         }
-        let cooldown = game.map_or(self.cooldown_battle, |g| self.game_cooldown(g));
+        let cooldown = self.game_cooldown(game);
         (cooldown > 0).then(|| doses::Reason::Wait(cooldown as u32 * 10))
+    }
+
+    /// Why this pet cannot start or accept a fight now, or `None`: the
+    /// reasons that stop every action, then asleep, then the body, then the
+    /// battle rest. There is no age limit.
+    pub fn battle_refusal(&self) -> Option<doses::Reason> {
+        if let Some(why) = self.cannot_act() {
+            return Some(why);
+        }
+        if self.is_sleeping {
+            return Some(doses::Reason::Refused(doses::Refusal::Asleep));
+        }
+        if let Some(why) = self.body_refusal() {
+            return Some(why);
+        }
+        (self.cooldown_battle > 0).then(|| doses::Reason::Wait(self.cooldown_battle as u32 * 10))
+    }
+
+    /// The part of `battle_refusal` that is about the body: injured, too
+    /// weak or too drunk (the felt drink, as the fight reads it).
+    pub fn body_refusal(&self) -> Option<doses::Reason> {
+        use doses::{Reason, Refusal};
+        if self.injured_min > 0 {
+            Some(Reason::Refused(Refusal::Injured))
+        } else if (self.health as i32) < BATTLE_MIN_HEALTH_PCT() as i32 * P {
+            Some(Reason::Refused(Refusal::TooWeak))
+        } else if combat::felt(&combat::Body::of(self)) > BATTLE_DRUNK_PCT() as i32 {
+            Some(Reason::Refused(Refusal::TooDrunk))
+        } else {
+            None
+        }
     }
 
     /// Ticks left of a mini-game's cooldown.
@@ -1304,7 +1346,7 @@ impl GameState {
             Remedy::Game => {
                 let mut first = None;
                 for g in MiniGame::ALL {
-                    match self.game_refusal(Some(g)) {
+                    match self.game_refusal(g) {
                         None => return None,
                         why => first = first.or(why),
                     }
@@ -1707,6 +1749,18 @@ fn level_pct(v: u16) -> u8 {
     needs::pct(v as i32).min(100) as u8
 }
 
+/// How a fight ended for the pet that fought it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fought {
+    pub won: bool,
+    /// The pet's own HP left, in percent; sets the bruises.
+    pub hp_left_pct: u8,
+    /// The costs of a fight land (energy, strain, mood, bruises).
+    pub costs: bool,
+    /// A win can pay the prize.
+    pub paid: bool,
+}
+
 impl GameState {
     /// The pet as the fight sees it (plan 5): six numbers and the condition flags.
     pub fn snapshot(&self) -> combat::Snapshot {
@@ -1726,7 +1780,7 @@ impl GameState {
         }
 
         let can = |a: Action| self.refusal_for(a, None).is_none();
-        let can_game = |g: Option<MiniGame>| self.game_refusal(g).is_none();
+        let can_game = |g: MiniGame| self.game_refusal(g).is_none();
 
         PetStats {
             hunger: level_pct(self.fullness),
@@ -1784,12 +1838,12 @@ impl GameState {
             can_wash: can(Action::Wash),
             can_sleep: self.sleep_refusal().is_none(),
             can_wake: self.is_sleeping,
-            can_play_tictactoe: can_game(Some(MiniGame::TicTacToe)),
-            can_play_lightsout: can_game(Some(MiniGame::LightsOut)),
-            can_play_blackhole: can_game(Some(MiniGame::BlackHole)),
-            can_play_nim: can_game(Some(MiniGame::Nim)),
-            can_play_bornjeweled: can_game(Some(MiniGame::BornJeweled)),
-            can_battle: can_game(None),
+            can_play_tictactoe: can_game(MiniGame::TicTacToe),
+            can_play_lightsout: can_game(MiniGame::LightsOut),
+            can_play_blackhole: can_game(MiniGame::BlackHole),
+            can_play_nim: can_game(MiniGame::Nim),
+            can_play_bornjeweled: can_game(MiniGame::BornJeweled),
+            can_battle: self.battle_refusal().is_none(),
 
             cooldown_tictactoe: self.cooldown_tictactoe,
             cooldown_lightsout: self.cooldown_lightsout,
@@ -1875,19 +1929,53 @@ impl GameState {
         doses::friend(self, big);
     }
 
-    /// Record the outcome of a mesh Battle — see `crate::game::battle`.
-    /// Purely a lifetime win/loss tally plus the cooldown gate; battle HP
-    /// itself is never persisted or connected to any real stat, so a loss
-    /// here has no effect on the pet's actual health/lifecycle.
-    pub fn record_battle(&mut self, won: bool) {
-        if won {
-            self.wins = self.wins.saturating_add(1);
-        } else {
-            self.losses = self.losses.saturating_add(1);
+    /// A fight this pet took part in is over (spec 12.2, 12.5, 18.8). With
+    /// `costs` the costs land (`doses::battle`); every call starts the rest
+    /// (only fighters reach it), records the result in the league the pet is
+    /// in, and pays the prize when `paid` and won: `BATTLE_PRIZE_FIRST_HAX`
+    /// for the first paid win until the next local midnight, then
+    /// `BATTLE_PRIZE_LATER_HAX`. Returns the HAX paid (0 when none).
+    pub fn fight_over(&mut self, f: Fought) -> u32 {
+        if f.costs {
+            doses::battle(self, f.won, f.hp_left_pct);
         }
         self.cooldown_battle = BATTLE_COOLDOWN();
-        if won && self.money_live() {
-            self.add_money(BATTLE_HAX_REWARD);
+        self.record_only(f.won);
+        let mut prize = 0;
+        if f.paid && f.won && self.money_live() {
+            if self.prize_min == 0 {
+                prize = BATTLE_PRIZE_FIRST_HAX() as u32;
+                let day = demo::MINUTES_PER_DAY;
+                self.prize_min = self.day_min.map_or(day, |m| day - m.min(day));
+            } else {
+                prize = BATTLE_PRIZE_LATER_HAX() as u32;
+            }
+            self.add_money(prize);
+        }
+        prize
+    }
+
+    /// A result for a fight this pet did not take part in (it heard a
+    /// fallback RESULT): the record of the current league and nothing else,
+    /// no cost, no mood, no rest, no HAX.
+    pub fn record_only(&mut self, won: bool) {
+        let (wins, losses) = if self.demo.on {
+            (&mut self.demo_wins, &mut self.demo_losses)
+        } else {
+            (&mut self.wins, &mut self.losses)
+        };
+        let n = if won { wins } else { losses };
+        *n = n.saturating_add(1);
+        self.request_save();
+    }
+
+    /// `(wins, losses)` of the league the pet is in now: the demo record in
+    /// demo mode, else the player's.
+    pub fn battle_record(&self) -> (u16, u16) {
+        if self.demo.on {
+            (self.demo_wins, self.demo_losses)
+        } else {
+            (self.wins, self.losses)
         }
     }
 
@@ -2097,11 +2185,11 @@ impl GameState {
         // Action state.
         w.u8(self.active_action.map_or(NONE_BYTE, Action::to_u8));
         w.u8(self.action_ticks_remaining);
-        w.u16(0); // cooldown_feed (removed)
+        w.u16(self.demo_wins); // old cooldown_feed
         w.u16(self.med_cd_min); // cooldown_heal
-        w.u16(0); // cooldown_relax (removed)
-        w.u16(0); // cooldown_play (removed)
-        w.u16(0); // cooldown_exercise (removed)
+        w.u16(self.demo_losses); // old cooldown_relax
+        w.u16(self.prize_min); // old cooldown_play
+        w.u16(self.decline_min); // old cooldown_exercise
         w.u16(self.insulin_min); // cooldown_medicate
         w.u16(self.ozempic_cd_min); // cooldown_ozempic
         w.u16(0); // cooldown_drink (removed)
@@ -2183,6 +2271,12 @@ impl GameState {
         s.mood = h.levels[3];
         s.booze = h.booze;
         s.leaving_min = h.leaving;
+        // The battle slots (format 3 only): a plan-3 save has zeros here. A
+        // damaged value is held to its limit, never a day-long penalty.
+        s.demo_wins = h.cooldowns[0];
+        s.demo_losses = h.cooldowns[2];
+        s.prize_min = h.cooldowns[3].min(demo::MINUTES_PER_DAY);
+        s.decline_min = h.cooldowns[4].min(BATTLE_DECLINE_MIN());
         s.med_cd_min = h.cooldowns[1];
         s.insulin_min = h.cooldowns[5];
         s.ozempic_cd_min = h.cooldowns[6];
@@ -2670,21 +2764,22 @@ mod overweight_diabetes_tests {
         assert!(!state.can_afford(21));
     }
 
-    /// `record_battle` bumps the right counter and always sets the
-    /// cooldown, regardless of win/loss.
+    /// `fight_over` bumps the right counter and always sets the rest,
+    /// regardless of win/loss.
     #[test]
-    fn record_battle_updates_counters_and_cooldown() {
+    fn fight_over_updates_counters_and_cooldown() {
+        let fought = |won| Fought { won, hp_left_pct: 50, costs: true, paid: false };
         let mut state = GameState::new_egg(1, PetKind::DEFAULT);
         assert_eq!(state.wins, 0);
         assert_eq!(state.losses, 0);
 
-        state.record_battle(true);
+        state.fight_over(fought(true));
         assert_eq!(state.wins, 1);
         assert_eq!(state.losses, 0);
         assert_eq!(state.cooldown_battle, BATTLE_COOLDOWN());
 
         state.cooldown_battle = 0;
-        state.record_battle(false);
+        state.fight_over(fought(false));
         assert_eq!(state.wins, 1);
         assert_eq!(state.losses, 1);
         assert_eq!(state.cooldown_battle, BATTLE_COOLDOWN());
@@ -2735,24 +2830,25 @@ mod overweight_diabetes_tests {
         assert_eq!(state.money, 0, "money off should grant no HAX");
     }
 
-    /// A mesh Battle win credits `BATTLE_HAX_REWARD` HAX; a loss grants
-    /// nothing. With money mode off, even a win grants nothing.
+    /// A paid mesh Battle win credits HAX; a loss grants nothing. With
+    /// money mode off, even a win grants nothing.
     #[test]
     fn battle_win_awards_hax_winner_only() {
+        let fought = |won| Fought { won, hp_left_pct: 50, costs: true, paid: true };
         let mut state = GameState::new_egg(31, PetKind::DEFAULT);
         state.money_enabled = true;
         state.money = 0;
 
-        state.record_battle(true);
-        assert_eq!(state.money, BATTLE_HAX_REWARD);
+        assert_eq!(state.fight_over(fought(true)), BATTLE_PRIZE_FIRST_HAX() as u32);
+        assert_eq!(state.money, BATTLE_PRIZE_FIRST_HAX() as u32);
 
         state.money = 0;
-        state.record_battle(false);
+        state.fight_over(fought(false));
         assert_eq!(state.money, 0, "a loss should not award HAX");
 
         state.money = 0;
         state.money_enabled = false;
-        state.record_battle(true);
+        state.fight_over(fought(true));
         assert_eq!(state.money, 0, "money off should grant no HAX even on a win");
     }
 

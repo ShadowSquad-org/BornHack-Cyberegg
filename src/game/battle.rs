@@ -181,20 +181,8 @@ const MIN_SIZE: usize = 7;
 const FULL_SIZE: usize = 9;
 
 /// Sentinel species used when a legacy packet carries no `kind` bytes. Not a
-/// real pet id — the receiver resolves it via the friend record or the generic
-/// placeholder pet (see [`resolve_kind`]).
+/// real pet id.
 pub const KIND_UNKNOWN: u8 = 0xFF;
-
-/// Resolve a combatant's sprite species: use `kind` when it's a real value,
-/// else fall back to the stored friend record for `device_id`, else sprite
-/// prefix 0. There is no generic placeholder sprite set — prefix 0 is drawn
-/// on the assumption `PETS.CFG` declares a pet there, as the shipped one does.
-pub fn resolve_kind(kind: u8, device_id: [u8; 2]) -> u8 {
-    if kind != KIND_UNKNOWN {
-        return kind;
-    }
-    super::friends::pet_kind_of(device_id).unwrap_or(super::engine::PetKind::DEFAULT.id())
-}
 
 impl BattleResultMsg {
     pub fn to_bytes(&self) -> [u8; FULL_SIZE] {
@@ -283,8 +271,9 @@ fn broadcast_result(_msg: &BattleResultMsg) {}
 /// friend), and broadcast it so the friend's badge can sync its own side
 /// of the same head-to-head tally.
 ///
-/// Returns `None` if no pet is currently active.
-pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
+/// Returns the outcome and the HAX it paid, or `None` if no pet is currently
+/// active.
+pub fn challenge(friend: &FriendRecord) -> Option<(BattleOutcome, u32)> {
     // Refuse a self-battle outright — this should never come up through
     // the normal Friends flow (`friends::on_pet_beacon` already ignores
     // our own beacon echo, so we should never appear in our own list),
@@ -307,7 +296,12 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
         ^ (friend.device_id[1] as u32);
     let outcome = simulate(seed, my_stats, their_stats);
 
-    super::lifecycle::record_battle(outcome.challenger_won);
+    let hax = super::lifecycle::fight_over(super::engine::Fought {
+        won: outcome.challenger_won,
+        hp_left_pct: outcome.challenger_hp_pct,
+        costs: true,
+        paid: true,
+    });
     super::friends::record_battle_vs(friend.device_id, outcome.challenger_won);
 
     let my_kind = super::lifecycle::pet_kind().id();
@@ -332,7 +326,7 @@ pub fn challenge(friend: &FriendRecord) -> Option<BattleOutcome> {
         friend.device_id,
     );
 
-    Some(outcome)
+    Some((outcome, hax))
 }
 
 // ---------------------------------------------------------------------------
@@ -366,30 +360,18 @@ pub async fn on_battle_result(data: &[u8]) {
     }
 
     // From our side, the challenger's result is inverted: their win is
-    // our loss. Update both the overall tally and our head-to-head
-    // record against the challenger specifically, so it reads the same
-    // from either badge — a no-op on the head-to-head side if we've
-    // never received a beacon from this challenger (not yet a known
-    // friend on our side, even though we were just battled).
+    // our loss. This pet did not fight: only the record changes, in the
+    // overall tally and in the head-to-head record against the challenger
+    // (a no-op on the head-to-head side if we've never received a beacon
+    // from this challenger). Nothing is paid and nothing is spent.
     let we_won = !msg.challenger_won;
-    super::lifecycle::record_battle(we_won);
+    super::lifecycle::record_only(we_won);
     super::friends::record_battle_vs(msg.challenger_id, we_won);
-
-    // Replay the battle as a full-screen animation instead of a toast: our pet
-    // (left) vs the challenger (right, mirrored). The challenger's species comes
-    // from the packet when present, else the stored friend record, else the
-    // generic placeholder pet (see `resolve_kind`).
-    let own_kind = super::lifecycle::pet_kind().id();
-    let opp_kind = resolve_kind(msg.challenger_kind, msg.challenger_id);
-    // From our side the HP swaps: our pet's HP is the packet's target HP.
-    super::show_battle_anim(
-        own_kind,
-        opp_kind,
-        we_won,
-        msg.target_hp_pct,
-        msg.challenger_hp_pct,
-        msg.challenger_id,
-    );
+    super::show_toast(if we_won {
+        super::Toast::BattleWon
+    } else {
+        super::Toast::BattleLost
+    });
 }
 
 #[cfg(test)]

@@ -275,7 +275,7 @@ fn allowed(s: &GameState, c: Choice) -> bool {
         Choice::Wake => s.is_sleeping,
         Choice::Wash => s.refusal_for(Action::Wash, None).is_none(),
         Choice::Play => s.refusal_for(Action::Play, None).is_none(),
-        Choice::Game(g, _) => s.game_refusal(Some(g)).is_none(),
+        Choice::Game(g, _) => s.game_refusal(g).is_none(),
         Choice::Relax => s.refusal_for(Action::Relax, None).is_none(),
         Choice::Medicine => s.refusal_for(Action::Heal, None).is_none(),
         Choice::Insulin => s.refusal_for(Action::Medicate, None).is_none(),
@@ -358,7 +358,7 @@ fn play_or_game(s: &GameState) -> Choice {
         let start = s.demo_rng as usize % GAME_COUNT;
         let game = (0..GAME_COUNT)
             .map(|k| MiniGame::ALL[(start + k) % GAME_COUNT])
-            .find(|&g| s.game_refusal(Some(g)).is_none());
+            .find(|&g| s.game_refusal(g).is_none());
         if let Some(g) = game {
             return Choice::Game(g, (s.demo_rng % GRADES as u32) as u8);
         }

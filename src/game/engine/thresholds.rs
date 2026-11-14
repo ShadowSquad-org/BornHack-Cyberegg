@@ -122,6 +122,23 @@ thresholds_table! {
     BATTLE_FORM_TOP_PCT: u8,
     BATTLE_FORM_IN_PCT: u8,
     BATTLE_FORM_OFF_PCT: u8,
+    BATTLE_PAIR_COOLDOWN_MIN: u16,
+    BATTLE_ENERGY_PCT: u8,
+    BATTLE_WATER_PCT: u8,
+    BATTLE_FUN_PCT: u8,
+    BATTLE_DIRT_PCT: u8,
+    BATTLE_STRAIN_PCT: u8,
+    BATTLE_STRAIN_NEED_PCT: u16,
+    BATTLE_STRAIN_RESTED_PCT: u16,
+    BATTLE_BRUISE_MAX_PCT: u8,
+    BATTLE_MOOD_PCT: u8,
+    BATTLE_MIN_HEALTH_PCT: u8,
+    BATTLE_DRUNK_PCT: u8,
+    BATTLE_PRIZE_FIRST_HAX: u16,
+    BATTLE_PRIZE_LATER_HAX: u16,
+    BATTLE_PRIZE_BEACON_MIN: u16,
+    BATTLE_DECLINE_MOOD_PCT: u8,
+    BATTLE_DECLINE_MIN: u16,
     // v3 need bands (percent, 1..=99); see engine::needs
     FULL_LO_PCT: u8,
     FULL_HI_PCT: u8,
@@ -449,7 +466,7 @@ impl Thresholds {
 
         REHAB_DURATION: 3,
 
-        BATTLE_COOLDOWN: 12,
+        BATTLE_COOLDOWN: 180,
         BATTLE_POWER_BASE_PTS: 22,
         BATTLE_POWER_WEIGHT_PCT: 28,
         BATTLE_COURAGE_PEAK_PTS: 8,
@@ -481,6 +498,23 @@ impl Thresholds {
         BATTLE_FORM_TOP_PCT: 65,
         BATTLE_FORM_IN_PCT: 50,
         BATTLE_FORM_OFF_PCT: 30,
+        BATTLE_PAIR_COOLDOWN_MIN: 60,
+        BATTLE_ENERGY_PCT: 10,
+        BATTLE_WATER_PCT: 8,
+        BATTLE_FUN_PCT: 20,
+        BATTLE_DIRT_PCT: 8,
+        BATTLE_STRAIN_PCT: 20,
+        BATTLE_STRAIN_NEED_PCT: 150,
+        BATTLE_STRAIN_RESTED_PCT: 70,
+        BATTLE_BRUISE_MAX_PCT: 5,
+        BATTLE_MOOD_PCT: 8,
+        BATTLE_MIN_HEALTH_PCT: 30,
+        BATTLE_DRUNK_PCT: 70,
+        BATTLE_PRIZE_FIRST_HAX: 100,
+        BATTLE_PRIZE_LATER_HAX: 20,
+        BATTLE_PRIZE_BEACON_MIN: 30,
+        BATTLE_DECLINE_MOOD_PCT: 3,
+        BATTLE_DECLINE_MIN: 60,
 
         FULL_LO_PCT: 38,
         FULL_HI_PCT: 78,
@@ -806,7 +840,7 @@ impl Thresholds {
 
         REHAB_DURATION: 3,
 
-        BATTLE_COOLDOWN: 12,
+        BATTLE_COOLDOWN: 180,
         BATTLE_POWER_BASE_PTS: 22,
         BATTLE_POWER_WEIGHT_PCT: 28,
         BATTLE_COURAGE_PEAK_PTS: 8,
@@ -838,6 +872,23 @@ impl Thresholds {
         BATTLE_FORM_TOP_PCT: 65,
         BATTLE_FORM_IN_PCT: 50,
         BATTLE_FORM_OFF_PCT: 30,
+        BATTLE_PAIR_COOLDOWN_MIN: 60,
+        BATTLE_ENERGY_PCT: 10,
+        BATTLE_WATER_PCT: 8,
+        BATTLE_FUN_PCT: 20,
+        BATTLE_DIRT_PCT: 8,
+        BATTLE_STRAIN_PCT: 20,
+        BATTLE_STRAIN_NEED_PCT: 150,
+        BATTLE_STRAIN_RESTED_PCT: 70,
+        BATTLE_BRUISE_MAX_PCT: 2,
+        BATTLE_MOOD_PCT: 8,
+        BATTLE_MIN_HEALTH_PCT: 30,
+        BATTLE_DRUNK_PCT: 70,
+        BATTLE_PRIZE_FIRST_HAX: 100,
+        BATTLE_PRIZE_LATER_HAX: 20,
+        BATTLE_PRIZE_BEACON_MIN: 30,
+        BATTLE_DECLINE_MOOD_PCT: 3,
+        BATTLE_DECLINE_MIN: 60,
 
         FULL_LO_PCT: 33,
         FULL_HI_PCT: 83,
@@ -2028,6 +2079,24 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("BATTLE_FORM_TOP_PCT", |t, v| t.BATTLE_FORM_TOP_PCT = clamp_pct(v)),
     ("BATTLE_FORM_IN_PCT", |t, v| t.BATTLE_FORM_IN_PCT = clamp_pct(v)),
     ("BATTLE_FORM_OFF_PCT", |t, v| t.BATTLE_FORM_OFF_PCT = clamp_pct(v)),
+    ("BATTLE_COOLDOWN", |t, v| t.BATTLE_COOLDOWN = clamp_u16(v)),
+    ("BATTLE_PAIR_COOLDOWN_MIN", |t, v| t.BATTLE_PAIR_COOLDOWN_MIN = clamp_u16(v)),
+    ("BATTLE_ENERGY_PCT", |t, v| t.BATTLE_ENERGY_PCT = v.min(100) as u8),
+    ("BATTLE_WATER_PCT", |t, v| t.BATTLE_WATER_PCT = v.min(100) as u8),
+    ("BATTLE_FUN_PCT", |t, v| t.BATTLE_FUN_PCT = v.min(100) as u8),
+    ("BATTLE_DIRT_PCT", |t, v| t.BATTLE_DIRT_PCT = v.min(100) as u8),
+    ("BATTLE_STRAIN_PCT", |t, v| t.BATTLE_STRAIN_PCT = v.min(100) as u8),
+    ("BATTLE_STRAIN_NEED_PCT", |t, v| t.BATTLE_STRAIN_NEED_PCT = clamp_mult(v)),
+    ("BATTLE_STRAIN_RESTED_PCT", |t, v| t.BATTLE_STRAIN_RESTED_PCT = clamp_mult(v)),
+    ("BATTLE_BRUISE_MAX_PCT", |t, v| t.BATTLE_BRUISE_MAX_PCT = v.min(100) as u8),
+    ("BATTLE_MOOD_PCT", |t, v| t.BATTLE_MOOD_PCT = v.min(100) as u8),
+    ("BATTLE_MIN_HEALTH_PCT", |t, v| t.BATTLE_MIN_HEALTH_PCT = clamp_pct(v)),
+    ("BATTLE_DRUNK_PCT", |t, v| t.BATTLE_DRUNK_PCT = clamp_pct(v)),
+    ("BATTLE_PRIZE_FIRST_HAX", |t, v| t.BATTLE_PRIZE_FIRST_HAX = clamp_u16(v)),
+    ("BATTLE_PRIZE_LATER_HAX", |t, v| t.BATTLE_PRIZE_LATER_HAX = clamp_u16(v)),
+    ("BATTLE_PRIZE_BEACON_MIN", |t, v| t.BATTLE_PRIZE_BEACON_MIN = clamp_u16(v)),
+    ("BATTLE_DECLINE_MOOD_PCT", |t, v| t.BATTLE_DECLINE_MOOD_PCT = v.min(100) as u8),
+    ("BATTLE_DECLINE_MIN", |t, v| t.BATTLE_DECLINE_MIN = clamp_u16(v)),
 ];
 
 /// Last minute of the day, the most a bedtime or getting-up line can be.
@@ -2094,6 +2163,12 @@ pub fn validate(t: &Thresholds, preset: &Thresholds) -> Thresholds {
         r.BATTLE_FORM_IN_PCT = preset.BATTLE_FORM_IN_PCT;
         r.BATTLE_FORM_TOP_PCT = preset.BATTLE_FORM_TOP_PCT;
     }
+    if r.BATTLE_PRIZE_LATER_HAX > r.BATTLE_PRIZE_FIRST_HAX {
+        r.BATTLE_PRIZE_FIRST_HAX = preset.BATTLE_PRIZE_FIRST_HAX;
+        r.BATTLE_PRIZE_LATER_HAX = preset.BATTLE_PRIZE_LATER_HAX;
+    }
+    // A fight that costs no rest at all would let a pet battle in a loop.
+    r.BATTLE_COOLDOWN = r.BATTLE_COOLDOWN.max(1);
     if r.DIABETES_WEIGHT_LO_PCT >= r.DIABETES_WEIGHT_HI_PCT {
         r.DIABETES_WEIGHT_LO_PCT = preset.DIABETES_WEIGHT_LO_PCT;
         r.DIABETES_WEIGHT_HI_PCT = preset.DIABETES_WEIGHT_HI_PCT;

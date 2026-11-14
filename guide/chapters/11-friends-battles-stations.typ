@@ -75,18 +75,20 @@ rounds, whoever has more HP left wins.
 #w("YOU WON!") or #w("YOU LOST"). The card is titled #w("Battle Result").
 Your side is labelled #w("You") and the friend's side carries the friend's
 name, or #w("Friend") when the name is empty. In money mode a win also shows
-#w("+<n> HAX"), the reward of #v("BATTLE_HAX_REWARD"), and pays it. Just before the card, a short
+#w("+<n> HAX"), the reward of #v("BATTLE_PRIZE_FIRST_HAX") for the first win of the day and #v("BATTLE_PRIZE_LATER_HAX") after, and pays it. Just before the card, a short
 full-screen picture shows both pets standing, and then the winner and the
 loser. The card says #w("Any button to close"), and any button does. If no
 fight has been played yet, it says #w("No result yet").
 
-*It cannot hurt the pet.* Battle HP exists only for the length of the fight.
-A loss changes the record and nothing else.
+*A fight costs.* Battle HP exists only for the length of the fight, but the
+pet pays for it: energy -#v("BATTLE_ENERGY_PCT"), water -#v("BATTLE_WATER_PCT"),
+some strain, a few bruises, and the #v("BATTLE_COOLDOWN") rest. A pet that is
+injured, too weak, too drunk or asleep does not fight.
 
 *The other badge.* The result is also sent out for the friend's badge to hear.
 If it is in direct radio range, it counts the fight the other way round (your
-win is its loss), starts its own #v("BATTLE_COOLDOWN") rest, replays the
-picture, and pays its pet if that pet won and it plays with money. The
+win is its loss) and shows a short toast. That pet did not fight, so it
+pays nothing, costs nothing and takes no rest. The
 result does not travel across repeaters.
 
 #tbl((auto, 1fr),
