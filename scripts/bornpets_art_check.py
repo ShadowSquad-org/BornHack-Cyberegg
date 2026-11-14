@@ -153,6 +153,8 @@ def used_clusters(to_badge_dir=TO_BADGE) -> int:
 
 
 def budget(export_dir, to_badge_dir=TO_BADGE) -> dict:
+    if not Path(export_dir).is_dir():
+        raise ValueError(f"export dir {export_dir} does not exist")
     files, missing = [], []
     for name in new_files():
         p = Path(export_dir) / name
@@ -417,7 +419,11 @@ def main(argv=None) -> int:
             print(f"not a shipped new-state name: {', '.join(foreign)}")
         return 1 if res["changed"] or res["removed"] or foreign else 0
     if a.cmd == "budget":
-        res = budget(a.export)
+        try:
+            res = budget(a.export)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
         for name, n, c in res["files"]:
             print(f"{name}  {n:6d} B  {c} cl{'  OVER 2048' if n > CLUSTER_BYTES else ''}")
         for name in res["missing"]:

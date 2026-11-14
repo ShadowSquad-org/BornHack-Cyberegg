@@ -139,7 +139,14 @@ class Checker(unittest.TestCase):
             self.assertEqual(ac.used_clusters(t), 3)
             res = ac.budget(e, t)
             self.assertEqual((res["assumed_used"], res["measured_used"]), (429, 3))
-        self.assertEqual(ac.used_clusters(), ac.budget(e)["measured_used"])
+            self.assertEqual(ac.budget(e)["measured_used"], ac.used_clusters(ac.TO_BADGE))
+
+    def test_budget_on_a_missing_export_dir_is_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            gone = Path(t, "nope")
+            with self.assertRaises(ValueError) as cm:
+                ac.budget(gone)
+            self.assertIn(str(gone), str(cm.exception))
 
     def test_budget_counts_and_lists_files_over_2048(self):
         with tempfile.TemporaryDirectory() as t:
