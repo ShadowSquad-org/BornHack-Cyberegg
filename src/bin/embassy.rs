@@ -851,6 +851,23 @@ async fn display_loop(
         #[cfg(feature = "game")]
         if bornhack_aegg::game::battle_anim_active() {
             let anim_speed = bornhack_aegg::fw::epd::current_lut_speed();
+            // The challenger's exact chance (the ACCEPT just came in) shows
+            // once, as one refresh, before the animation (spec 12.4).
+            if bornhack_aegg::game::battle_view::take_pre_show() {
+                use embedded_graphics::draw_target::DrawTarget;
+                let _ = driver.clear(EpdColor::White);
+                {
+                    let (display, _ps) = driver.staged_parts_mut();
+                    let _ = display.reset().await;
+                }
+                let _ = bornhack_aegg::game::battle_view::draw_queued_pre(driver);
+                {
+                    let (display, _ps) = driver.staged_parts_mut();
+                    let _ = display.update_tc(anim_speed).await;
+                    let _ = display.deep_sleep().await;
+                }
+                Timer::after_millis(2_000).await;
+            }
             // Drive the two stages EXPLICITLY, holding each ~5 s after its
             // refresh completes. Deriving the stage from wall-clock elapsed
             // would skip the result frame: a single e-paper refresh takes
@@ -1111,6 +1128,13 @@ async fn display_loop_1680<D>(
         // screen underneath (the battle result card) is drawn again.
         #[cfg(feature = "game")]
         if bornhack_aegg::game::battle_anim_active() {
+            // The challenger's exact chance shows once before the animation.
+            if bornhack_aegg::game::battle_view::take_pre_show() {
+                let _ = display.clear(bornhack_aegg::color::EpdColor::White);
+                let _ = bornhack_aegg::game::battle_view::draw_queued_pre(display);
+                let _ = display.refresh(RefreshMode::Fast).await;
+                Timer::after_millis(2_000).await;
+            }
             for stage in [
                 bornhack_aegg::game::BattleStage::Standing,
                 bornhack_aegg::game::BattleStage::Result,

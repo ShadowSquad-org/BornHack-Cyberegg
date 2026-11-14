@@ -913,6 +913,13 @@ fn row_text(item: Item, stats: Option<&super::engine::PetStats>) -> heapless::St
             // Rows with no wait to show get no suffix: selecting one tells
             // the player why (R24).
             let _ = text.push_str(wait.as_str());
+        } else if matches!(item, Item::Battle)
+            && item.available(s)
+            && let Some(form) = super::lifecycle::battle_form()
+        {
+            // The pet's form tells the player what a fight is worth now.
+            let _ = text.push_str(": ");
+            let _ = text.push_str(form.text());
         } else if let Some(price) = item.hax_price(s)
             && s.money_enabled
         {
@@ -959,6 +966,15 @@ pub fn menu_words() -> std::vec::Vec<(&'static str, std::string::String)> {
             f => f.full_name(),
         };
         out.push(("menu", name.to_string()));
+    }
+    for t in [
+        "Battle: <form>",
+        "top form",
+        "in form",
+        "off form",
+        "poor form",
+    ] {
+        out.push(("menu", t.to_string()));
     }
     for t in ["<price>H", "risk: <what>", "!"] {
         out.push(("menu", t.to_string()));
@@ -1880,6 +1896,25 @@ mod tests {
             true
         });
         lifecycle::cycle().unwrap()
+    }
+
+    #[test]
+    fn battle_row_shows_the_form() {
+        let _guard = crate::game::lock_test_state();
+        let mut stats = menu_pet(false, false, |_| {});
+        let form = lifecycle::battle_form().expect("a pet is active");
+        stats.can_battle = true;
+        stats.cooldown_battle = 0;
+        let want = format!("Battle: {}", form.text());
+        assert_eq!(super::row_text(Item::Battle, Some(&stats)).as_str(), want);
+        // Not available: the plain label (the reason shows when selected).
+        stats.can_battle = false;
+        assert_eq!(super::row_text(Item::Battle, Some(&stats)).as_str(), "Battle");
+        // Every form fits the 17 columns with its label.
+        use crate::game::engine::combat::Form;
+        for f in [Form::Top, Form::In, Form::Off, Form::Poor] {
+            assert!(format!("Battle: {}", f.text()).len() <= 17);
+        }
     }
 
     #[test]

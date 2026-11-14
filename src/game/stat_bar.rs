@@ -53,6 +53,40 @@ where
     draw_bar_pct(display, pct, bar_origin, bar_size)
 }
 
+/// A bar `w` px wide and 6 px high with a 1 px outline, filled `pct` from the
+/// left, or from the right when `from_right`. No label, no number: the
+/// pre-battle screen draws two of them facing each other.
+pub fn draw_mirrored_bar<D>(
+    d: &mut D,
+    x: i32,
+    y: i32,
+    w: u32,
+    pct: u8,
+    from_right: bool,
+    color: TriColor,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    const H: u32 = 6;
+    Rectangle::new(Point::new(x, y), Size::new(w, H))
+        .into_styled(PrimitiveStyle::with_stroke(BLACK, 1))
+        .draw(d)?;
+    let inner = w.saturating_sub(2);
+    let fill = pct.min(100) as u32 * inner / 100;
+    if fill > 0 {
+        let fx = if from_right {
+            x + 1 + (inner - fill) as i32
+        } else {
+            x + 1
+        };
+        Rectangle::new(Point::new(fx, y + 1), Size::new(fill, H - 2))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(d)?;
+    }
+    Ok(())
+}
+
 /// The label, the outline and the fill of a bar (everything but the inline
 /// percentage).
 fn draw_bar_body<D>(
@@ -285,5 +319,28 @@ mod tests {
         // The glyph pixels are still there.
         let area = Rectangle::new(Point::new(tx - 9, 43), Size::new(19, 14));
         assert!(d.canvas.any(area, WHITE) && d.canvas.any(area, BLACK));
+    }
+
+    #[test]
+    fn mirrored_bar_fills_from_the_chosen_side() {
+        let mut c = Canvas::new();
+        draw_mirrored_bar(&mut c, 2, 10, 60, 50, false, BLACK).unwrap();
+        assert_eq!(c.get(5, 13), BLACK, "left half filled");
+        assert_eq!(c.get(55, 13), WHITE, "right half empty");
+        let mut c = Canvas::new();
+        draw_mirrored_bar(&mut c, 90, 10, 60, 50, true, BLACK).unwrap();
+        assert_eq!(c.get(146, 13), BLACK, "right half filled");
+        assert_eq!(c.get(95, 13), WHITE, "left half empty");
+        // Never outside its 60 x 6 box.
+        assert_eq!(c.get(89, 13), WHITE);
+        assert_eq!(c.get(150, 13), WHITE);
+        assert_eq!(c.get(120, 16), WHITE);
+        // 0 % and 100 %.
+        let mut c = Canvas::new();
+        draw_mirrored_bar(&mut c, 2, 10, 60, 100, false, RED).unwrap();
+        assert_eq!(c.get(60, 13), RED);
+        let mut c = Canvas::new();
+        draw_mirrored_bar(&mut c, 2, 10, 60, 0, false, RED).unwrap();
+        assert_eq!(c.get(30, 13), WHITE);
     }
 }

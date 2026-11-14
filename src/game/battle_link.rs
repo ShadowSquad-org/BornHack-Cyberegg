@@ -9,7 +9,7 @@
 
 use super::battle::{
     AcceptMsg, BattleResultMsg, ChallengeMsg, DeclineMsg, Fight, Me, Out, Outs, Packet, PreBattle,
-    Session,
+    Role, Session,
 };
 use super::engine::PET_NAME_MAX;
 use super::engine::doses::{Reason, Refusal};
@@ -80,6 +80,7 @@ fn run(f: impl FnOnce(&Me, &mut super::engine::GameState, &mut Session) -> Outs)
 fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
     let mut fought = false;
     let mut closed = false;
+    let mut shown = false;
     for out in outs.iter() {
         match *out {
             Out::Send(p) => send(&p),
@@ -91,12 +92,21 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
                 }
             }
             Out::Show => {
+                shown = true;
                 super::battle_view::open_pre_battle();
                 wake_display();
             }
             Out::Close => closed = true,
             Out::Fought(f) => {
                 fought = true;
+                // The challenger's ACCEPT pushes `Show` (the exact chance)
+                // just before `Fought`: queue that screen so the display
+                // draws it once before the animation takes over (spec 12.4).
+                if shown
+                    && let Some(pre) = session().view().filter(|p| p.role == Role::Challenger)
+                {
+                    super::battle_view::queue_pre_show(pre);
+                }
                 let (name, len) = peer_name(&f, before);
                 unsafe { *LAST_FIGHT.get() = Some(f) };
                 super::battle_view::show_fight(name, len, f);
