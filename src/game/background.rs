@@ -10,7 +10,7 @@ use super::engine::scene::{BackgroundState, FLOOR_ITEMS, Sky};
 use crate::{BLACK, RED, TriColor, WHITE};
 
 /// First and last sky row (the pet area starts under the separator at y 34).
-pub const SKY_TOP: i32 = 35;
+pub const SKY_TOP: i32 = super::PET_AREA_TOP as i32;
 pub const SKY_BOTTOM: i32 = 99;
 /// First and last floor row.
 pub const FLOOR_TOP: i32 = 100;
@@ -581,18 +581,21 @@ mod budget {
     }
 
     /// Night is 21:00 to 07:00 (`scene::is_night`): 120 of the 288 idle frames.
-    const NIGHT_FRAMES: u32 = 10 * 3600 / pacing::IDLE_FRAME_SECS as u32;
+    fn night_frames() -> u32 {
+        let night_min = (0..1440u16).filter(|&m| crate::game::engine::scene::is_night(m)).count() as u32;
+        night_min * 60 / pacing::IDLE_FRAME_SECS as u32
+    }
 
     #[test]
     fn ssd1675_promotions_stay_bounded() {
         assert_eq!(IDLE_FRAMES_PER_DAY, 288);
-        assert_eq!(NIGHT_FRAMES, 120);
-        let day_frames = IDLE_FRAMES_PER_DAY - NIGHT_FRAMES;
+        assert_eq!(night_frames(), 120);
+        let day_frames = IDLE_FRAMES_PER_DAY - night_frames();
         let switch_px = changed_px(&drawn_sky(Sky::Day), &drawn_sky(Sky::Night));
         let (plain_worst, pairs) = worst_frame_step(Sky::Plain);
         let (day_worst, day_pairs) = worst_frame_step(Sky::Day);
         let (night_worst, night_pairs) = worst_frame_step(Sky::Night);
-        // The roster has 7 pets, each with several animated idle-paced anims.
+        // The roster has 6 pets, each with several animated idle-paced anims.
         assert!(
             pairs >= 20 && day_pairs == pairs && night_pairs == pairs,
             "{pairs} pairs measured"
@@ -601,7 +604,7 @@ mod budget {
         let per_day = |px: u32| px as f32 / SSD1675_FULL_AFTER_PX as f32;
         // Worst step on every frame: an upper bound. Baseline = backgrounds off.
         let base = per_day(IDLE_FRAMES_PER_DAY * plain_worst);
-        let real = per_day(day_frames * day_worst + NIGHT_FRAMES * night_worst + 2 * switch_px);
+        let real = per_day(day_frames * day_worst + night_frames() * night_worst + 2 * switch_px);
         let day_only = per_day(IDLE_FRAMES_PER_DAY * day_worst);
         let added = real - base;
         eprintln!(

@@ -1202,6 +1202,7 @@ where
 
         let anim = lifecycle::display_anim();
         let anim_name: &str = match anim {
+            // Unreachable: the guard above excludes Gone; kept for exhaustiveness.
             DisplayAnim::Gone => "GONE",
             DisplayAnim::Hibernating => "HIBERNATE",
             DisplayAnim::Hatching { .. } => "HATCHING",
