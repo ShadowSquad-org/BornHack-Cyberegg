@@ -76,63 +76,6 @@ the line, with an ordinary quiet redraw, not a flash.
 When the pet is poorly, a small red cross shows in the sky. It comes with
 the red status line.
 
-A hibernating pet is frozen, so its status line is empty.
-The battery meter sits in the top corner too, above the balance.]
-
-#tip[Toasts are polite. They go away by themselves. The status line stays
-until the problem is fixed.]
-
-== Sky and floor
-
-Behind your pet there is a little world. It tells you the time of day and
-how clean the room is, before you read a single word.
-
-=== The sky
-
-#grid(columns: (1fr, 1fr), column-gutter: 4mm, align: top + center,
-  screen("day", width: shot-m, caption: [Day: white, with a sun and a cloud.]),
-  screen("night", width: shot-m, caption: [Night: dark, with a moon.]))
-
-By day the sky is white, with a sun and a small cloud. At night the sky is a dark
-dither, with a moon and a few stars. Night runs from #v("BG_NIGHT_FROM_MIN")
-to #v("BG_NIGHT_TO_MIN") by the badge's clock. Both times are the hour of
-the day, counted from midnight. If the clock was never set, the badge cannot
-tell, and the sky stays plain white.
-
-The night sky is only a picture of the hour. It is *not* the pet's bedtime. A
-pet can be up and about at night, and it can nap in broad daylight.
-
-The sky costs no extra screen flashes. It changes when the clock crosses
-the line, with an ordinary quiet redraw, not a flash.
-
-=== The floor
-
-#grid(columns: (auto, 1fr), column-gutter: 5mm, align: top,
-  screen("floor", width: shot-m, caption: [A filthy floor.]),
-  [
-    A dirty pet leaves a mess. Things pile up on the floor as dirt rises,
-    one more each time dirt reaches a line:
-
-    #word-table(see: false,
-      table.header([*On the floor*], [*Dirt reaches*]),
-      [Crumbs], [#v("FLOOR_CRUMBS_DIRT_PCT")],
-      [A peel], [#v("FLOOR_PEEL_DIRT_PCT")],
-      [A can], [#v("FLOOR_CAN_DIRT_PCT")],
-      [A sock], [#v("FLOOR_SOCK_DIRT_PCT")],
-      [A pizza box], [#v("FLOOR_PIZZA_DIRT_PCT")],
-    )
-
-    Each item has its own spot, and it never moves. A wash clears them all
-    at once.
-  ])
-
-=== Grass and the cross
-
-When nothing is wrong, grass grows along the floor. It is the badge's way
-of saying all is well, so it shows with a calm line such as #w("content").
-When the pet is poorly, a small red cross shows instead. It comes with the
-red status line.
-
 A hibernating pet is frozen, and it has no sky at all.
 
 == The status line
