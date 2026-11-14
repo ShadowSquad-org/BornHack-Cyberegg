@@ -1015,8 +1015,25 @@ async fn display_loop(
                         // `partial_idle` above keeps this from re-flashing once
                         // the message is drawn.
                         #[cfg(feature = "game")]
+                        // A change that leaves the red plane alone (sky switch,
+                        // floor pile under a red line) needs no red seating, so
+                        // it stays on the quiet delta path.
                         let game_status = active_screen == bornhack_aegg::SCREEN_GAME
-                            && bornhack_aegg::game::status_wants_full_refresh();
+                            && bornhack_aegg::game::status_wants_full_refresh()
+                            && partial_state.bbox_of_dirty().is_some_and(|b| {
+                                bornhack_aegg::refresh_decision::touches_red(
+                                    b.x,
+                                    b.y,
+                                    b.w,
+                                    b.h,
+                                    |x, y| {
+                                        partial_state.is_dirty(x, y)
+                                            && (partial_state.pending_color(x, y) == Some(Color::Red)
+                                                || partial_state.shadow_color(x, y)
+                                                    == Some(Color::Red))
+                                    },
+                                )
+                            });
                         #[cfg(not(feature = "game"))]
                         let game_status = false;
                         // Text-entry is a fast-changing overlay on top of
