@@ -1096,14 +1096,6 @@ pub fn battle_record() -> Option<(u16, u16)> {
     state.map(|s| s.battle_record())
 }
 
-/// The current pet fought: costs, rest, record and prize (see
-/// `GameState::fight_over`). Returns the HAX paid, 0 without a game.
-pub fn fight_over(f: super::engine::Fought) -> u32 {
-    let mut paid = 0;
-    with_game_now(|s| paid = s.fight_over(f));
-    paid
-}
-
 /// A result for a fight the current pet did not take part in: the record
 /// only. No-op if no game is active.
 pub fn record_only(won: bool) {

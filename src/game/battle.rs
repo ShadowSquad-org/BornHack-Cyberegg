@@ -338,7 +338,10 @@ pub enum Out {
     /// Play the animation, fill the result card.
     Fought(Fight),
     /// The glue calls `friends::note_fight`.
-    Recorded { peer: [u8; 2], won: bool },
+    Recorded {
+        peer: [u8; 2],
+        won: bool,
+    },
     /// `BattleWon` / `BattleLost` for a heard result.
     Toast(Toast),
 }
@@ -509,6 +512,12 @@ impl Session {
             return outs;
         }
         let from = m.challenger_id;
+        // The same CHALLENGE heard twice: my screen for it is already up.
+        if self.pending.is_some_and(|p| {
+            p.live() && p.pre.role == Role::Target && p.pre.peer_id == from && p.nonce_a == m.nonce
+        }) {
+            return outs;
+        }
         if self.live() {
             push_decline(&mut outs, from, me.id, Reason::Busy);
             return outs;
@@ -579,6 +588,10 @@ impl Session {
         if !p.live() || p.pre.role != Role::Target {
             return outs;
         }
+        // A press after the window is the window running out.
+        if expired(me.now_ms, p.pre.ends_ms) {
+            return self.on_deadline(me, s, None);
+        }
         if !fight {
             let _ = outs.push(Out::Send(Packet::Decline(DeclineMsg::declined(
                 p.pre.peer_id,
@@ -597,9 +610,9 @@ impl Session {
         let mut outs = Outs::new();
         let peer = p.pre.peer_id;
         // The pet may have changed in the window.
-        let refusal = s.target_refusal().or_else(|| {
-            (s.demo.on && s.is_sleeping).then_some(Reason::Refused(Refusal::Asleep))
-        });
+        let refusal = s
+            .target_refusal()
+            .or_else(|| (s.demo.on && s.is_sleeping).then_some(Reason::Refused(Refusal::Asleep)));
         if let Some(why) = refusal {
             push_decline(&mut outs, peer, me.id, why);
             self.pending = None;
@@ -680,10 +693,7 @@ impl Session {
             resolved: true,
         });
         let _ = outs.push(Out::Show);
-        let _ = outs.push(Out::Recorded {
-            peer,
-            won: o.a_won,
-        });
+        let _ = outs.push(Out::Recorded { peer, won: o.a_won });
         let _ = outs.push(Out::Fought(Fight {
             peer_id: peer,
             peer_kind: p.pre.peer_kind,
@@ -756,29 +766,23 @@ impl Session {
             Toast::BattleLost
         }));
         // The challenger already fought me on the beacon: its question is moot.
-        if self
-            .pending
-            .is_some_and(|p| p.live() && p.pre.role == Role::Target && p.pre.peer_id == m.challenger_id)
-        {
+        if self.pending.is_some_and(|p| {
+            p.live() && p.pre.role == Role::Target && p.pre.peer_id == m.challenger_id
+        }) {
             self.pending = None;
             let _ = outs.push(Out::Close);
         }
         outs
     }
 
-    /// The window ran out. The challenger needs the friend record for the
-    /// fallback fight on the beacon numbers (17 row 17).
-    pub fn on_deadline(
-        &mut self,
-        me: &Me,
-        s: &mut GameState,
-        f: Option<&FriendRecord>,
-    ) -> Outs {
+    /// The window ran out (a no-op before `deadline_ms`). The challenger needs
+    /// the friend record for the fallback fight on the beacon numbers (17 row 17).
+    pub fn on_deadline(&mut self, me: &Me, s: &mut GameState, f: Option<&FriendRecord>) -> Outs {
         let mut outs = Outs::new();
         let Some(p) = self.pending else {
             return outs;
         };
-        if !p.live() {
+        if !p.live() || !expired(me.now_ms, p.pre.ends_ms) {
             return outs;
         }
         if p.pre.role == Role::Target {
@@ -801,8 +805,8 @@ impl Session {
         let (a, b) = (p.pre.mine, f.estimate_snapshot());
         let o = combat::fight(combat::seed(p.nonce_a, 0, me.id, peer), &a, &b);
         // An older beacon gives a record only: no costs, no prize.
-        let fresh = me.now_tick.saturating_sub(f.last_seen_tick)
-            <= t::BATTLE_PRIZE_BEACON_MIN() as u32 * 6;
+        let fresh =
+            me.now_tick.saturating_sub(f.last_seen_tick) <= t::BATTLE_PRIZE_BEACON_MIN() as u32 * 6;
         let prize = s.fight_over(Fought {
             won: o.a_won,
             hp_left_pct: o.a_hp_pct,
@@ -818,10 +822,7 @@ impl Session {
             challenger_kind: me.kind,
             target_kind: f.pet_kind,
         })));
-        let _ = outs.push(Out::Recorded {
-            peer,
-            won: o.a_won,
-        });
+        let _ = outs.push(Out::Recorded { peer, won: o.a_won });
         let _ = outs.push(Out::Fought(Fight {
             peer_id: peer,
             peer_kind: f.pet_kind,
@@ -856,7 +857,6 @@ impl Session {
         outs
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -917,7 +917,6 @@ mod tests {
         assert_eq!(back.target_kind, 0);
         assert_eq!(back.challenger_kind, 2);
     }
-
 
     #[test]
     fn battle_result_msg_round_trips() {

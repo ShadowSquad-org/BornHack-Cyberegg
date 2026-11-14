@@ -1520,10 +1520,11 @@ mod wire {
 mod protocol {
     use bornhack_aegg::game::Toast;
     use bornhack_aegg::game::battle::{
-        ANSWER_WINDOW_MS, ChallengeMsg, DEMO_ACCEPT_MS, DeclineMsg, Fight, LATE_RESULT_MS, Me,
-        Note, Out, Outs, Packet, Session, TARGET_WINDOW_MS, WHY_DECLINED, BattleResultMsg,
+        ANSWER_WINDOW_MS, AcceptMsg, BattleResultMsg, ChallengeMsg, DEMO_ACCEPT_MS, DeclineMsg,
+        Fight, LATE_RESULT_MS, Me, Note, Out, Outs, Packet, Session, TARGET_WINDOW_MS,
+        WHY_DECLINED,
     };
-    use bornhack_aegg::game::engine::combat::{win_chance};
+    use bornhack_aegg::game::engine::combat::win_chance;
     use bornhack_aegg::game::engine::doses::{Reason, Refusal};
     use bornhack_aegg::game::engine::needs::P;
     use bornhack_aegg::game::engine::thresholds as t;
@@ -1561,7 +1562,14 @@ mod protocol {
     }
 
     fn me<'a>(id: [u8; 2], name: &'a str, now_ms: u32, now_tick: u32, nonce: u16) -> Me<'a> {
-        Me { id, kind: 3, name, now_ms, now_tick, nonce }
+        Me {
+            id,
+            kind: 3,
+            name,
+            now_ms,
+            now_tick,
+            nonce,
+        }
     }
 
     /// The friend record `owner` would hold of `s`, last heard `ago` ticks ago.
@@ -1639,9 +1647,33 @@ mod protocol {
         v[0]
     }
 
+    /// Every packet crosses the wire: encoded, decoded, the decode must work.
+    fn wire(p: Packet) -> Packet {
+        match p {
+            Packet::Challenge(m) => {
+                Packet::Challenge(ChallengeMsg::from_bytes(&m.to_bytes()).expect("challenge"))
+            }
+            Packet::Accept(m) => {
+                Packet::Accept(AcceptMsg::from_bytes(&m.to_bytes()).expect("accept"))
+            }
+            Packet::Decline(m) => {
+                Packet::Decline(DeclineMsg::from_bytes(&m.to_bytes()).expect("decline"))
+            }
+            Packet::Result(m) => {
+                Packet::Result(BattleResultMsg::from_bytes(&m.to_bytes()).expect("result"))
+            }
+        }
+    }
+
     fn sends(o: &Outs) -> Vec<Packet> {
         o.iter()
-            .filter_map(|x| if let Out::Send(p) = x { Some(*p) } else { None })
+            .filter_map(|x| {
+                if let Out::Send(p) = x {
+                    Some(wire(*p))
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
@@ -1654,20 +1686,36 @@ mod protocol {
     }
 
     fn fought(o: &Outs) -> Option<Fight> {
-        o.iter().find_map(|x| if let Out::Fought(f) = x { Some(*f) } else { None })
+        o.iter().find_map(|x| {
+            if let Out::Fought(f) = x {
+                Some(*f)
+            } else {
+                None
+            }
+        })
     }
 
     fn recorded(o: &Outs) -> Option<([u8; 2], bool)> {
         o.iter().find_map(|x| {
-            if let Out::Recorded { peer, won } = x { Some((*peer, *won)) } else { None }
+            if let Out::Recorded { peer, won } = x {
+                Some((*peer, *won))
+            } else {
+                None
+            }
         })
     }
 
     fn toast(o: &Outs) -> Option<Toast> {
-        o.iter().find_map(|x| if let Out::Toast(t) = x { Some(*t) } else { None })
+        o.iter().find_map(|x| {
+            if let Out::Toast(t) = x {
+                Some(*t)
+            } else {
+                None
+            }
+        })
     }
 
-    fn accept_of(o: &Outs) -> bornhack_aegg::game::battle::AcceptMsg {
+    fn accept_of(o: &Outs) -> AcceptMsg {
         match one_send(o) {
             Packet::Accept(a) => a,
             p => panic!("not an accept: {p:?}"),
@@ -1732,8 +1780,14 @@ mod protocol {
         let acc = accept_of(&r.sb.answer(&mb, &mut r.b, true));
         let ma = r.ma(MS + 3000, 0);
         let outs = r.sa.on_accept(&ma, &mut r.a, &acc);
-        let show = outs.iter().position(|x| matches!(x, Out::Show)).expect("Show");
-        let fight = outs.iter().position(|x| matches!(x, Out::Fought(_))).expect("Fought");
+        let show = outs
+            .iter()
+            .position(|x| matches!(x, Out::Show))
+            .expect("Show");
+        let fight = outs
+            .iter()
+            .position(|x| matches!(x, Out::Fought(_)))
+            .expect("Fought");
         assert!(show < fight);
         let v = r.sa.view().expect("exact screen kept for the glue");
         assert!(!v.estimate);
@@ -1788,7 +1842,9 @@ mod protocol {
         let fa = fought(&outs).expect("fallback fight");
         assert!(!fa.live);
         assert_eq!(recorded(&outs), Some(([2, 0], fa.won)));
-        let Packet::Result(res) = one_send(&outs) else { panic!("no RESULT") };
+        let Packet::Result(res) = one_send(&outs) else {
+            panic!("no RESULT")
+        };
         assert_eq!(res.challenger_id, [1, 0]);
         assert_eq!(res.target_id, [2, 0]);
         assert_eq!(res.challenger_won, fa.won);
@@ -1802,7 +1858,11 @@ mod protocol {
         assert_eq!(recorded(&outs), Some(([1, 0], !fa.won)));
         assert_eq!(
             toast(&outs),
-            Some(if fa.won { Toast::BattleLost } else { Toast::BattleWon })
+            Some(if fa.won {
+                Toast::BattleLost
+            } else {
+                Toast::BattleWon
+            })
         );
         assert_eq!(r.b.energy, before.energy);
         assert_eq!(r.b.mood, before.mood);
@@ -1881,7 +1941,9 @@ mod protocol {
         r.b.demo.on = true;
         let m = r.ma(MS, 0x1111);
         let outs = r.sa.challenge(&m, &mut r.a, &fb).unwrap();
-        let Packet::Challenge(c) = one_send(&outs) else { panic!() };
+        let Packet::Challenge(c) = one_send(&outs) else {
+            panic!()
+        };
         let mb = r.mb(MS + 1000, 0x2222);
         let before = r.b.to_bytes();
         let outs = r.sb.on_challenge(&mb, &mut r.b, &c, None);
@@ -2097,7 +2159,10 @@ mod protocol {
         r.challenge();
         let fb = r.fb();
         let m = r.ma(MS + 100, 2);
-        assert!(matches!(r.sa.challenge(&m, &mut r.a, &fb), Err(Reason::Busy)));
+        assert!(matches!(
+            r.sa.challenge(&m, &mut r.a, &fb),
+            Err(Reason::Busy)
+        ));
     }
 
     #[test]
@@ -2149,7 +2214,10 @@ mod protocol {
             target_kind: 1,
         };
         let soon = r.mb(MS + 1000 + LATE_RESULT_MS - 1, 0);
-        assert!(r.sb.on_result(&soon, &mut r.b, &res, Some(false)).is_empty());
+        assert!(
+            r.sb.on_result(&soon, &mut r.b, &res, Some(false))
+                .is_empty()
+        );
         assert_eq!(r.b.battle_record(), before);
         // Past the window the same packet counts again.
         let later = r.mb(MS + 1000 + LATE_RESULT_MS + 1, 0);
@@ -2237,7 +2305,7 @@ mod protocol {
         assert!(r.sb.on_challenge(&mb, &mut r.b, &mine, None).is_empty());
         assert!(r.sb.view().is_none());
 
-        let acc = bornhack_aegg::game::battle::AcceptMsg {
+        let acc = AcceptMsg {
             challenger_id: [7, 7],
             target_id: [2, 0],
             snap: r.b.snapshot(),
@@ -2270,6 +2338,244 @@ mod protocol {
         assert!(outs.iter().any(|x| matches!(x, Out::Close)));
         assert!(r.sa.view().is_none());
         assert_eq!(r.sa.deadline_ms(), None);
+    }
+
+    /// A challenges B at `t0`, B presses Fight 1 s later, A hears it at +3 s.
+    fn live_at(seed: u64, t0: u32, na: u16, nb: u16) -> (Fight, Fight) {
+        let mut r = Rig::with_ids([1, 0], [2, 0], false);
+        r.a = adult(11 + seed, false);
+        r.b = adult(40 + seed * 3, false);
+        let fb = r.fb();
+        let m = r.ma(t0, na);
+        let outs = r.sa.challenge(&m, &mut r.a, &fb).expect("challenge");
+        let Packet::Challenge(c) = one_send(&outs) else {
+            panic!()
+        };
+        let mb = r.mb(t0.wrapping_add(1000), nb);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        let outs = r.sb.answer(&mb, &mut r.b, true);
+        let acc = accept_of(&outs);
+        let fb = fought(&outs).expect("B fought");
+        let ma = r.ma(t0.wrapping_add(3000), 0);
+        let fa = fought(&r.sa.on_accept(&ma, &mut r.a, &acc)).expect("A fought");
+        (fa, fb)
+    }
+
+    #[test]
+    fn both_badges_agree_over_many_seeds_and_a_wrapping_clock() {
+        let mut wins = 0;
+        for i in 0..12u64 {
+            let na = (i as u16).wrapping_mul(7919).wrapping_add(3);
+            let nb = (i as u16).wrapping_mul(39_208).wrapping_add(1);
+            for t0 in [MS, u32::MAX - 5_000] {
+                let (fa, fb) = live_at(i, t0, na, nb);
+                assert_eq!(fa.won, !fb.won, "seed {i} t0 {t0}");
+                assert_eq!((fa.my_hp, fa.their_hp), (fb.their_hp, fb.my_hp), "seed {i}");
+                assert_eq!(fa.chance as u32 + fb.chance as u32, 100);
+                wins += fa.won as u32;
+            }
+        }
+        // Both outcomes occur: the check is not vacuous.
+        assert!(wins > 0 && wins < 24, "{wins}");
+    }
+
+    #[test]
+    fn windows_survive_the_clock_wrap() {
+        let t0 = u32::MAX - 5_000;
+        let mut r = Rig::new();
+        let fb = r.fb();
+        let m = r.ma(t0, 0x1111);
+        let outs = r.sa.challenge(&m, &mut r.a, &fb).unwrap();
+        let Packet::Challenge(c) = one_send(&outs) else {
+            panic!()
+        };
+        assert_eq!(r.sa.deadline_ms(), Some(t0.wrapping_add(ANSWER_WINDOW_MS)));
+        let mb = r.mb(t0.wrapping_add(1000), 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        // A late ACCEPT (past +20 s, after the wrap) is ignored.
+        let mut sb2 = Session::new();
+        let mut b2 = r.b.clone();
+        sb2.on_challenge(&mb, &mut b2, &c, None);
+        let acc = accept_of(&sb2.answer(&mb, &mut b2, true));
+        let late = r.ma(t0.wrapping_add(ANSWER_WINDOW_MS), 0);
+        assert!(r.sa.on_accept(&late, &mut r.a, &acc).is_empty());
+        let ok = r.ma(t0.wrapping_add(ANSWER_WINDOW_MS - 1), 0);
+        assert!(fought(&r.sa.on_accept(&ok, &mut r.a, &acc)).is_some());
+        // B: the accepted peer's RESULT is ignored for 60 s across the wrap.
+        let res = BattleResultMsg {
+            challenger_id: [1, 0],
+            target_id: [2, 0],
+            challenger_won: true,
+            challenger_hp_pct: 50,
+            target_hp_pct: 0,
+            challenger_kind: 3,
+            target_kind: 1,
+        };
+        let answered = r.mb(t0.wrapping_add(2000), 0x2222);
+        r.sb.answer(&answered, &mut r.b, true);
+        let soon = r.mb(t0.wrapping_add(2000 + LATE_RESULT_MS - 1), 0);
+        assert!(
+            r.sb.on_result(&soon, &mut r.b, &res, Some(false))
+                .is_empty()
+        );
+        let later = r.mb(t0.wrapping_add(2000 + LATE_RESULT_MS), 0);
+        assert!(toast(&r.sb.on_result(&later, &mut r.b, &res, Some(false))).is_some());
+    }
+
+    #[test]
+    fn late_fight_press_is_the_window_running_out() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        let end = r.sb.deadline_ms().unwrap();
+        let before = r.b.to_bytes();
+        let late = r.mb(end + 1, 0x2222);
+        let outs = r.sb.answer(&late, &mut r.b, true);
+        assert!(sends(&outs).is_empty() && fought(&outs).is_none());
+        assert!(outs.iter().any(|x| matches!(x, Out::Close)));
+        assert_eq!(r.b.to_bytes(), before);
+        assert!(r.sb.view().is_none());
+    }
+
+    #[test]
+    fn early_deadline_is_a_no_op() {
+        let mut r = Rig::new();
+        let fb = r.fb();
+        let m = r.ma(MS, 0x1111);
+        r.sa.challenge(&m, &mut r.a, &fb).unwrap();
+        let before = r.a.to_bytes();
+        let early = r.ma(MS + ANSWER_WINDOW_MS - 1, 0x1111);
+        assert!(r.sa.on_deadline(&early, &mut r.a, Some(&fb)).is_empty());
+        assert_eq!(r.a.to_bytes(), before);
+        assert_eq!(r.sa.deadline_ms(), Some(MS + ANSWER_WINDOW_MS));
+        // The target side too.
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        let before = r.b.to_bytes();
+        let early = r.mb(MS + 1000 + TARGET_WINDOW_MS - 1, 0x2222);
+        assert!(r.sb.on_deadline(&early, &mut r.b, None).is_empty());
+        assert_eq!(r.b.to_bytes(), before);
+        assert!(r.sb.view().is_some());
+    }
+
+    #[test]
+    fn late_press_means_one_charged_fight_per_side() {
+        let mut r = Rig::new();
+        let fb = r.fb();
+        let m = r.ma(MS, 0x1111);
+        let outs = r.sa.challenge(&m, &mut r.a, &fb).unwrap();
+        let Packet::Challenge(c) = one_send(&outs) else {
+            panic!()
+        };
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        let (ea, eb) = (r.a.energy, r.b.energy);
+        // B's player presses Fight after B's window: B does not fight.
+        let late = r.mb(MS + 1000 + TARGET_WINDOW_MS, 0x2222);
+        let outs = r.sb.answer(&late, &mut r.b, true);
+        assert!(fought(&outs).is_none() && sends(&outs).is_empty());
+        // A's window runs out: the fallback fight, charged once.
+        let end = r.ma(MS + ANSWER_WINDOW_MS, 0x1111);
+        let outs = r.sa.on_deadline(&end, &mut r.a, Some(&fb));
+        let fa = fought(&outs).expect("fallback");
+        assert!(!fa.live);
+        assert_eq!(r.a.energy as i32, ea as i32 - 10 * P);
+        let Packet::Result(res) = one_send(&outs) else {
+            panic!()
+        };
+        // B only hears the record.
+        let hear = r.mb(MS + 21_000, 0x2222);
+        let outs = r.sb.on_result(&hear, &mut r.b, &res, Some(false));
+        assert!(toast(&outs).is_some());
+        assert_eq!(r.b.energy, eb);
+        assert_eq!(r.b.cooldown_battle, 0);
+    }
+
+    #[test]
+    fn repeated_challenge_is_not_answered_busy() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        assert!(has_show(&r.sb.on_challenge(&mb, &mut r.b, &c, None)));
+        let again = r.mb(MS + 1500, 0x2223);
+        assert!(r.sb.on_challenge(&again, &mut r.b, &c, None).is_empty());
+        assert!(r.sb.view().is_some());
+        // A different nonce from the same peer is a new challenge: busy.
+        let mut other = c;
+        other.nonce ^= 1;
+        let outs = r.sb.on_challenge(&again, &mut r.b, &other, None);
+        assert_eq!(decline_of(&outs).reason(), Some(Reason::Busy));
+    }
+
+    #[test]
+    fn crossing_challenges_are_both_busy() {
+        let mut r = Rig::new();
+        let fa = friend_of(&r.a, r.ida, 0);
+        let fb = r.fb();
+        let (ma, mb) = (r.ma(MS, 0x1111), r.mb(MS, 0x2222));
+        let oa = r.sa.challenge(&ma, &mut r.a, &fb).unwrap();
+        let ob = r.sb.challenge(&mb, &mut r.b, &fa).unwrap();
+        let (Packet::Challenge(ca), Packet::Challenge(cb)) = (one_send(&oa), one_send(&ob)) else {
+            panic!()
+        };
+        let (ea, eb) = (r.a.energy, r.b.energy);
+        let da = r.sa.on_challenge(&ma, &mut r.a, &cb, None);
+        let db = r.sb.on_challenge(&mb, &mut r.b, &ca, None);
+        assert_eq!(decline_of(&da).reason(), Some(Reason::Busy));
+        assert_eq!(decline_of(&db).reason(), Some(Reason::Busy));
+        assert!(fought(&da).is_none() && fought(&db).is_none());
+        r.sa.on_decline(&ma, &decline_of(&db));
+        r.sb.on_decline(&mb, &decline_of(&da));
+        assert_eq!(r.sa.view().unwrap().note, Note::Refused(Reason::Busy));
+        assert_eq!(r.sb.view().unwrap().note, Note::Refused(Reason::Busy));
+        assert_eq!((r.a.energy, r.b.energy), (ea, eb));
+        assert_eq!(r.a.battle_record(), (0, 0));
+        assert_eq!(r.b.battle_record(), (0, 0));
+    }
+
+    #[test]
+    fn injured_in_the_window_declines_with_its_reason() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        r.b.injured_min = 30;
+        let energy = r.b.energy;
+        let outs = r.sb.answer(&mb, &mut r.b, true);
+        assert!(fought(&outs).is_none());
+        assert_eq!(
+            decline_of(&outs).reason(),
+            Some(Reason::Refused(Refusal::Injured))
+        );
+        assert_eq!(r.b.energy, energy);
+        assert_eq!(r.b.decline_min, 0);
+        assert!(r.sb.view().is_none());
+    }
+
+    #[test]
+    fn heard_result_closes_the_target_screen() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        let res = BattleResultMsg {
+            challenger_id: [1, 0],
+            target_id: [2, 0],
+            challenger_won: false,
+            challenger_hp_pct: 0,
+            target_hp_pct: 40,
+            challenger_kind: 3,
+            target_kind: 1,
+        };
+        let hear = r.mb(MS + 2000, 0);
+        let outs = r.sb.on_result(&hear, &mut r.b, &res, Some(false));
+        assert!(outs.iter().any(|x| matches!(x, Out::Close)));
+        assert_eq!(toast(&outs), Some(Toast::BattleWon));
+        assert!(r.sb.view().is_none());
+        assert_eq!(r.sb.deadline_ms(), None);
     }
 
     #[test]
