@@ -16,7 +16,7 @@ Each plan ships working firmware and a working simulator on its own, with its te
 | 6 | **Hard mode and money** | v3 prices and work, debt, deductible and copay, work insurance, insulin creep (cap 60), surprise bills, authorization popup, eviction; updates guide ch 9 and 10 | 1, 2 (bill and popup screens) | 15.9, 16, 17 rows 24 to 27, 18.5 | M |
 | 6b | Crowdfunding and cross-border pharmacy | two SHDW message types; updates guide ch 10 | 5, 6 | 16.3 rows 10 and 11 | M |
 | 7 | **Backgrounds, floor items, Jellyfish removal** | layered backgrounds, day and night from the clock, floor items tied to dirt; new or replaced assets reach existing badges through `copy_assets.py --update` from plan 1 task 15 (extend it for replacements); updates guide ch 3 | 1 (dirt), 2 (screen layout) | 14 (not written by this planner; read it before planning) | M |
-| 8 | Long-term layer | care score display, growth forms as titles, traits as modifiers, Unicorn Realm record fields; updates guide ch 12 | 1, 2 | 4, 17 row 11 | S to M |
+| 8 | Long-term layer | care score display, growth forms as titles, traits as modifiers, Unicorn Realm record fields, demo pet's occasional Only pets hobby moment (spec 8.3), as a scheduled demo timer (`demo::timers`), never a per-check dice roll; updates guide ch 12 | 1, 2 | 4, 17 row 11 | S to M |
 | G | **Player's guide** | A5 Amiga-style PDF (Typst) from `guide/`: story, controls, every on-screen word, numbers from code, simulator screens; each later plan updates its chapter | 1, 2 (describes the badge as built) | `BORNPETS_V3_GUIDE_DESIGN.md` (approved 2026-11-14) | M |
 
 Every later plan runs `make guide` and fixes what the check flags.

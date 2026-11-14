@@ -31,6 +31,10 @@ The **status line** under the pet names the one or two things that need you most
 
 If you're putting the badge away for more than a few hours, open the action menu and **Hibernate**. Stats freeze until you wake the pet. Forget to hibernate before storing the badge and the pet decays — by the time you find it again it may have starved.
 
+### Sky and floor
+
+The game screen has a background. By day the sky is white with a sun; at night it is a dark dither with a moon and stars, following the badge clock (the night hours are `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` in `BPETS_V3.CFG`). With no clock set the sky stays plain white. The night sky is only the hour, not the pet's bedtime. As dirt rises, items pile up on the floor, one more at each of the `FLOOR_*_DIRT_PCT` lines, and a wash clears them. A healthy, content pet gets grass; a poorly one gets a small red cross. A hibernating pet has no sky. The sky costs no extra screen flashes.
+
 ### Demo mode
 
 Demo mode turns the pet into a desk companion that looks after itself. It eats, drinks, washes, sleeps, plays and takes its medicine and insulin on its own, and it says what it did in a short note under the pet ("had an apple", "off to bed"). Its condition wanders but it never gets bad enough to leave, and it never exercises: that stays your job, so a demo pet that gets unfit says "I feel stiff." in the hint. It follows the badge clock for bedtime, or its own rhythm while the clock is not set. Demo pets keep a small black **D** under the battery bar on the game screen. HAX is paused while demo is on (hidden, not lost) and comes back when you turn demo off.
