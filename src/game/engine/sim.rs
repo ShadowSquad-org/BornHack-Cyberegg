@@ -100,7 +100,7 @@ pub struct Outcome {
     /// simulator does not load. Idle frames are not counted. The Oracle has no
     /// wakes, so its figure is the action frames alone: not comparable.
     pub refreshes_per_day: f32,
-    /// Times `scene::wake_view` changed (sky switch, floor item, grass,
+    /// Times `scene::wake_view` changed (sky switch, floor item,
     /// cross), per day. Counted from every segment snapshot against the last
     /// one seen, so a change between updates (a wash, a player action) counts
     /// too. One change is at most one background-caused refresh.

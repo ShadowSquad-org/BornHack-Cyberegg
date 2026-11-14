@@ -1,5 +1,5 @@
 //! The background behind the pet (spec 14.2 layers 1 and 2): the sky, the
-//! floor items, the grass and the poorly cross. Everything is drawn from
+//! floor items, a cloud by day and the poorly cross. Everything is drawn from
 //! primitives and small const bitmaps, no image files. The same function
 //! draws into the firmware framebuffer and the simulator display.
 
@@ -86,31 +86,34 @@ const PIZZA_BOX: [u16; 5] = [
 ];
 const FLOOR_BITMAPS: [&[u16]; FLOOR_ITEMS] = [&CRUMBS, &PEEL, &CAN, &SOCK, &PIZZA_BOX];
 
-/// Left edges of the 13 grass tufts, each 5 x 4 at y 106..=109.
-pub const TUFT_XS: [i32; 13] = [2, 14, 26, 38, 50, 62, 74, 86, 98, 110, 122, 134, 146];
-const TUFT_Y: i32 = 106;
-const TUFT_W: u32 = 5;
-const TUFT_H: u32 = 4;
-const TUFT: [u16; 4] = [0b10101, 0b10101, 0b01110, 0b00100];
+/// Where the day cloud sits (22 x 10): left of the sun, 3 px clear of its
+/// rays, below the HAX row and above the floor.
+pub const CLOUD_BOX: Rectangle = Rectangle::new(Point::new(107, 59), Size::new(22, 10));
+/// Cumulus shape in `CLOUD_BOX` coordinates: a flat base and three bumps
+/// (centre x, centre y, radius).
+const CLOUD_BUMPS: [(i32, i32, i32); 3] = [(4, 6, 3), (10, 4, 4), (16, 6, 3)];
+/// The flat base spans these columns and rows.
+const CLOUD_BASE_X: core::ops::RangeInclusive<i32> = 1..=20;
+const CLOUD_BASE_Y: core::ops::RangeInclusive<i32> = 6..=9;
 
 /// Where the poorly cross sits (9 x 9); the plus inside is 7 long, 3 wide.
 pub const CROSS_BOX: Rectangle = Rectangle::new(Point::new(140, 70), Size::new(9, 9));
 
-/// Draw the background of `bg` into the pet area: sky, floor items, grass,
-/// then the red cross.
+/// Draw the background of `bg` into the pet area: sky, floor items, then the
+/// red cross.
 pub fn draw_background<D: DrawTarget<Color = TriColor>>(
     display: &mut D,
     bg: &BackgroundState,
 ) -> Result<(), D::Error> {
     match bg.sky {
         Sky::Plain => {}
-        Sky::Day => draw_sun(display)?,
+        Sky::Day => {
+            draw_sun(display)?;
+            draw_cloud(display)?;
+        }
         Sky::Night => draw_night(display)?,
     }
     draw_floor_items(display, bg.floor)?;
-    if bg.grass {
-        draw_grass(display, bg.floor)?;
-    }
     if bg.poorly {
         draw_cross(display)?;
     }
@@ -205,19 +208,28 @@ fn draw_floor_items<D: DrawTarget<Color = TriColor>>(
     Ok(())
 }
 
-/// A tuft at every `TUFT_XS` whose box meets no shown floor item.
-fn draw_grass<D: DrawTarget<Color = TriColor>>(display: &mut D, shown: u8) -> Result<(), D::Error> {
-    for x in TUFT_XS {
-        let tuft = Rectangle::new(Point::new(x, TUFT_Y), Size::new(TUFT_W, TUFT_H));
-        let blocked = FLOOR_SLOTS
+/// Is (`x`, `y`), relative to `CLOUD_BOX`, inside the cloud shape?
+fn in_cloud(x: i32, y: i32) -> bool {
+    (CLOUD_BASE_X.contains(&x) && CLOUD_BASE_Y.contains(&y))
+        || CLOUD_BUMPS
             .iter()
-            .take(shown as usize)
-            .any(|s| !s.intersection(&tuft).is_zero_sized());
-        if !blocked {
-            bitmap(display, tuft.top_left, TUFT_W as i32, &TUFT)?;
-        }
-    }
-    Ok(())
+            .any(|&(cx, cy, r)| in_disc(x, y, Point::new(cx, cy), r))
+}
+
+/// The cloud: the shape's 1 px black outline, the inside stays sky white.
+fn draw_cloud<D: DrawTarget<Color = TriColor>>(display: &mut D) -> Result<(), D::Error> {
+    let o = CLOUD_BOX.top_left;
+    let px = CLOUD_BOX
+        .points()
+        .map(|p| p - o)
+        .filter(|p| {
+            in_cloud(p.x, p.y)
+                && ![(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .all(|(dx, dy)| in_cloud(p.x + dx, p.y + dy))
+        })
+        .map(|p| Pixel(p + o, BLACK));
+    display.draw_iter(px)
 }
 
 /// `CROSS_BOX` white with a red plus, arms 3 px wide and 7 px long.
@@ -246,16 +258,9 @@ mod draw {
             .into_iter()
             .flat_map(|sky| {
                 (0..=FLOOR_ITEMS as u8).flat_map(move |floor| {
-                    [false, true].into_iter().flat_map(move |grass| {
-                        [false, true]
-                            .into_iter()
-                            .map(move |poorly| BackgroundState {
-                                sky,
-                                floor,
-                                grass,
-                                poorly,
-                            })
-                    })
+                    [false, true]
+                        .into_iter()
+                        .map(move |poorly| BackgroundState { sky, floor, poorly })
                 })
             })
     }
@@ -266,13 +271,8 @@ mod draw {
         c
     }
 
-    fn state(sky: Sky, floor: u8, grass: bool, poorly: bool) -> BackgroundState {
-        BackgroundState {
-            sky,
-            floor,
-            grass,
-            poorly,
-        }
+    fn state(sky: Sky, floor: u8, poorly: bool) -> BackgroundState {
+        BackgroundState { sky, floor, poorly }
     }
 
     fn non_white(c: &Canvas, area: Rectangle) -> usize {
@@ -314,7 +314,7 @@ mod draw {
 
     #[test]
     fn plain_sky_is_white() {
-        let c = drawn(state(Sky::Plain, 0, false, false));
+        let c = drawn(state(Sky::Plain, 0, false));
         assert_eq!(
             non_white(&c, Rectangle::new(Point::zero(), Size::new(152, 152))),
             0
@@ -323,7 +323,7 @@ mod draw {
 
     #[test]
     fn night_is_about_half_black_and_denser_on_top() {
-        let c = drawn(state(Sky::Night, 0, false, false));
+        let c = drawn(state(Sky::Night, 0, false));
         let skip = [SUN_MOON_BOX];
         let top = black_share(&c, 35, 50, &skip);
         let bottom = black_share(&c, 83, 99, &skip);
@@ -336,14 +336,18 @@ mod draw {
 
     #[test]
     fn day_has_a_sun_and_night_a_moon() {
-        let day = drawn(state(Sky::Day, 0, false, false));
+        let day = drawn(state(Sky::Day, 0, false));
         assert!(day.any(SUN_MOON_BOX, BLACK), "sun");
         assert_eq!(day.get(138, 58), BLACK, "disc centre");
         let sky = Rectangle::new(Point::new(0, 35), Size::new(152, 65));
-        for p in sky.points().filter(|p| !SUN_MOON_BOX.contains(*p)) {
+        let cloud = |p: &Point| CLOUD_BOX.contains(*p);
+        for p in sky
+            .points()
+            .filter(|p| !SUN_MOON_BOX.contains(*p) && !cloud(p))
+        {
             assert_eq!(day.get(p.x, p.y), WHITE, "day sky at {p:?}");
         }
-        let night = drawn(state(Sky::Night, 0, false, false));
+        let night = drawn(state(Sky::Night, 0, false));
         assert!(night.any(SUN_MOON_BOX, WHITE), "crescent");
         assert_eq!(
             night.get(SUN_MOON_BOX.top_left.x, SUN_MOON_BOX.top_left.y),
@@ -356,7 +360,7 @@ mod draw {
 
     #[test]
     fn night_stars_are_white_plus_signs_on_black() {
-        let c = drawn(state(Sky::Night, 0, false, false));
+        let c = drawn(state(Sky::Night, 0, false));
         for s in STARS {
             assert_eq!(c.get(s.x, s.y), BLACK, "corner {s:?}");
             assert_eq!(c.get(s.x + 2, s.y + 2), WHITE, "centre {s:?}");
@@ -368,9 +372,9 @@ mod draw {
 
     #[test]
     fn floor_items_are_cumulative_and_never_move() {
-        let all = drawn(state(Sky::Plain, 5, false, false));
+        let all = drawn(state(Sky::Plain, 5, false));
         for n in 0..=FLOOR_ITEMS as u8 {
-            let c = drawn(state(Sky::Plain, n, false, false));
+            let c = drawn(state(Sky::Plain, n, false));
             for (k, slot) in FLOOR_SLOTS.iter().enumerate() {
                 let shown = non_white(&c, *slot) > 0;
                 assert_eq!(shown, (k as u8) < n, "slot {k} with {n} items");
@@ -411,48 +415,55 @@ mod draw {
             let bb = r.bottom_right().unwrap();
             assert!(r.top_left.y >= SKY_TOP && bb.y <= SKY_BOTTOM);
         }
+        cloud_stays_clear();
         // The cross and the sun sit clear of the HAX row and the battery.
         assert!(CROSS_BOX.top_left.y > 45 && SUN_MOON_BOX.top_left.y > 45);
     }
 
-    fn tuft_rect(x: i32) -> Rectangle {
-        Rectangle::new(Point::new(x, TUFT_Y), Size::new(TUFT_W, TUFT_H))
+    /// The cloud sits in the sky, left of the sun, clear of the sun's
+    /// disc and rays, the HAX row and battery (y 45 and up), the cross and
+    /// the floor.
+    fn cloud_stays_clear() {
+        let bb = CLOUD_BOX.bottom_right().unwrap();
+        assert!((20..=26).contains(&CLOUD_BOX.size.width), "{CLOUD_BOX:?}");
+        assert!((8..=12).contains(&CLOUD_BOX.size.height), "{CLOUD_BOX:?}");
+        assert!(CLOUD_BOX.top_left.y > 45 && bb.y <= SKY_BOTTOM);
+        assert!(CLOUD_BOX.top_left.x >= 0 && bb.x < SUN_MOON_BOX.top_left.x);
+        assert!(CLOUD_BOX.intersection(&SUN_MOON_BOX).is_zero_sized());
+        assert!(CLOUD_BOX.intersection(&CROSS_BOX).is_zero_sized());
+        assert!(!CLOUD_BOX.contains(SUN_MOON_CENTRE));
+        for s in &FLOOR_SLOTS {
+            assert!(CLOUD_BOX.intersection(s).is_zero_sized());
+        }
     }
 
     #[test]
-    fn grass_steps_around_the_items() {
-        let bare = drawn(state(Sky::Day, 5, false, false));
-        let grassy = drawn(state(Sky::Day, 5, true, false));
-        for slot in FLOOR_SLOTS {
-            for p in slot.points() {
-                assert_eq!(
-                    grassy.get(p.x, p.y),
-                    bare.get(p.x, p.y),
-                    "tuft in a slot at {p:?}"
-                );
-            }
+    fn the_cloud_is_a_black_outline_by_day_only() {
+        let day = drawn(state(Sky::Day, 0, false));
+        assert!(day.any(CLOUD_BOX, BLACK), "cloud");
+        assert!(!day.any(CLOUD_BOX, RED));
+        // The base row is a flat 1 px line, the inside stays white.
+        let bottom = CLOUD_BOX.bottom_right().unwrap().y;
+        let base = (CLOUD_BOX.top_left.x..=CLOUD_BOX.bottom_right().unwrap().x)
+            .filter(|&x| day.get(x, bottom) == BLACK)
+            .count();
+        assert!(base >= 14, "base {base}");
+        let mid = CLOUD_BOX.center();
+        assert_eq!(day.get(mid.x, mid.y), WHITE, "white fill");
+        // The sun is drawn exactly as without the cloud: no sun pixel moved.
+        let night = drawn(state(Sky::Night, 0, false));
+        // (A night star may sit in the box: it is not a cloud.)
+        for p in CLOUD_BOX
+            .points()
+            .filter(|p| !star_boxes().iter().any(|s| s.contains(*p)))
+        {
+            let level = NIGHT_LEVELS[(((p.y - SKY_TOP) / BAND_ROWS) as usize).min(3)];
+            let black = BAYER4[(p.y % 4) as usize][(p.x % 4) as usize] < level;
+            let want = if black { BLACK } else { WHITE };
+            assert_eq!(night.get(p.x, p.y), want, "night at {p:?}");
         }
-        let free = drawn(state(Sky::Day, 0, true, false));
-        assert_eq!(TUFT_XS.len(), 13);
-        for x in TUFT_XS {
-            assert_eq!(free.get(x, TUFT_Y), BLACK, "tuft at {x}");
-            assert_eq!(free.get(x + 4, TUFT_Y + 3), WHITE);
-            assert!(tuft_rect(x).bottom_right().unwrap().y <= FLOOR_BOTTOM);
-        }
-        // A tuft is drawn exactly when it meets no shown item.
-        for n in 0..=FLOOR_ITEMS {
-            let c = drawn(state(Sky::Day, n as u8, true, false));
-            let bare = drawn(state(Sky::Day, n as u8, false, false));
-            for x in TUFT_XS {
-                let meets = FLOOR_SLOTS[..n]
-                    .iter()
-                    .any(|s| !s.intersection(&tuft_rect(x)).is_zero_sized());
-                let differs = tuft_rect(x)
-                    .points()
-                    .any(|p| c.get(p.x, p.y) != bare.get(p.x, p.y));
-                assert_eq!(differs, !meets, "tuft {x} with {n} items");
-            }
-        }
+        let plain = drawn(state(Sky::Plain, 0, false));
+        assert!(!plain.any(CLOUD_BOX, BLACK));
     }
 
     #[test]
@@ -465,7 +476,7 @@ mod draw {
             assert!(!red_outside, "{bg:?}");
             assert_eq!(c.any(CROSS_BOX, RED), bg.poorly, "{bg:?}");
         }
-        let c = drawn(state(Sky::Night, 0, false, true));
+        let c = drawn(state(Sky::Night, 0, true));
         assert_eq!(c.get(144, 74), RED, "centre");
         assert_eq!(c.get(144, 71), RED);
         assert_eq!(c.get(147, 74), RED);
@@ -524,7 +535,6 @@ mod budget {
         BackgroundState {
             sky,
             floor: 0,
-            grass: false,
             poorly: false,
         }
     }

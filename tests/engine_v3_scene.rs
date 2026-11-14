@@ -67,33 +67,6 @@ mod state {
     }
 
     #[test]
-    fn content_pet_gets_grass_and_a_problem_takes_it() {
-        let mut s = active();
-        let b = background_state(&s).expect("active pet draws a background");
-        assert!(b.grass, "{:?}", s.pet_line());
-        assert!(!b.poorly);
-        s.fullness = (5 * P) as u16;
-        assert!(!background_state(&s).unwrap().grass);
-    }
-
-    #[test]
-    fn a_red_line_never_shows_grass() {
-        // Danger line (filthy) is red.
-        let mut s = active();
-        s.dirt = (90 * P) as u16;
-        assert!(s.pet_line().red());
-        assert!(!background_state(&s).unwrap().grass);
-        // Demo help line (health 30..34 %): red, and the status line says
-        // Poorly, so these hold without the `!red` clause. The clause itself
-        // is pinned in engine_v3_scene_cfg.rs.
-        let mut s = active();
-        s.demo.on = true;
-        s.health = (32 * P) as u16;
-        assert!(s.pet_line().red(), "{:?}", s.pet_line());
-        assert!(!background_state(&s).unwrap().grass);
-    }
-
-    #[test]
     fn the_cross_needs_poorly_and_a_red_line() {
         let mut s = active();
         s.health = (20 * P) as u16;
@@ -126,22 +99,14 @@ mod state {
         let mut seen = std::collections::HashSet::new();
         for sky in [Sky::Plain, Sky::Day, Sky::Night] {
             for floor in 0..=FLOOR_ITEMS as u8 {
-                for grass in [false, true] {
-                    for poorly in [false, true] {
-                        let p = BackgroundState {
-                            sky,
-                            floor,
-                            grass,
-                            poorly,
-                        }
-                        .pack();
-                        assert_ne!(p, 0);
-                        assert!(seen.insert(p), "collision at {p}");
-                    }
+                for poorly in [false, true] {
+                    let p = BackgroundState { sky, floor, poorly }.pack();
+                    assert_ne!(p, 0);
+                    assert!(seen.insert(p), "collision at {p}");
                 }
             }
         }
-        assert_eq!(seen.len(), 3 * 6 * 2 * 2);
+        assert_eq!(seen.len(), 3 * 6 * 2);
     }
 
     #[test]

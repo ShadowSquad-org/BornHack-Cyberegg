@@ -569,7 +569,7 @@ pub static SHOTS: &[Shot] = &[
     }),
     // The sky and the floor (chapter 3). `content` is already a noon shot.
     shot!("day", [Do(content)], || {
-        bg().is_some_and(|b| b.sky == Sky::Day && b.grass)
+        bg().is_some_and(|b| b.sky == Sky::Day)
     }),
     shot!("night", [Do(content), Do(set_night)], || {
         bg().is_some_and(|b| b.sky == Sky::Night)

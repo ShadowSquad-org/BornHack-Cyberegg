@@ -1,5 +1,5 @@
 //! What the background shows behind the pet (spec 14): the sky from the wall
-//! clock, the floor items from dirt, grass for a content pet, the red cross
+//! clock, the floor items from dirt, the red cross
 //! for a poorly one. A pure function of the pet; drawing lives in the UI.
 //! Every line read here is a clock boundary or a dirt line, so the wake
 //! stays exact: the floor lines are dirt lines and the sky switch is a timer
@@ -9,7 +9,7 @@ use super::GameState;
 use super::Phase;
 use super::demo::MINUTES_PER_DAY;
 use super::needs::P;
-use super::status::{self, Word};
+use super::status;
 use super::thresholds as t;
 
 /// Things that can lie on the floor: crumbs, peel, can, sock, pizza box.
@@ -28,25 +28,21 @@ pub struct BackgroundState {
     pub sky: Sky,
     /// Items on the floor (0..=`FLOOR_ITEMS`), in slot order.
     pub floor: u8,
-    /// Healthy and content.
-    pub grass: bool,
     /// The red cross.
     pub poorly: bool,
 }
 
 impl BackgroundState {
     /// Bit 7 set (so `Some` never packs to 0), bits 0..1 sky (Plain 0, Day 1,
-    /// Night 2), bits 2..4 floor, bit 5 grass, bit 6 poorly.
+    /// Night 2), bits 2..4 floor, bit 6 poorly (bit 5 is
+    /// unused: the grass bit was dropped, and the value is runtime-only).
     pub fn pack(self) -> u8 {
         let sky = match self.sky {
             Sky::Plain => 0,
             Sky::Day => 1,
             Sky::Night => 2,
         };
-        0x80 | sky
-            | (self.floor.min(FLOOR_ITEMS as u8) << 2)
-            | ((self.grass as u8) << 5)
-            | ((self.poorly as u8) << 6)
+        0x80 | sky | (self.floor.min(FLOOR_ITEMS as u8) << 2) | ((self.poorly as u8) << 6)
     }
 }
 
@@ -108,16 +104,10 @@ pub fn background_state(s: &GameState) -> Option<BackgroundState> {
     if s.hibernating || !matches!(s.phase, Phase::Active | Phase::Leaving) {
         return None;
     }
-    let line = status::status_line(s);
-    let content = matches!(line.first, Word::Content | Word::WellRested | Word::Asleep)
-        && line.second.is_none()
-        && !line.danger;
-    let red = s.pet_line().red();
     Some(BackgroundState {
         sky: sky(s.day_min),
         floor: floor_items(s.dirt),
-        grass: content && !red,
-        poorly: status::poorly(s) && red,
+        poorly: status::poorly(s) && s.pet_line().red(),
     })
 }
 
