@@ -15,6 +15,7 @@
 //! ```
 
 pub mod battle;
+pub mod battle_link;
 pub mod battle_view;
 pub mod blackhole;
 pub mod bornjeweled;

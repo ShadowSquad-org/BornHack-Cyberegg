@@ -870,7 +870,7 @@ async fn push_grp_data(
     // just the async notification to the target's badge.
     #[cfg(feature = "game")]
     if ch.slot_idx == channels::SHDW_SLOT && dec.data_type == crate::game::battle::PET_BATTLE_TYPE {
-        crate::game::battle::on_battle_result(&dec.data).await;
+        crate::game::battle_link::on_battle_result(&dec.data).await;
         return;
     }
 

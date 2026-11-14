@@ -1292,6 +1292,14 @@ impl GameState {
         (self.cooldown_battle > 0).then(|| doses::Reason::Wait(self.cooldown_battle as u32 * 10))
     }
 
+    /// Why this pet cannot be a fight's target now, or `None`: the reasons
+    /// that stop every action, then the body. Asleep and the battle rest do
+    /// not count (a sleeper is woken by its player's Fight; the rest only
+    /// limits starting one).
+    pub fn target_refusal(&self) -> Option<doses::Reason> {
+        self.cannot_act().or_else(|| self.body_refusal())
+    }
+
     /// The part of `battle_refusal` that is about the body: injured, too
     /// weak or too drunk (the felt drink, as the fight reads it).
     pub fn body_refusal(&self) -> Option<doses::Reason> {

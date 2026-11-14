@@ -671,6 +671,13 @@ pub fn record_battle_vs(device_id: [u8; 2], won: bool) {
     }
 }
 
+/// Test hook: put `rec` in the list as a newly met friend.
+#[cfg(any(test, feature = "simulator"))]
+pub fn insert_for_test(rec: FriendRecord) {
+    let list = unsafe { &mut *FRIENDS.get() };
+    list.push(rec);
+}
+
 /// A known friend by device id (a copy), or `None`.
 pub fn by_id(device_id: [u8; 2]) -> Option<FriendRecord> {
     let list = unsafe { &*FRIENDS.get() };

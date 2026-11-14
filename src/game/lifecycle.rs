@@ -663,7 +663,7 @@ fn current_severity(state: &GameState) -> Severity {
 /// muted, and never in demo mode, which is silent. `upward` is whether the
 /// event is an alert at all (a severity rise; the onset alerts and the
 /// farewell pass `true`).
-fn alert_due(muted: bool, demo: bool, upward: bool) -> bool {
+pub(super) fn alert_due(muted: bool, demo: bool, upward: bool) -> bool {
     upward && !muted && !demo
 }
 
@@ -1094,22 +1094,6 @@ pub fn pet_traits() -> Option<(u16, u16, u16)> {
 pub fn battle_record() -> Option<(u16, u16)> {
     let state = unsafe { (*GAME.get()).as_ref() };
     state.map(|s| s.battle_record())
-}
-
-/// Derive the current pet's mesh-Battle combat stats (Attack/Defense/
-/// Speed/HP) from its live `PetStats` snapshot plus traits. Used both by
-/// the beacon ticker (to fill the outgoing `PetBeacon`) and by
-/// `battle::challenge` (to compute the challenger's live stats).
-/// `None` if no pet is active.
-pub fn combat_stats() -> Option<super::battle::CombatStats> {
-    let stats = cycle()?;
-    let (vitality, curiosity, resilience) = pet_traits()?;
-    Some(super::battle::derive_combat_stats(
-        &stats,
-        super::engine::trait_pct(vitality),
-        super::engine::trait_pct(curiosity),
-        super::engine::trait_pct(resilience),
-    ))
 }
 
 /// The current pet fought: costs, rest, record and prize (see

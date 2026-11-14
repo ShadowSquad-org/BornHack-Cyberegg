@@ -15,7 +15,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
 use embedded_graphics::text::Text;
 
-use super::battle::BattleOutcome;
+use super::battle::Fight;
 use super::engine::PET_NAME_MAX;
 use crate::menu::ButtonId;
 use crate::ui::{self, TEXT_BLACK, TEXT_BOLD_BLACK, TEXT_BOLD_WHITE};
@@ -87,9 +87,7 @@ fn clear_picker_msg() {
 struct ResultDisplay {
     friend_name: [u8; PET_NAME_MAX],
     friend_name_len: u8,
-    outcome: BattleOutcome,
-    /// The HAX the win paid (0 when none).
-    hax: u32,
+    fight: Fight,
 }
 
 static RESULT: SyncCell<Option<ResultDisplay>> = SyncCell::new(None);
@@ -367,27 +365,25 @@ fn try_challenge() {
         return;
     }
 
-    let idx = CURSOR.load(Ordering::Relaxed) as usize;
-    let Some(friend) = super::friends::get(idx) else {
-        return;
-    };
-    let Some((outcome, hax)) = super::battle::challenge(&friend) else {
-        // Friend hasn't broadcast combat stats yet (or no local stats).
-        set_picker_msg(MSG_NOT_READY, 0);
-        return;
-    };
+    // Until the challenge protocol is wired in (`battle_link`), a friend
+    // cannot be fought from here.
+    set_picker_msg(MSG_NOT_READY, 0);
+}
 
+/// Show the card of a fight that just ended against the friend named
+/// `friend_name`.
+pub fn show_fight(friend_name: [u8; PET_NAME_MAX], friend_name_len: u8, fight: Fight) {
     clear_picker_msg();
     unsafe {
         *RESULT.get() = Some(ResultDisplay {
-            friend_name: friend.name,
-            friend_name_len: friend.name_len,
-            outcome,
-            hax,
+            friend_name,
+            friend_name_len,
+            fight,
         });
     }
     RESULT_SHOWN_MS.store(crate::platform::uptime_ms_u32(), Ordering::Relaxed);
     STATE.store(STATE_RESULT, Ordering::Relaxed);
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// Route a button press while the Battle screen is active. Owns its own
@@ -538,11 +534,11 @@ where
     super::stat_bar::draw_stat_bar(
         display,
         "HP",
-        result.outcome.challenger_hp_pct,
+        result.fight.my_hp,
         Point::new(6, 42),
         Point::new(30, 40),
         Size::new(116, 16),
-        if result.outcome.challenger_hp_pct == 0 {
+        if result.fight.my_hp == 0 {
             RED
         } else {
             BLACK
@@ -559,24 +555,24 @@ where
     super::stat_bar::draw_stat_bar(
         display,
         "HP",
-        result.outcome.target_hp_pct,
+        result.fight.their_hp,
         Point::new(6, 82),
         Point::new(30, 80),
         Size::new(116, 16),
-        if result.outcome.target_hp_pct == 0 {
+        if result.fight.their_hp == 0 {
             RED
         } else {
             BLACK
         },
     )?;
 
-    let banner = if result.outcome.challenger_won {
+    let banner = if result.fight.won {
         BANNER_WON
     } else {
         BANNER_LOST
     };
     let centered = crate::ui::CENTERED;
-    let banner_color = if result.outcome.challenger_won {
+    let banner_color = if result.fight.won {
         TEXT_BOLD_BLACK
     } else {
         crate::ui::TEXT_BOLD_RED
@@ -584,11 +580,11 @@ where
     Text::with_text_style(banner, Point::new(76, 112), banner_color, centered).draw(display)?;
 
     // Show the HAX the win paid.
-    if result.hax > 0 {
+    if result.fight.prize > 0 {
         let mut reward: heapless::String<16> = heapless::String::new();
         let _ = core::fmt::Write::write_fmt(
             &mut reward,
-            format_args!("+{} HAX", result.hax),
+            format_args!("+{} HAX", result.fight.prize),
         );
         Text::with_text_style(
             reward.as_str(),
