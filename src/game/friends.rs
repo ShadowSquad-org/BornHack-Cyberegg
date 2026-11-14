@@ -114,6 +114,11 @@ pub const FRIENDS_MAX: usize = 20;
 /// Today's record: 2 + 1 + 12 + 1 + 4 + 4 + 4 + 4 + 2 + 2 = 36, then stamina,
 /// focus, flags, and the 4-byte `fought_tick`.
 const FRIEND_RECORD_SIZE: usize = 43;
+/// The per-pair fight cooldown in ticks (1 tick = 10 s, so 6 per minute).
+fn pair_cooldown_ticks() -> u32 {
+    super::engine::thresholds::BATTLE_PAIR_COOLDOWN_MIN() as u32 * 6
+}
+
 /// A pre-v3 record (`list`), read for the upgrade only.
 const FRIEND_RECORD_SIZE_OLD: usize = 36;
 /// First byte of `list_v3`.
@@ -229,7 +234,7 @@ impl FriendRecord {
         if self.fought_tick == 0 {
             return None;
         }
-        let cooldown = super::engine::thresholds::BATTLE_PAIR_COOLDOWN_MIN() as u32 * 6;
+        let cooldown = pair_cooldown_ticks();
         let elapsed = now_tick.saturating_sub(self.fought_tick);
         if elapsed >= cooldown {
             None
@@ -445,6 +450,14 @@ impl FriendsList {
     /// tick field on every friend down by the same amount, so that
     /// maximum lands exactly on `now` — i.e. assume no time passed while
     /// the badge was off, exactly like the `GameState` trick assumes.
+    ///
+    /// `fought_tick` is part of the shift's maximum (a fallback fight can be
+    /// newer than the last beacon) but is rebased by age, not by clamping:
+    /// each fight's age is measured from the maximum; at or past the pair
+    /// cooldown it becomes 0 ("never", no wait), otherwise it keeps its
+    /// remaining wait relative to `now` (when `now` is smaller than the age
+    /// no earlier tick exists, so the wait restarts in full: never shorter).
+    ///
     /// This can't recover real elapsed offline time (there's no RTC to
     /// know it), but it keeps every "ago" value sane and the relative
     /// ordering between friends (who you met first, who you saw most
@@ -465,8 +478,13 @@ impl FriendsList {
             f.last_seen_tick = f.last_seen_tick.saturating_sub(rebase);
             f.last_boost_tick = f.last_boost_tick.saturating_sub(rebase);
             if f.fought_tick != 0 {
-                // Stay non-zero: 0 means "never fought".
-                f.fought_tick = f.fought_tick.saturating_sub(rebase).max(1);
+                let age = max_stored.saturating_sub(f.fought_tick);
+                f.fought_tick = if age >= pair_cooldown_ticks() {
+                    0
+                } else {
+                    // Non-zero: 0 means "never fought".
+                    now.saturating_sub(age).max(1)
+                };
             }
         }
     }
@@ -475,6 +493,53 @@ impl FriendsList {
 // ---------------------------------------------------------------------------
 // Static state + KV persistence
 // ---------------------------------------------------------------------------
+
+/// What one KV read of a friends key gave.
+pub enum LoadRead<'a> {
+    Found(&'a [u8]),
+    /// The key does not exist.
+    Missing,
+    /// Any other error (a flash glitch, a bad key, ...).
+    Failed,
+}
+
+/// The result of [`decide_load`].
+pub struct Loaded {
+    pub list: FriendsList,
+    /// The list came from the old key: save it under `list_v3` soon.
+    pub dirty: bool,
+    /// False when a read failed or the blob is foreign: never write this boot,
+    /// so a transient error cannot overwrite or strand good data.
+    pub may_save: bool,
+}
+
+/// Decide what to load from the two reads. `old` is only looked at when
+/// `v3` is `Missing`.
+pub fn decide_load(v3: LoadRead, old: LoadRead) -> Loaded {
+    let empty = |may_save| Loaded { list: FriendsList::new(), dirty: false, may_save };
+    match v3 {
+        LoadRead::Found(b) if b.len() >= 2 && b[0] == FRIENDS_LAYOUT => Loaded {
+            list: FriendsList::from_bytes(b),
+            dirty: false,
+            may_save: true,
+        },
+        // Some other layout (or a stub): leave it alone.
+        LoadRead::Found(_) | LoadRead::Failed => empty(false),
+        LoadRead::Missing => match old {
+            LoadRead::Found(b) => Loaded {
+                list: FriendsList::from_old_bytes(b),
+                dirty: true,
+                may_save: true,
+            },
+            LoadRead::Missing => empty(true),
+            LoadRead::Failed => empty(false),
+        },
+    }
+}
+
+/// Set when the load failed: friends are not written for the rest of the boot.
+static FRIENDS_SAVE_BLOCKED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 static FRIENDS: SyncCell<FriendsList> = SyncCell::new(FriendsList::new());
 static FRIENDS_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -486,26 +551,35 @@ pub async fn init() {
     use crate::fw::kv;
     let ns = kv::namespace("friends");
     let mut buf = [0u8; FRIENDS_SAVE_SIZE];
-    let loaded = if let Ok(n) = ns.get(FRIENDS_KEY, &mut buf).await {
-        Some(FriendsList::from_bytes(&buf[..n]))
-    } else {
-        // No `list_v3` yet: upgrade the old `list` (read only) and mark
-        // dirty so the next save writes `list_v3`.
-        let mut old = [0u8; FRIENDS_SAVE_SIZE_OLD];
-        match ns.get(FRIENDS_KEY_OLD, &mut old).await {
-            Ok(n) => {
-                FRIENDS_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
-                Some(FriendsList::from_old_bytes(&old[..n]))
-            }
-            Err(_) => None,
-        }
+    let mut old = [0u8; FRIENDS_SAVE_SIZE_OLD];
+    let v3 = match ns.get(FRIENDS_KEY, &mut buf).await {
+        Ok(n) => LoadRead::Found(&buf[..n]),
+        Err(kv::KvError::NotFound) => LoadRead::Missing,
+        Err(_) => LoadRead::Failed,
     };
-    if let Some(mut list) = loaded {
-        list.rebase_after_reboot(super::lifecycle::now_tick());
-        defmt::info!("friends: loaded {} known friends", list.count);
-        unsafe {
-            *FRIENDS.get() = list;
+    // The old key (read only) is consulted only when `list_v3` is absent.
+    let old_read = if matches!(v3, LoadRead::Missing) {
+        match ns.get(FRIENDS_KEY_OLD, &mut old).await {
+            Ok(n) => LoadRead::Found(&old[..n]),
+            Err(kv::KvError::NotFound) => LoadRead::Missing,
+            Err(_) => LoadRead::Failed,
         }
+    } else {
+        LoadRead::Missing
+    };
+    let loaded = decide_load(v3, old_read);
+    if !loaded.may_save {
+        FRIENDS_SAVE_BLOCKED.store(true, core::sync::atomic::Ordering::Relaxed);
+        defmt::warn!("friends: load failed, saving blocked this boot");
+    }
+    if loaded.dirty {
+        FRIENDS_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+    let mut list = loaded.list;
+    list.rebase_after_reboot(super::lifecycle::now_tick());
+    defmt::info!("friends: loaded {} known friends", list.count);
+    unsafe {
+        *FRIENDS.get() = list;
     }
 }
 
@@ -517,6 +591,9 @@ pub async fn init() {}
 #[cfg(feature = "embassy-core")]
 pub async fn save_if_needed() {
     use core::sync::atomic::Ordering;
+    if FRIENDS_SAVE_BLOCKED.load(Ordering::Relaxed) {
+        return;
+    }
     if !FRIENDS_DIRTY.swap(false, Ordering::Relaxed) {
         return;
     }
@@ -1060,6 +1137,9 @@ mod tests {
         assert!(src[at..].starts_with("FRIENDS_KEY,"));
         assert_eq!(FRIENDS_KEY, "list_v3");
         assert_eq!(FRIENDS_KEY_OLD, "list");
+        // The old key is never the key of any write, nor a "list" literal.
+        assert!(!src.contains(concat!("set(", "FRIENDS_KEY_OLD")));
+        assert!(!src.contains(concat!("set(", "\"list\"")));
     }
 
     #[test]
@@ -1076,11 +1156,11 @@ mod tests {
     fn rebase_moves_fought_tick() {
         let mut list = FriendsList::new();
         let mut a = friend_record([1, 1], 100, 5000);
-        a.fought_tick = 4500;
+        a.fought_tick = 4800; // 200 ticks before the newest, inside the cooldown
         list.push(a);
         list.push(friend_record([2, 2], 100, 4000));
         list.rebase_after_reboot(1000);
-        assert_eq!(list.find_mut([1, 1]).unwrap().fought_tick, 500);
+        assert_eq!(list.find_mut([1, 1]).unwrap().fought_tick, 800);
         assert_eq!(list.find_mut([2, 2]).unwrap().fought_tick, 0);
         // A fallback fight newer than every beacon counts toward the shift.
         let mut list = FriendsList::new();
@@ -1090,6 +1170,77 @@ mod tests {
         list.rebase_after_reboot(500);
         assert_eq!(list.find_mut([3, 3]).unwrap().fought_tick, 500);
         assert_eq!(list.find_mut([3, 3]).unwrap().last_seen_tick, 0);
+    }
+
+    #[test]
+    fn rebase_old_fight_means_no_wait() {
+        let cd = pair_cooldown_ticks();
+        let mut list = FriendsList::new();
+        let mut a = friend_record([1, 1], 100, 500_000);
+        a.fought_tick = 500_000 - cd - 5; // days before shutdown
+        list.push(a);
+        list.rebase_after_reboot(0);
+        let f = list.find_mut([1, 1]).unwrap();
+        assert_eq!(f.fought_tick, 0);
+        assert_eq!(f.pair_wait_secs(0), None);
+    }
+
+    #[test]
+    fn rebase_recent_fight_keeps_its_wait() {
+        let mut list = FriendsList::new();
+        let mut a = friend_record([1, 1], 100, 500_000);
+        a.fought_tick = 500_000 - 60; // 10 min before shutdown
+        list.push(a);
+        let before = list.friends[0].pair_wait_secs(500_000);
+        list.rebase_after_reboot(100);
+        let f = list.find_mut([1, 1]).unwrap();
+        // 600 s elapsed before shutdown, the same wait is left after.
+        assert_eq!(f.pair_wait_secs(100), before);
+        assert_eq!(f.pair_wait_secs(100), Some((pair_cooldown_ticks() - 60) * 10));
+
+        // `now` below the age cannot hold a tick before zero: the wait is
+        // never shorter than it was, it restarts in full.
+        let mut b = friend_record([2, 2], 100, 500_000);
+        b.fought_tick = 500_000 - 60;
+        let mut list = FriendsList::new();
+        list.push(b);
+        list.rebase_after_reboot(1);
+        let f = list.find_mut([2, 2]).unwrap();
+        assert!(f.pair_wait_secs(1) >= before);
+    }
+
+    #[test]
+    fn load_decision_covers_every_read_result() {
+        let v3 = friends_v3_blob();
+        let old = [0u8; 1 + FRIEND_RECORD_SIZE_OLD];
+        // v3 present: loaded, not dirty, saving allowed; old is ignored.
+        let l = decide_load(LoadRead::Found(&v3), LoadRead::Failed);
+        assert!(l.list.count == 1 && !l.dirty && l.may_save);
+        // v3 failed: empty and blocked, old is never consulted.
+        let l = decide_load(LoadRead::Failed, LoadRead::Found(&old));
+        assert!(l.list.count == 0 && !l.dirty && !l.may_save);
+        // v3 missing, old present: migrate and mark dirty.
+        let mut o = [0u8; FRIENDS_SAVE_SIZE_OLD];
+        o[0] = 1;
+        o[1] = 7;
+        let l = decide_load(LoadRead::Missing, LoadRead::Found(&o));
+        assert!(l.list.count == 1 && l.dirty && l.may_save);
+        assert_eq!(l.list.friends[0].device_id[0], 7);
+        // both missing: a fresh badge, saving allowed.
+        let l = decide_load(LoadRead::Missing, LoadRead::Missing);
+        assert!(l.list.count == 0 && !l.dirty && l.may_save);
+        // v3 missing, old read failed: blocked.
+        let l = decide_load(LoadRead::Missing, LoadRead::Failed);
+        assert!(l.list.count == 0 && !l.dirty && !l.may_save);
+        // foreign layout in v3: blocked.
+        let l = decide_load(LoadRead::Found(&[9, 1, 2]), LoadRead::Missing);
+        assert!(l.list.count == 0 && !l.may_save);
+    }
+
+    fn friends_v3_blob() -> [u8; FRIENDS_SAVE_SIZE] {
+        let mut list = FriendsList::new();
+        list.push(friend_record([5, 5], 1, 1));
+        list.to_bytes()
     }
 
     #[test]
@@ -1108,5 +1259,11 @@ mod tests {
         assert_eq!(r.name_str(), "Rex");
         assert!(r.has_numbers());
         assert_eq!(r.estimate_snapshot().power, 40);
+        // A later beacon from a non-v3, non-demo badge clears both flags.
+        let mut old_b = beacon([1, 1]);
+        old_b.v3 = false;
+        old_b.demo = false;
+        r.refresh(&old_b, 100);
+        assert!(!r.v3 && !r.demo);
     }
 }
