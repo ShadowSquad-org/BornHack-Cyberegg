@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** the pet lives somewhere. Behind the pet the game screen shows a day sky with a small sun, or a dithered night sky with a moon and stars, following the wall clock (night 21:00 to 07:00). Dirt shows as things on the floor: crumbs, a banana peel, a can, a sock, a pizza box, one more at each dirt line, all gone after a wash. A content pet gets a row of grass tufts, and a poorly pet a small red cross. The Jellyfish pet leaves the game. Its 50 sprite files free 75 FAT12 clusters, and a badge that still has a Jellyfish pet asks the player to pick a new look for it. `copy_assets.py --update` learns to remove and replace shipped files without touching per-badge files.
+**Goal:** the pet lives somewhere. Behind the pet the game screen shows a day sky with a small sun, or a dithered night sky with a moon and stars, following the wall clock (night 21:00 to 07:00). Dirt shows as things on the floor: crumbs, a banana peel, a can, a sock, a pizza box, one more at each dirt line, all gone after a wash. A content pet gets a row of grass tufts, and a poorly pet a small red cross. The Jellyfish pet leaves the game. Its 50 sprite files free 75 FAT12 clusters. A badge whose live pet is a Jellyfish moves that pet to the Unicorn Realm with its record and shows "Moved to the / Unicorn Realm" above "Press Fire / for a new egg" (owner, 2026-11-14). `copy_assets.py --update` learns to remove and replace shipped files without touching per-badge files.
 
-**Architecture:** what the background shows is a pure function of the pet, `engine::scene::background_state(&GameState) -> Option<BackgroundState>`. It reads the engine's local minute of the day (`day_min`, plan 3), dirt, the status line and health. Its packed byte is the 8th element of the engine's `Visible` tuple. The five floor lines are dirt lines in `solver::extra_levels`, and the next sky switch is a plain timer in `solver::timer_bound`. So `next_wake_tick` wakes exactly when the background changes, with no polling and no step loop. Drawing lives in a new UI module, `src/game/background.rs`, in `embedded-graphics` primitives and small const bitmaps. It is drawn into the framebuffer right before the sprite blit, in the firmware `render()` and in the simulator's blit block. It uses no image files and adds no refresh: it rides the frames the pet screen already draws. The Jellyfish goes through three changes. Assets are removed through a hash-guarded `assets/asset-changes.txt` that `--update` applies. The firmware hides pets that have no sprites (`pet_registry::drop_without_sprites`). A saved pet of a hidden kind gets a "new look" pass through pet selection that keeps all its state.
+> **Pre-existing defect, fixed by this plan.** At `5e59574`, `assets/to-badge/` needs **505 of the 502 clusters** of the badge's FAT12 volume. A fresh full copy (`copy_assets.py`) runs out of space on its last file, `PETS.CFG`: the badge then has no roster and no pet can be picked. **Existing badges can be hit too.** A badge that already holds every current file needs the same 505 clusters, so today's `--update` fails with "no space" on the last missing file (often `BPETS_V3.CFG`, 6 clusters) and leaves a partial file behind. A badge provisioned with fewer files may still fit. Removing the Jellyfish (Task 7) brings the set to 429 clusters. Task 5 makes `--update` free space first (removals before additions) and delete a partial file when a copy runs out of space.
+
+**Architecture:** what the background shows is a pure function of the pet, `engine::scene::background_state(&GameState) -> Option<BackgroundState>`. It reads the engine's local minute of the day (`day_min`, plan 3), dirt, the status line and health. Its packed byte is the 8th element of the engine's `Visible` tuple. The five floor lines are dirt lines in `solver::extra_levels`, and the next sky switch is a plain timer in `solver::timer_bound`. So `next_wake_tick` wakes exactly when the background changes, with no polling and no step loop. Drawing lives in a new UI module, `src/game/background.rs`, in `embedded-graphics` primitives and small const bitmaps. It is drawn into the framebuffer right before the sprite blit, in the firmware `render()` and in the simulator's blit block. It uses no image files and adds no refresh: it rides the frames the pet screen already draws. The Jellyfish goes through three changes. Assets are removed through a hash-guarded `assets/asset-changes.txt` that `--update` applies. The firmware hides pets that have no sprites (`pet_registry::drop_without_sprites`). At boot, a live pet of a hidden kind is retired through the existing Unicorn Realm path (`lifecycle::retire_hidden_pet`). Its record is pushed the way `new_generation` pushes a "Reset Pet", the pet becomes Gone, and the usual Gone screen leads to a new egg.
 
 **Tech stack:** Rust, `no_std` firmware (embassy, embedded-graphics, FONT_7X13 / FONT_7X13_BOLD only), host tests through the `simulator` feature, Python 3 stdlib for `scripts/copy_assets.py`, Typst guide (`make guide`).
 
@@ -19,7 +21,8 @@
 - `src/game/engine/thresholds.rs`: field table 68 (`DEMO_*` fields end ~385), `CLASSIC` 394, `CASUAL` 719, `BORNPETS_CFG_KEYS` 1150, `DAY_LAST_MIN` 1909, `validate` 1941.
 - `src/game/engine/sim.rs`: `Outcome` 61, `Setup` 107, `run_with` 461, routines `balanced` 693, `absent` 856.
 - `src/game/mod.rs`: `status_wants_full_refresh` 477, layout consts 629 to 658 (`SEP_TOP` 34, `SEP_BOT` 111, `HAX_POS` 651, `PET_AREA_TOP` 658), `draw_backing` 670, `BATTERY_Y` 747, `draw_toast` 773, `draw_screen_game` 836 (HAX block ~912, simulator sprite block ~930), `render` 1090 (sprite blit ~1125), `lock_test_state` 1249.
-- `src/game/lifecycle.rs`: `local_minute` 58, `minute_of_day` 63, `on_wall_clock_set` 310, `start_new_game` 332, `cycle` sync 413, `pet_line` 480, `is_hibernating` 980, `new_generation` 1010, `pet_kind` 1064, `money_enabled` 1128.
+- `src/game/lifecycle.rs`: `REALM` 23, `local_minute` 58, `minute_of_day` 63, `init` 85 (loads kv `realm` 118), `on_wall_clock_set` 310, `start_new_game` 332, `cycle` sync 413, `pet_line` 480, `REALM_DIRTY` 632, `is_hibernating` 980, `new_generation` 1010 (records a living pet through `PetRecord::from_game_state`, `realm.push`, `REALM_DIRTY`), `pet_kind` 1064, `money_enabled` 1128, `realm_count` / `realm_pet` 1190, `save_if_needed` ~1215 (persists `realm` when `REALM_DIRTY`).
+- `src/game/engine/mod.rs` Realm: `realm_pending` 406, `PetRecord` 2449 (`pet_kind` 2455), `REALM_MAX_PETS` 2464. `src/game/mod.rs` Gone screen: `GONE_LEFT` 411, `GONE_PROMPT` 412, `screen_words` 420, Gone branch of `draw_screen_game` ~1005. `src/game/realm_view.rs`: the row shows `pet.pet_kind.name()` (= `pet_registry::name_of`).
 - `src/platform.rs`: `set_fake_uptime_ms` 13, `unix_secs` 116 (host: system time).
 - `src/game/pet_registry.rs`: `install` 83, `name_of` 111, `roster` 124, `is_known` 132. `src/game/pet_select.rs`: titles ~45, `words` ~52, `MODE_NEW_GEN` 67, `open_new_game` 130, `confirm` 179.
 - `src/game/sprite_loader.rs`: `init` 93, `count_anim_frames` 166, `blit_file` 305, `blit_pcx_sim` 486.
@@ -41,17 +44,23 @@ Every task's requirements include this section.
 - **CI and pushing:** CI runs on the GitHub mirror only, and every job keeps `if: github.server_url == 'https://github.com'`. Push `ranzbak/bornpets-v3-backgrounds` to the `github` remote only (public mirror `ranzbak/bornhack-firmware-2026-ce`), never to codeberg, and only in Tasks 9 and 10. Prefix SSH git commands with `SSH_AUTH_SOCK=/run/user/1000/gcr/ssh`.
 - **Hand-added PCX files:** 61 files in `assets/to-badge/` are not produced by `asset-gen export`: rows `0x20` to `0x28` for prefixes 00, 01 and 02 (`0020xx` to `0028xx`, `0120xx` to `0128xx`, `0220xx` to `0228xx`), and menu icons `0406xx` and `0407xx`. Never delete them, never call them stale, never regenerate `MANIFEST.TXT` (a regenerated manifest drops them). Edit it by hand. They keep being copied.
 - **Per-badge files:** `000000.PCX`, `010000.PCX` and `PETS.CFG` differ per badge, and `BPETS_V3.CFG` may be edited by the player. `--update` never overwrites, edits or deletes them. Neither does the old firmware's `BORNPETS.CFG`, which is not in the assets.
-- **FAT12 volume:** 1 MiB, 502 clusters of 2 KiB, 511 root entries. Budget at `5e59574`: `assets/to-badge/` is 422 files and **505 clusters**, 3 more than a fresh volume holds. The PCX take 490, `MANIFEST.TXT` 6, `BPETS_V3.CFG` 6, `ALARMS.ICS` 2 and `PETS.CFG` 1. The Jellyfish (prefix 08) is 50 PCX in 75 clusters. This plan adds **no** PCX file: every background and floor item is drawn in code.
+- **FAT12 volume:** 1 MiB, 502 clusters of 2 KiB, 511 root entries. Budget at `5e59574`: `assets/to-badge/` is 422 files and **505 clusters**, 3 more than a fresh volume holds (the pre-existing defect under Goal). The PCX take 490, `MANIFEST.TXT` 6, `BPETS_V3.CFG` 6, `ALARMS.ICS` 2 and `PETS.CFG` 1. The Jellyfish (prefix 08) is 50 PCX in 75 clusters. This plan adds **no** PCX file: every background and floor item is drawn in code.
 - **Sprite style:** this plan changes no sprite. A future outline or style change must be uniform all round, in every frame, or not done at all.
 - **Battery:** a full refresh flashes the panel and costs battery. Backgrounds add no refresh of their own. They are drawn into frames the pet screen already draws. They add at most 2 partial refreshes a day for the sky switch, plus at most one per floor-item step. They never add a full refresh, and red appears only while the red pet line already asks for one. Task 4 measures the bound. Day/night and backgrounds must not add a refresh per minute.
-- **Saves:** the save stays `state_v3`, format 3, 177 bytes. **This plan uses no save byte.** Demo keeps bytes 149 to 159, and bytes 160 to 176 stay reserved for plan 6. The new look rewrites the existing `pet_kind` field. Never write kv `state`, `game/name` or `BORNPETS.CFG`.
+- **Saves:** the save stays `state_v3`, format 3, 177 bytes. **This plan uses no save byte.** Demo keeps bytes 149 to 159, and bytes 160 to 176 stay reserved for plan 6. Retiring a Jellyfish uses the existing `phase` field of `state_v3` and the existing kv `game`/`realm` record list (`PetRealm`, 10 records). Never write kv `state`, `game/name` or `BORNPETS.CFG`. The retirement does not touch the pet's name key: `new_generation` handles the name as it does for every new egg.
+- **Owner answers (2026-11-14):**
+  1. "Send it to the Unicorn Realm": a live Jellyfish pet moves to the Realm with its record, then a new egg (Task 6).
+  2. The old `PETS.CFG` keeps `8=Jellyfish`: leave the file alone, and have the firmware hide a pet that has no sprites (Task 6).
+  3. The sky is plain white while the clock is not set (Task 3).
+  4. The poorly mark is the small red cross (Task 3).
+  5. The demo 1 % "Only pets hobby" belongs to plan 8 and is out of this plan's scope. It must be a scheduled demo timer, not a per-check dice roll. Task 8 notes this on roadmap row 8.
 - **Tunables:** the seven new values are `Thresholds` fields with a Classic and a Casual value and a `BPETS_V3.CFG` key. The template `assets/to-badge/BPETS_V3.CFG` is regenerated (`BPETS_REGEN=1`, plan 3 hook) and the `USER_GAMES.md` key list is updated, in the same commit. Drawing geometry (positions, bitmaps, dither levels) stays const.
 - **Flash:** the SSD1680 release image is 866 KiB of the 960 KiB gate. This plan adds an estimated 4 to 6 KiB (see Self-review, Flash). If space runs short, the owner allows removing the Lights Out mini-game (Task 10 only, its own commit).
 - **Guide:** this plan updates guide chapter 3 (`guide/chapters/03-reading-your-pet.typ`) and Meet the pets (`00-meet-the-pets.typ`), and the headless shots in `src/guide/shots.rs`. Every new on-screen word is marked with `w()`. Numbers come from `v()`; `lint_digits` rejects bare digits. Read `guide/` and `scripts/build_guide.py` before Task 8. Do not touch `GAME.md` (the final roadmap task rewrites it).
 - **Parallel stage (plan 5, Battles):** it touches the battle and friends views, the beacon, `thresholds.rs`, `tests.yml` and guide ch 11. This plan shares these files with it:
   - `thresholds.rs`, `assets/to-badge/BPETS_V3.CFG` and the `USER_GAMES.md` key list. This plan adds its seven fields and keys as one block after the last `DEMO_*` entry in each list. Whichever plan merges second regenerates the template and the key list from the merged table.
   - `tests.yml`: this plan adds one step at the end of the `guide` job and does not touch the matrix.
-  - `engine/mod.rs` (`Visible`, `visible`, `pub mod scene;`), `engine/sim.rs` (one `Outcome` field) and `lifecycle.rs` (new functions only, plus one call in `on_wall_clock_set`).
+  - `engine/mod.rs` (`Visible`, `visible`, `pub mod scene;`, `GameState::retire`), `engine/sim.rs` (one `Outcome` field), `lifecycle.rs` (new functions, plus one call in `on_wall_clock_set`), `src/game/mod.rs` (Gone screen lines, HAX) and `BORNPETS_V3_ROADMAP.md` (one note on row 8).
   - `src/guide/shots.rs`: new shots are appended at the end of `SHOTS`.
   - This plan does not touch `battle_view.rs`, `friends_view.rs`, the beacon, guide ch 11 or `guide/lib/social.typ`. The latter's comment "The seven kinds in a row" is left to plan 5.
 - Commit footer on every commit: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -71,7 +80,7 @@ Every task's requirements include this section.
 | Battery bar x 148 to 151, y 2 to 16; demo mark `D` x 148 to 151, y 19 to 23 | outside the pet area |
 | Sun / moon box | x 129 to 147, y 49 to 67 |
 | Poorly cross box | x 140 to 148, y 70 to 78 |
-| New-look title (`ui::draw_title_bar`, bold 7 px) | ≤ 21 columns |
+| Gone screen, retired pet: `Moved to the` / `Unicorn Realm` (bold red, centred at y 50 and 66, where `GONE_LEFT` sits) | ≤ 21 columns each |
 
 **Verify (V)**, the last step of Tasks 1 to 8:
 1. Run the task's focused tests (the commands are in the task). Nothing else.
@@ -86,26 +95,32 @@ The failure modes most likely to reach a player unnoticed, most likely first. Ea
 2. **The UI becomes unreadable at night**: HAX, toast or status text on the dither, or the sun or cross under the HAX or the battery. Pinned in Task 3 by `hax_reads_at_night`, `ui_boxes_stay_clear` and `background_stays_in_the_pet_area`.
 3. **Battery: the background costs flashes.** On the SSD1675 the dither raises changed pixels per idle frame, so the changed-pixel counter promotes to a full (flashing) refresh more often. Red drawn without the red line would also need full refreshes to seat. Pinned in Task 4 by `ssd1675_promotions_stay_bounded`, `the_sky_switch_is_cheap`, `poorly_cross_only_with_the_red_line` and `backgrounds_add_few_wakes`.
 4. **Guide pictures and lib tests change with the hour of the build.** The host clock is real time, so a night-time `make guide` would draw night shots. Pinned in Task 2 by `unix_secs_follows_the_fake_clock` and `lock_test_state_pins_noon`, and in Task 8 by `every_shot_is_drawn_at_noon_unless_it_says_night`.
-5. **The Jellyfish removal breaks a badge.** Risks: a saved Jellyfish pet shows a blank screen or crashes, the roster offers a pet without sprites, `--update` deletes a per-badge or hand-added file or a player's own file at prefix 08, or a fresh badge still overflows. Pinned in Task 5 by `update_keeps_retired_file_changed_on_badge` and `changes_refuse_protected_names`, in Task 6 by `a_saved_pet_without_sprites_asks_for_a_new_look` and `a_new_look_keeps_everything_else`, and in Task 7 by `repo_assets_fit_the_volume` and `hand_added_pcx_are_kept`.
+5. **The Jellyfish removal breaks a badge.** Risks:
+   - a saved Jellyfish pet shows a blank screen, crashes, is lost without a Realm record, or is recorded twice (once at retirement and again when the player presses Fire);
+   - the roster offers a pet without sprites;
+   - `--update` deletes a per-badge or hand-added file, or a player's own file at prefix 08;
+   - a fresh badge still overflows.
+
+   Pinned in Task 5 by `update_keeps_retired_file_changed_on_badge`, `changes_refuse_protected_names` and `update_removes_a_partial_file_on_no_space`. Pinned in Task 6 by `a_hidden_pet_moves_to_the_realm`, `the_new_egg_records_it_only_once`, `retiring_twice_records_once` and `the_gone_screen_says_where_it_went`. Pinned in Task 7 by `repo_assets_fit_the_volume` and `hand_added_pcx_are_kept`.
 
 ## File map
 
 | File | Change |
 |---|---|
 | `src/game/engine/scene.rs` | create: `Sky`, `BackgroundState`, `pack`, `is_night`, `sky`, `floor_items`, `floor_lines`, `minutes_to_switch`, `background_state`, `wake_view`, `FLOOR_ITEMS` |
-| `src/game/engine/mod.rs` | `pub mod scene;`; `Visible` gains `scene::wake_view` (8th element) |
+| `src/game/engine/mod.rs` | `pub mod scene;`; `Visible` gains `scene::wake_view` (8th element); `GameState::retire` |
 | `src/game/engine/solver.rs` | `extra_levels` Dirt gains the five floor lines; `timer_bound` gains `minutes_to_switch` |
 | `src/game/engine/status.rs` | `poorly` becomes `pub(crate) fn poorly` (one predicate for the danger word and the cross) |
 | `src/game/engine/thresholds.rs` | 7 fields, Classic and Casual values, keys, `validate` rules |
 | `assets/to-badge/BPETS_V3.CFG` | regenerated |
 | `src/game/engine/sim.rs` | `Outcome::scene_changes_per_day` |
 | `src/game/background.rs` | create: `draw_background` and its layer functions, geometry consts, bitmaps, tests (`mod draw`, `mod budget`) |
-| `src/game/mod.rs` | `pub mod background;`; `draw_backdrop`; HAX moved after the simulator blit and drawn on a white backing; `render()` draws the backdrop before the sprite |
-| `src/game/lifecycle.rs` | `background_state`, `clock_sync_needs_redraw`, `on_wall_clock_set` signal, `set_pet_kind`, `needs_new_look`, `check_pet_kind`; `debug_set_dirt_pct` (host only) |
+| `src/game/mod.rs` | `pub mod background;`; `draw_backdrop`; HAX moved after the simulator blit and drawn on a white backing; `render()` draws the backdrop before the sprite; Gone screen `RETIRED_LINES` for a hidden kind, in `screen_words` |
+| `src/game/lifecycle.rs` | `background_state`, `clock_sync_needs_redraw`, `on_wall_clock_set` signal, `is_hidden_kind`, `retire_hidden_pet`; `debug_set_dirt_pct` (host only) |
 | `src/platform.rs` | host fake wall clock `set_fake_unix` |
 | `src/game/pet_registry.rs` | `drop_without_sprites` |
-| `src/game/pet_select.rs` | `MODE_NEW_LOOK`, `open_new_look`, `PROMPT_NEW_LOOK` |
-| `src/bin/embassy.rs` | boot order: sprite catalogue, `drop_without_sprites`, then `lifecycle::init`, then `check_pet_kind` |
+| `src/bin/embassy.rs` | boot order: sprite catalogue, `drop_without_sprites`, then `lifecycle::init`, then `retire_hidden_pet` |
+| `BORNPETS_V3_ROADMAP.md` | row 8: the demo hobby moment as a scheduled demo timer (owner answer 5) |
 | `src/sim_support.rs` | `install_pets_from_repo_cfg` calls `drop_without_sprites` |
 | `scripts/copy_assets.py` | `load_changes`, removals and replacements in `update_assets_to`, `PROTECTED`, `volume_budget` |
 | `scripts/test_copy_assets.py` | new tests |
@@ -317,12 +332,12 @@ pub(crate) fn draw_backdrop<D: DrawTarget<Color = TriColor>>(display: &mut D) ->
 pub fn debug_set_dirt_pct(pct: u8);   // sets the live pet's dirt (guide shots and tests only)
 ```
 - **Layers** (each a private function in `background.rs`):
-  - `Sky::Plain`: nothing, a white pet area. The badge does not claim a time it does not know (planner's call, see "Needs the owner" 3).
+  - `Sky::Plain`: nothing, a white pet area. The badge does not claim a time it does not know (owner answer 3).
   - `Sky::Day`: a white sky with a sun in `SUN_MOON_BOX`: a filled black disc of radius 4 at (138, 58) and eight 2-px rays.
   - `Sky::Night`: the Bayer dither over y `SKY_TOP` to `SKY_BOTTOM`, full width. Then each star is a 5 x 5 black square with a white 3 x 3 plus on it. The moon is a 19 x 19 black square in `SUN_MOON_BOX` with a white crescent: a white disc of radius 7 at (138, 58) minus a black disc of radius 6 at (141, 56).
   - Floor items `0..bg.floor`: each a small const 1-bpp black bitmap on white, drawn inside its `FLOOR_SLOTS` box. The implementer draws the five pictures within the boxes, in black outline with white fill (planner's call on the pixels).
   - Grass, when `bg.grass`: a 5 x 4 black tuft at each `TUFT_XS` whose box meets no box of a shown floor item.
-  - Poorly, when `bg.poorly`: `CROSS_BOX` white with a red plus (arms 3 px wide, 7 px long), centred.
+  - Poorly, when `bg.poorly`: `CROSS_BOX` white with a red plus (arms 3 px wide, 7 px long), centred (owner answer 4).
   - The floor band y 100 to 109 stays white at night: items and tufts read on white, and the status backing sits there anyway (planner's call).
 - **Hooks:**
   - Firmware `render()`: right after `lifecycle::cycle()` and `prompt_for_name()`, and before the in-game sprite blit, call `draw_backdrop(display)`.
@@ -417,7 +432,7 @@ fn changed_px(a: &Canvas, b: &Canvas) -> u32;        // differing pixels in y 35
 
 ### Task 5: `copy_assets.py --update` removes and replaces shipped files
 
-Roadmap row 7: assets reach existing badges through `copy_assets.py --update`, "extend it for replacements". Today `--update` only adds missing files.
+Roadmap row 7: assets reach existing badges through `copy_assets.py --update`, "extend it for replacements". Today `--update` only adds missing files. On a full volume it stops on the first "no space" error and leaves a partial file (the pre-existing defect under Goal).
 
 **Files:**
 - Modify: `scripts/copy_assets.py`, `scripts/test_copy_assets.py`, `.github/workflows/tests.yml` (one step), `README.md` (the `--update` paragraph).
@@ -436,10 +451,10 @@ def load_changes(path) -> list[tuple[str, str, frozenset[str]]]:
     or a PROTECTED name."""
 def update_assets_to(mount_point, assets_dir, changes=()) -> dict:
     """Removals, then replacements, then the missing files (so space is freed first).
-    Returns {"removed": [...], "replaced": [...], "added": [...], "kept": [...]}."""
+    Returns {"removed": [...], "replaced": [...], "added": [...], "kept": [...], "no_space": [...]}."""
 def volume_budget(assets_dir) -> tuple[int, int]:  # (clusters, root entries) a fresh copy of assets_dir needs
 ```
-- A removal deletes the volume file only when its sha256 is one of the listed hashes. Otherwise the file goes to `kept`: a player may have put their own pet at that prefix. A replacement overwrites only a listed old version, written to `NAME.TMP` and then `os.replace`. A replacement whose asset file is missing in `assets_dir` raises `ValueError`. Name matching folds case, as today. `process_device` passes `load_changes(CHANGES_FILE)` and prints the four counts.
+- A removal deletes the volume file only when its sha256 is one of the listed hashes. Otherwise the file goes to `kept`: a player may have put their own pet at that prefix. A replacement overwrites only a listed old version, written to `NAME.TMP` and then `os.replace`. A replacement whose asset file is missing in `assets_dir` raises `ValueError`. Name matching folds case, as today. If an add or a replacement hits `OSError` with `errno.ENOSPC`, the partial file is deleted (for a replacement, the `NAME.TMP` file, so the old file stays), and the name goes to a fifth list, `"no_space"`. The run then goes on with the remaining files. `process_device` passes `load_changes(CHANGES_FILE)` and prints the counts, with a loud `WARN` line naming each `no_space` file.
 - CI: append `- run: python3 -m unittest discover -s scripts -p 'test_copy_assets.py'` to the `guide` job, after `test_build_guide.py`. It is a host-only Python step and keeps the job's `if:` guard.
 
 - [ ] **Step 1: write the failing tests** in `scripts/test_copy_assets.py`:
@@ -450,6 +465,7 @@ def test_update_replaces_only_a_known_old_version(self): ...      # MANIFEST.TXT
 def test_changes_refuse_protected_names(self): ...                # remove/replace of PETS.CFG, 000000.PCX, 010000.PCX, BPETS_V3.CFG, bornpets.cfg -> ValueError
 def test_update_removes_before_it_adds(self): ...                 # record os.remove and the add copy: every remove precedes every add
 def test_update_without_changes_behaves_as_before(self): ...      # changes=() -> identical to today's result plus empty lists
+def test_update_removes_a_partial_file_on_no_space(self): ...     # patch copyfileobj to write 10 bytes then raise OSError(ENOSPC): no file left at dst, name in "no_space", later files still added
 def test_volume_budget_counts_clusters_and_entries(self): ...     # temp dir: 1 B, 2048 B, 2049 B files -> (1 + 1 + 2, 3)
 ```
 - [ ] **Step 2: run and see them fail.** `python3 -m unittest discover -s scripts -p 'test_copy_assets.py'`.
@@ -458,65 +474,101 @@ def test_volume_budget_counts_clusters_and_entries(self): ...     # temp dir: 1 
 - [ ] **Step 5: commit** `feat(assets): copy_assets --update removes and replaces shipped files`.
 - [ ] **Step 6: V.**
 
-### Task 6: pets without sprites leave the roster; a saved pet gets a new look
+### Task 6: pets without sprites leave the roster; a live one moves to the Unicorn Realm
 
-Spec 14.5: "check what a badge with a saved Jellyfish pet does on boot (it must fall back to pet selection, not crash)." A pet is a pure cosmetic skin (`pet_registry.rs` header). This plan's design keeps the pet and asks only for a new look (see "Needs the owner" 1).
+Spec 14.5: "check what a badge with a saved Jellyfish pet does on boot (it must fall back to pet selection, not crash)". Owner answer 1 (2026-11-14): "send it to the Unicorn Realm". The pet moves to the Realm with its record, then the player starts a new egg. This goes through the existing Gone/Realm path: the record is pushed as `new_generation` pushes a "Reset Pet" (`PetRecord::from_game_state`, `realm.push`, `REALM_DIRTY`), the pet becomes Gone, and the existing Gone screen leads through pet selection to a new egg. No save byte is used. The only kv keys written are the existing `state_v3` and `realm`.
+
+**When it happens:** at every boot, after the sprite catalogue, a live pet whose kind has no idle sprite on the badge is retired. A pet retires once: after that it is Gone. In practice this is the first boot of the new firmware on a badge without Jellyfish sprites. That covers a fresh asset copy, and a badge after `copy_assets.py --update` removed them (the catalogue is read at boot, so the next boot after the update). A badge with the new firmware whose Jellyfish files are still on flash keeps its Jellyfish: the files and the `PETS.CFG` line still make it a valid pet.
+
+**What the player sees:** the Gone screen, in bold red as today. In place of `GONE_LEFT` it shows `Moved to the` / `Unicorn Realm`, which is true: the record has been pushed. The existing `Press Fire` / `for a new egg` follows. Fire opens pet selection (`Choose your Pet`, then the money choice) as after any pet that left. The Gone screen already gets the full tri-colour refresh (`status_wants_full_refresh`, Gone), so this adds nothing new.
+
+**The Realm record keeps its kind name:** yes. `drop_without_sprites` removes the pet from the selectable roster but keeps its `PETS.CFG` name. An old badge keeps `8=Jellyfish` (owner answer 2: `--update` never edits `PETS.CFG`), so `realm_view` shows "<name> (Jellyfish) - <age>". Only if the player deletes that line does the kind show as "Pet" (`UNKNOWN_NAME`). A fresh badge has no Jellyfish records.
 
 **Files:**
-- Modify: `src/game/pet_registry.rs`, `src/game/pet_select.rs`, `src/game/lifecycle.rs`, `src/bin/embassy.rs` (boot order), `src/sim_support.rs`.
-- Test: `src/game/pet_registry.rs`, `src/game/pet_select.rs` and `src/game/lifecycle.rs` tests.
+- Modify: `src/game/pet_registry.rs`, `src/game/engine/mod.rs` (`GameState::retire`; `#[derive(PartialEq, Eq, Debug)]` on `PetRecord` if missing), `src/game/lifecycle.rs`, `src/game/mod.rs` (Gone screen lines, `screen_words`), `src/bin/embassy.rs` (boot order), `src/sim_support.rs`.
+- Test: `src/game/pet_registry.rs`, `src/game/lifecycle.rs` and `src/game/mod.rs` tests.
 
 **Interfaces:**
-- Consumes: `sprite_loader::count_anim_frames`, `anim_files::anim_id_for(DisplayAnim::Idle)`.
+- Consumes: `sprite_loader::count_anim_frames`, `anim_files::anim_id_for(DisplayAnim::Idle)`, `PetRecord::from_game_state`, `REALM`, `REALM_DIRTY`, `pet_name_bytes_sync`, `pet_select::open_new_generation`.
 - Produces:
 ```rust
 // pet_registry.rs
-/// Once, after the sprite catalogue: drop from the roster every pet with no idle frame. Its name stays
-/// known to `name_of`, so Unicorn Realm records keep it.
+/// Once, after the sprite catalogue: drop from the selectable roster every pet with no idle frame.
+/// Its PETS.CFG name stays known to `name_of`, so Unicorn Realm records keep it.
 pub fn drop_without_sprites(has_sprites: impl Fn(u8) -> bool);
-// pet_select.rs
-const MODE_NEW_LOOK: u8 = 2;
-const PROMPT_NEW_LOOK: &str = "Pick a new look";
-pub fn open_new_look();   // PHASE_PET with PROMPT_NEW_LOOK; Fire calls lifecycle::set_pet_kind and closes (no money phase)
+fn drop_from(reg: &mut Registry, has_sprites: impl Fn(u8) -> bool); // the pure part, unit-tested on a local Registry
+// engine/mod.rs
+/// The pet leaves for good now: phase Gone, no running action, not hibernating, realm_pending false
+/// (the caller has pushed the record); request_save().
+pub fn retire(&mut self);
 // lifecycle.rs
-pub fn set_pet_kind(kind: engine::PetKind);  // only pet_kind changes; request_save()
-pub fn needs_new_look() -> bool;             // a game exists, phase != Gone, !pet_registry::is_known(kind), roster not empty
-pub fn check_pet_kind();                     // if needs_new_look() { pet_select::open_new_look() }
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Retired { Nothing, ToRealm, Egg }
+/// A kind the badge cannot show: not in the selectable roster, while the roster has other pets.
+pub fn is_hidden_kind(kind: engine::PetKind) -> bool;
+/// At boot, after drop_without_sprites and lifecycle::init:
+/// - no game, an empty roster, a known kind, or already Gone: Nothing;
+/// - Hatching (an egg never lived, as new_generation's rule): pet_select::open_new_generation(), no record: Egg;
+/// - Active or Leaving (hibernating and demo pets included): push PetRecord::from_game_state unless the realm's
+///   last record already equals it (a power cut between the realm and state writes), set REALM_DIRTY, retire(): ToRealm.
+pub fn retire_hidden_pet() -> Retired;
+// game/mod.rs
+const RETIRED_LINES: [&str; 2] = ["Moved to the", "Unicorn Realm"]; // drawn at y 50 and 66 when is_hidden_kind(pet_kind())
 ```
 - Boot order in `src/bin/embassy.rs`:
   1. `pets_cfg::load_and_install` (as today).
   2. `sprite_loader::init().await`, moved before `lifecycle::init`.
   3. `pet_registry::drop_without_sprites(|id| sprite_loader::count_anim_frames(id, idle) > 0)`.
-  4. `lifecycle::init().await`.
-  5. `lifecycle::check_pet_kind()`.
+  4. `lifecycle::init().await`. It loads the save and the kv `realm`, so the push lands on the loaded Realm.
+  5. `lifecycle::retire_hidden_pet()`, with a `defmt::info!` of the result.
+
   Update the `REGISTRY` safety comment: it gets two boot-time writes, both before any reader. `sim_support::install_pets_from_repo_cfg` calls `drop_without_sprites` with the simulator's `count_anim_frames`.
-- With an empty roster the pet stays as it is: there is nothing to pick, and the pet select screen already says "No pets installed / Check PETS.CFG". A Gone pet of a dropped kind goes the normal new-egg way.
-- Unicorn Realm: records are untouched. A past Jellyfish shows "Jellyfish" while the badge's `PETS.CFG` keeps its line, which `--update` never edits, and "Pet" (`UNKNOWN_NAME`) if the player removes that line. The record's own pet name still leads the row.
+- `save_if_needed` is unchanged. It already writes `realm` when `REALM_DIRTY` is set, and then `state_v3`, so the retirement persists within one save cycle. If the power is cut between the two writes, the next boot retires the pet again, and the last-record check stops a second record.
+- Gone-screen text: when `is_hidden_kind(pet_kind())`, draw `RETIRED_LINES` where `GONE_LEFT` goes, whatever `frame_count()` says. A hidden kind has no farewell sprite to show. Otherwise the screen is as today. A pet that left by itself before the update also shows the lines, which is true: every pet that leaves is recorded in the Realm.
 
 - [ ] **Step 1: write the failing tests:**
 ```rust
 // pet_registry.rs
 #[test] fn pets_without_sprites_leave_the_roster_but_keep_their_name() {
-    // install 0=A, 7=B, 8=C; drop_without_sprites(|id| id != 8): roster == [0, 7]; name_of(8) == "C"; is_known(8) false
+    // local Registry filled with 0=A, 7=B, 8=Jellyfish; drop_from(&mut reg, |id| id != 8):
+    // ids == [0, 7]; the name lookup for 8 still gives "Jellyfish"; 8 is not selectable
 }
-// lifecycle.rs (lock_test_state)
-#[test] fn a_saved_pet_without_sprites_asks_for_a_new_look() {
-    // roster [0, 7] (8 dropped); start_new_game(PetKind(8), ..) then hatch: needs_new_look(); check_pet_kind() ->
-    // pet_select::is_active() with title "Pick a new look"
+// lifecycle.rs (lock_test_state; a roster without 8 installed, e.g. install_pets_from_repo_cfg after Task 7 or the test roster)
+#[test] fn a_hidden_pet_moves_to_the_realm() {
+    // start_new_game(PetKind(8), true, false), hatch, set_pet_name(b"Jelly"), skip 600 min; n = realm_count();
+    // retire_hidden_pet() == Retired::ToRealm; realm_count() == n + 1 (or 10 when full: oldest dropped, as push does);
+    // the newest realm_pet: pet_kind == PetKind(8), generation and age_ticks equal the pet's, name "Jelly";
+    // display_anim() == Gone; is_started() false (the Gone rule at lifecycle 209)
 }
-#[test] fn a_new_look_keeps_everything_else() {
-    // that pet with needs, age, money, demo set: Down, Fire on the new-look screen -> pet_kind == roster[1];
-    // to_bytes() equal except the pet_kind byte; pet_select closed; no money phase shown
+#[test] fn the_new_egg_records_it_only_once() {
+    // after a_hidden_pet_moves_to_the_realm's steps: new_generation(PetKind(0), true, false) -> realm_count() unchanged,
+    // the live pet is an egg of kind 0
 }
-#[test] fn a_known_pet_needs_no_new_look() { /* PetKind(0): !needs_new_look(); check_pet_kind() opens nothing */ }
-#[test] fn no_new_look_without_a_roster() { /* empty roster: !needs_new_look() */ }
-// pet_select.rs
-#[test] fn new_look_title_fits() { /* PROMPT_NEW_LOOK.len() <= 21; it is in words() */ }
+#[test] fn retiring_twice_records_once() {
+    // retire_hidden_pet() twice -> one record (the second call sees Gone: Nothing);
+    // power-cut case: push the pet's own record by hand, keep it Active, retire_hidden_pet() -> ToRealm, still one record
+}
+#[test] fn a_hidden_egg_goes_back_to_pet_selection() {
+    // start_new_game(PetKind(8), ..) still Hatching: Retired::Egg, realm_count() unchanged, pet_select::is_active()
+}
+#[test] fn hibernating_and_demo_pets_move_too() { /* kind 8, hibernating: ToRealm, !is_hibernating(); kind 8 in demo: ToRealm */ }
+#[test] fn a_known_pet_is_left_alone() { /* PetKind(0) Active: Nothing, phase and realm unchanged */ }
+#[test] fn nothing_happens_without_a_roster() { /* is_hidden_kind is false while the roster is empty (pure check on an empty slice) */ }
+#[test] fn retiring_uses_only_state_v3_and_realm() {
+    // engine::SAVE_KEY == "state_v3"; the retire path's source (include_str of lifecycle.rs between the
+    // retire_hidden_pet markers) names no "\"state\"", "game/name" or "BORNPETS.CFG"
+}
+// game/mod.rs (simulator, lock_test_state)
+#[test] fn the_gone_screen_says_where_it_went() {
+    // retired kind-8 pet: draw_screen_game -> RED pixels in the text rows of y 50 and 66 and of GONE_PROMPT;
+    // a kind-0 pet that went Gone: no pixels in the RETIRED_LINES rows (frame_count() is u8::MAX on the simulator);
+    // screen_words() contains both RETIRED_LINES; each line <= 21 columns
+}
 ```
-- [ ] **Step 2: run and see them fail.** `CARGO_BUILD_JOBS=2 taskset -c 2,3 cargo test -j 2 --features simulator --lib -- game::pet_registry:: game::pet_select:: game::lifecycle::`.
+- [ ] **Step 2: run and see them fail.** `CARGO_BUILD_JOBS=2 taskset -c 2,3 cargo test -j 2 --features simulator --lib -- game::pet_registry:: game::lifecycle:: game::tests::`.
 - [ ] **Step 3: implement** as above.
 - [ ] **Step 4: run them and see them pass.** The same command, then the embassy `cargo check`.
-- [ ] **Step 5: commit** `feat(game): pets without sprites leave the roster; a saved one gets a new look`.
+- [ ] **Step 5: commit** `feat(game): a pet without sprites moves to the Unicorn Realm`.
 - [ ] **Step 6: V.**
 
 ### Task 7: remove the Jellyfish
@@ -550,10 +602,10 @@ def test_no_jellyfish_left(self): ...                # no 08*.PCX in to-badge; P
 Guide rule: each plan updates its chapter; every new on-screen word is marked; `make guide` is green.
 
 **Files:**
-- Modify: `src/guide/shots.rs`, `src/guide/words.rs` (only if `pet_select::words()` does not already carry the new title: it does after Task 6, so expect no change), `guide/chapters/03-reading-your-pet.typ`, `guide/chapters/00-meet-the-pets.typ`, `tests/guide_shots.rs`.
+- Modify: `src/guide/shots.rs`, `guide/chapters/03-reading-your-pet.typ`, `guide/chapters/00-meet-the-pets.typ`, `tests/guide_shots.rs`, `BORNPETS_V3_ROADMAP.md` (row 8 note). `src/guide/words.rs` needs no change: `RETIRED_LINES` reach `words.json` through `screen_words()` (Task 6).
 
 **Interfaces:**
-- Consumes: Task 2 `platform::set_fake_unix`; Task 3 `lifecycle::debug_set_dirt_pct`; Task 6 `lifecycle::check_pet_kind`, `pet_select::open_new_look`; Task 1 keys through `v()`.
+- Consumes: Task 2 `platform::set_fake_unix`; Task 3 `lifecycle::debug_set_dirt_pct`; Task 6 `lifecycle::retire_hidden_pet`, `RETIRED_LINES`; Task 1 keys through `v()`.
 - Produces:
 ```rust
 // shots.rs
@@ -564,7 +616,8 @@ pub const SHOT_NIGHT_UNIX: u32 = 1_785_618_000;  // 23:00 local, the same day
 //   "day"        content pet at noon                  expect: background_state() sky Day and grass
 //   "night"      content pet, Do(set_night) (set_fake_unix(Some(SHOT_NIGHT_UNIX)) then a cycle)  expect: sky Night
 //   "floor"      content pet, Do(|| debug_set_dirt_pct(96))   expect: floor == 5
-//   "new-look"   Start with PetKind(8) (no sprites since Task 7), hatch, Do(check_pet_kind)  expect: pet_select active, new-look title
+//   "to-the-realm" Start with PetKind(8) (no sprites since Task 7), hatch, Do(retire) (retire_hidden_pet() == ToRealm)
+//                  expect: display_anim() == Gone and lifecycle::is_hidden_kind(lifecycle::pet_kind())
 ```
 - **Every shot changes**, because the game screen now has a background. The noon default keeps them stable: a day sky with a sun, plus grass and floor items wherever the shot's state has them. Check the "content" shot that `content-marks` annotates (marks A to F). If the sun lands on a mark label, move the label offsets in `guide/lib/booklet.typ`, not the sun.
 - **Chapter 3**, a new section `== Sky and floor` after "The screen". It covers:
@@ -576,7 +629,8 @@ pub const SHOT_NIGHT_UNIX: u32 = 1_785_618_000;  // 23:00 local, the same day
   - A hibernating pet has no sky.
   - The sky costs no extra screen flashes (one sentence; no numbers that are not `v()`).
   - Pictures: `screen("day")`, `screen("night")`, `screen("floor")`.
-- **Meet the pets**: one short paragraph. The jellyfish has swum off. A badge whose pet was a jellyfish shows #w("Pick a new look"); pick one and your pet carries on with everything it had. Add `screen("new-look")`. The roster grid drops the jellyfish by itself (`roster.json` from `PETS.CFG`).
+- **Meet the pets**: one short paragraph. The jellyfish has swum off to the Unicorn Realm. On a badge whose pet was a jellyfish, that pet moves to the Realm with its record the first time the badge starts without jellyfish pictures. The screen says #w("Moved to the") #w("Unicorn Realm"), and #w("Press Fire") starts a new egg. The jellyfish stays in the Realm list under its name. Add `screen("to-the-realm")`. The roster grid drops the jellyfish by itself (`roster.json` from `PETS.CFG`).
+- **Roadmap note** (owner answer 5): in `BORNPETS_V3_ROADMAP.md`, add to row 8's "Ships" cell: "demo pet's occasional Only pets hobby moment (spec 8.3), as a scheduled demo timer (`demo::timers`), never a per-check dice roll". Commit it with this task.
 
 - [ ] **Step 1: write the failing test** in `tests/guide_shots.rs`:
 ```rust
@@ -586,11 +640,11 @@ pub const SHOT_NIGHT_UNIX: u32 = 1_785_618_000;  // 23:00 local, the same day
     // `guide shot day` (a named copy of a content pet at noon, for ch 3) has the same non_white as `content`
 }
 ```
-`every_shot_reaches_its_state` needs no change: it finds the four new shots through `guide shots`.
+`every_shot_reaches_its_state` needs no change: it finds the four new shots (`day`, `night`, `floor`, `to-the-realm`) through `guide shots`.
 - [ ] **Step 2: run and see it fail.** `CARGO_BUILD_JOBS=2 taskset -c 2,3 cargo test -j 2 --features simulator --test guide_shots`.
 - [ ] **Step 3: implement** the shots and the fake clock in `run`, then the two chapters.
 - [ ] **Step 4: run and see it pass.** The same command: PASS. Then `CARGO_BUILD_JOBS=2 taskset -c 2,3 make guide` (it builds the guide bin and checks marks, digits and pictures): green. Look at the PDF pages for chapters 0 and 3.
-- [ ] **Step 5: commit** `docs(guide): sky and floor in ch3, the jellyfish leaves`.
+- [ ] **Step 5: commit** `docs(guide): sky and floor in ch3, the jellyfish moves to the Realm`.
 - [ ] **Step 6: V.**
 
 ### Task 9: regression and integration on CI
@@ -615,7 +669,7 @@ One push, the whole suite. Nothing changes in this task.
   - Both firmware builds pass, and the flash gate holds: the SSD1680 release image is ≤ 960 KiB. If it is over, removing Lights Out goes to Task 10 as its own item.
   - The guide job is green, including the new `copy_assets` step.
   - The Task 4 numbers are within their bounds.
-- [ ] **Step 6:** report: green or the list of failures, the numbers, the image size. If everything is green, the coordinator may DFU-flash `fw-1680-release` to the owner's SSD1680 badge (owner allowance after review and green CI) so the owner can look for ghosting at the day/night switch (spec 14.4) and check the new look on a badge that still has a Jellyfish save. Task 10 then records "nothing to fix" and the final numbers.
+- [ ] **Step 6:** report: green or the list of failures, the numbers, the image size. If everything is green, the coordinator may DFU-flash `fw-1680-release` to the owner's SSD1680 badge (owner allowance after review and green CI) so the owner can look for ghosting at the day/night switch (spec 14.4) and, on a badge that still has a Jellyfish save, check that it moves to the Unicorn Realm after `--update` and a reboot. Task 10 then records "nothing to fix" and the final numbers.
 
 ### Task 10: bug-fix round
 
@@ -646,9 +700,9 @@ After the last fix:
 
 | Where | Text |
 |---|---|
-| Pet select, new-look title | `Pick a new look` |
+| Gone screen, a pet whose kind has no sprites (bold red, in place of `Your pet has left`) | `Moved to the` / `Unicorn Realm` |
 
-The background has no text. The HAX balance, the toasts and the status line keep their words; HAX gains only a white backing. The new look reuses the pet select screen's existing `Fire to confirm` hint, and its list shows the roster names from `PETS.CFG`.
+The background has no text. The HAX balance, the toasts and the status line keep their words; HAX gains only a white backing. The retired pet's screen keeps the existing `Press Fire` / `for a new egg`, and pet selection after it is unchanged.
 
 ## Self-review
 
@@ -660,50 +714,52 @@ The background has no text. The HAX balance, the toasts and the status line keep
 | 14.2 layer 1: day white with a sun, night dither denser on top, white stars, moon, not solid black | T1 (`sky`), T3 (`night_is_about_half_black_and_denser_on_top`, `day_has_a_sun_and_night_a_moon`) |
 | 14.2 floor items 40 / 55 / 70 / 85 / 95, fixed slots, cumulative, nothing moves, wash clears in one refresh | T1 (`floor_items`), T2 (`a_floor_step_is_a_wake`, `washing_clears_the_floor_at_once`), T3 (`floor_items_are_cumulative_and_never_move`) |
 | 14.2 healthy and content: grass | T1 (`grass`), T3 |
-| 14.2 poorly: red cross (the "or" of the spec; owner question 4) | T1 (`poorly`), T3 (`only_the_cross_is_red`), T4 |
+| 14.2 poorly: red cross (the "or" of the spec; owner answer 4) | T1 (`poorly`), T3 (`only_the_cross_is_red`), T4 |
 | 14.2 order: background, sprite, status and UI | T3 (`backdrop_sits_under_the_sprite`, `ui_boxes_stay_clear`) |
 | 14.2 hibernating draws no background | T1 (`hibernating_and_eggs_draw_nothing`), T3 |
 | 14.2 drawn in code, no images | T3; no PCX added (FAT12 budget) |
 | 14.2 "last mess" field (optional later) | not done: it needs save bytes, and the owner asked for none unless needed |
-| 14.3 local time from `unix_now` + TZ; night 21:00 to 07:00; plain while unknown | T1 (keys, `is_night`, `sky`), T2 (engine `day_min` via `sync_clock`) |
+| 14.3 local time from `unix_now` + TZ; night 21:00 to 07:00; plain white while unknown (owner answer 3) | T1 (keys, `is_night`, `sky`), T2 (engine `day_min` via `sync_clock`) |
 | 14.3 sunrise and sunset as kind-B boundaries; a sync recomputes the next one | T2 (`timer_bound`, `the_sky_switch_is_a_wake`, `a_clock_jump_redraws`) |
 | 14.3 night independent of the pet's sleep | T1 (`sky` reads only the clock), T8 (guide sentence) |
 | 14.4 no added refreshes; switch and overlays are partial; full at the switch only if ghosting is seen | T4 (bounds), T10 (ghosting rule) |
 | 14.5 `background.rs`, `draw_background`, dither helper, called before the sprite blit | T3 |
 | 14.5 "seeded speck positions" | dropped: the owner's floor-item decision replaced specks; stars use fixed positions |
 | 14.5 engine sunrise/sunset in `next_wake_tick`; dirt thresholds in the kind-A table | T2 (as tunable lines in `extra_levels`, where the solver keeps tunable lines; 85 is the `DIRT_DANGER_PCT` edge already) |
-| 14.5 Jellyfish: files, `PETS.CFG` line, manifest lines, sources; saved pet falls back to pet selection | T5, T6, T7 |
+| 14.5 Jellyfish: files, manifest lines, sources removed; old `PETS.CFG` line left alone (owner answer 2); a saved Jellyfish moves to the Unicorn Realm with its record, then a new egg (owner answer 1, replaces the spec's "fall back to pet selection") | T5, T6 (`a_hidden_pet_moves_to_the_realm` and the rest), T7, T8 (`to-the-realm` shot) |
 | 14.5 simulator draws the same function | T3 (`draw_backdrop` in both paths) |
 | Roadmap 7: assets reach badges through `copy_assets.py --update`, extended for replacements | T5 (removals and hash-guarded replacements), T7 (the change list) |
 | Roadmap 7: updates guide ch 3 | T8 (plus Meet the pets, as briefed) |
 | 8.3 calm idle (5-minute idle frame) | ruled out: already shipped by plan 2 Task 3 (`pacing::IDLE_FRAME_SECS` 300, for every pet) |
 | 8.3 full refresh at most once an hour | included as a measured bound: T4 `ssd1675_promotions_stay_bounded` (≤ 24 a day from idle frames); the SSD1680 has no runtime full refresh. The 8.3 "full refresh at sleep and wake" is not added (spec 14.4: only if ghosting shows) |
-| 8.3 1 % "Only pets" hobby moment | ruled out: "1 % chance per check" is a dice roll per check, which is polling, and it is demo policy, not a background; each moment adds animation refreshes. Owner question 5 |
+| 8.3 1 % "Only pets" hobby moment | moved to plan 8 as a scheduled demo timer, never a per-check dice roll (owner answer 5); T8 adds the note to roadmap row 8 |
 
 **Resolved conflicts and gaps (planner's calls):**
 1. **The background is an engine function.** It must be in `Visible` for exact wakes, so `scene.rs` lives in the engine (integer math, no drawing) and `background.rs` in the UI. The spec's `BackgroundState` name is kept.
-2. **Plain sky while the clock is unknown.** Spec: "the base layer is plain day". Plain means white with no sun, so the badge never claims a time it does not know. Owner question 3.
+2. **Plain sky while the clock is unknown.** Spec: "the base layer is plain day". Plain means white with no sun, so the badge never claims a time it does not know. Owner answer 3.
 3. **The floor band stays white at night.** The status backing covers its centre anyway, and items and tufts read on white. The slots sit at the sides (x 4 to 44 and 120 to 144), clear of a status line of up to 13 columns. A longer line covers some items: that is the spec's layer order (UI on top).
 4. **The cross shows only with the red line** (`poorly && pet_line().red()`). Red on the SSD1675 seats only through the full tri-colour refresh, which the red line already triggers. So the cross never causes a flash. A demo config with `DEMO_HELP_HEALTH_PCT` under the danger line simply shows no cross.
 5. **HAX gets a white backing and is drawn after the sprite in the simulator too.** Without the backing it is unreadable on the night sky. The move also makes the simulator match the firmware draw order.
 6. **Seven tunables.** The night window and the five floor lines are numbers a player may want to change, for example for festival hours. Casual equals Classic. The geometry stays const.
-7. **The Jellyfish stays in old badges' `PETS.CFG`.** The file is per badge and `--update` never edits it. The firmware hides any pet without sprites, so the line does no harm and keeps the Realm's names (owner question 2).
+7. **The Jellyfish stays in old badges' `PETS.CFG`.** The file is per badge and `--update` never edits it. The firmware hides any pet without sprites, so the line does no harm and keeps the Realm's names (owner answer 2).
 8. **Hash-guarded asset changes.** A removal or replacement touches only a byte-identical shipped version, so a player's own prefix-08 pet survives. The 61 hand-added PCX are never listed (T7 test).
-9. **A saved Jellyfish keeps its life.** It gets a new look through pet selection (spec: "fall back to pet selection"), with every stat kept and no save byte used (owner question 1).
-10. **The FAT12 overflow today.** `assets/to-badge/` at `5e59574` needs 505 of 502 clusters, so a fresh `copy_assets.py` copy runs out of space on its last file (`PETS.CFG`, last in sort order). Removing the Jellyfish fixes it, and T7 keeps 16 clusters spare as a guard for later plans.
+9. **A saved Jellyfish moves to the Unicorn Realm** (owner answer 1). At the first boot without its sprites, an Active or Leaving pet (hibernating and demo included) is pushed to the Realm with its record and set Gone. The screen says "Moved to the / Unicorn Realm", and Fire starts a new egg. An unhatched egg goes straight back to pet selection with no record. The push is skipped when the Realm's last record already equals the pet, so a power cut between the `realm` and `state_v3` writes never records it twice. No save byte is used.
+10. **The FAT12 overflow today.** `assets/to-badge/` at `5e59574` needs 505 of 502 clusters, so a fresh `copy_assets.py` copy runs out of space on its last file (`PETS.CFG`, last in sort order). Existing badges are hit too: one holding every current file is at 505, so `--update` fails "no space" on its last missing file and leaves a partial file. Removing the Jellyfish fixes the count (429). T5 runs removals before additions and deletes a partial file on ENOSPC. T7 keeps 16 clusters spare as a guard for later plans.
 11. **The SSD1675's red-line flashes are not changed.** While the red line is up, every changed frame (an idle frame every 5 minutes) runs a full refresh. That predates this plan and is unchanged; it is noted for the owner, not fixed here.
 12. **A remote Jellyfish in plan 5's views.** A friend's or opponent's prefix 08 has no sprite on an updated badge. `battle_view` and `friends_view` belong to plan 5, which decides the fallback; this plan does not touch them.
 
-**Owner answers:** none yet for plan 7. The §14 owner decisions (2026-11-13) and the brief's rules are the inputs, applied as Global Constraints.
+**Owner answers (2026-11-14):** all five plan 7 questions are answered (see Global Constraints):
+1. A saved Jellyfish moves to the Unicorn Realm with its record, then a new egg (T6, T8).
+2. Old `PETS.CFG` keeps `8=Jellyfish`; the firmware hides pets without sprites (T6).
+3. Plain white sky while the clock is unset (T1, T3).
+4. Red cross for poorly (T1, T3).
+5. The demo "Only pets hobby" moment goes to plan 8 as a scheduled demo timer (roadmap note in T8).
 
-**Needs the owner:**
-1. A badge whose saved pet is a Jellyfish: keep the pet and ask for a new look (stats, age, money and demo kept; recommended), or move it to the Unicorn Realm and start a new egg? The plan builds the first (T6).
-2. Old badges keep `8=Jellyfish` in their per-badge `PETS.CFG`, because `--update` never edits it. Is it OK that the firmware just hides pets without sprites, so the Realm keeps the name (recommended)? Or should `--update` delete that one line?
-3. While the badge's clock is not set: plain white with no sun (recommended: the badge does not claim a time it does not know), or the day sky with its sun?
-4. Poorly overlay: a small red cross in the top-right of the pet area (recommended: few red pixels, shown only with the red line), or the spec's other option, a red-dithered ground band?
-5. Spec 8.3's 1 % "Only pets hobby" moment for the demo pet: drop it (recommended: it is a per-check dice roll, i.e. polling, and adds animation refreshes), or plan it as a demo timer in plan 8?
+The §14 owner decisions (2026-11-13) and the brief's rules are the other inputs.
 
-**Type consistency:** checked `Sky`, `BackgroundState`, `pack`, `FLOOR_ITEMS`, `is_night`, `sky`, `floor_lines`, `floor_items`, `minutes_to_switch`, `background_state`, `wake_view`, `poorly`, `set_fake_unix`, `TEST_NOON_UNIX` / `SHOT_NOON_UNIX` (the same instant), `clock_sync_needs_redraw`, `draw_background`, `draw_backdrop`, `FLOOR_SLOTS`, `TUFT_XS`, `CROSS_BOX`, `SUN_MOON_BOX`, `NIGHT_LEVELS`, `debug_set_dirt_pct`, `scene_changes_per_day`, `drop_without_sprites`, `open_new_look`, `PROMPT_NEW_LOOK`, `set_pet_kind`, `needs_new_look`, `check_pet_kind`, `load_changes`, `update_assets_to(.., changes)`, `volume_budget` and `PROTECTED` across the tasks that use them. `Visible` gains exactly one element (T2).
+**Needs the owner:** nothing open.
+
+**Type consistency:** checked `Sky`, `BackgroundState`, `pack`, `FLOOR_ITEMS`, `is_night`, `sky`, `floor_lines`, `floor_items`, `minutes_to_switch`, `background_state`, `wake_view`, `poorly`, `set_fake_unix`, `TEST_NOON_UNIX` / `SHOT_NOON_UNIX` (the same instant), `clock_sync_needs_redraw`, `draw_background`, `draw_backdrop`, `FLOOR_SLOTS`, `TUFT_XS`, `CROSS_BOX`, `SUN_MOON_BOX`, `NIGHT_LEVELS`, `debug_set_dirt_pct`, `scene_changes_per_day`, `drop_without_sprites`, `drop_from`, `is_hidden_kind`, `Retired`, `retire_hidden_pet`, `GameState::retire`, `RETIRED_LINES`, `load_changes`, `update_assets_to(.., changes)` and its `"no_space"` list, `volume_budget` and `PROTECTED` across the tasks that use them. `Visible` gains exactly one element (T2).
 
 **Review Focus:** items 1 to 5 are pinned in T2, T3, T4, T2 / T8 and T5 / T6 / T7.
 
@@ -723,8 +779,8 @@ The background has no text. The HAX balance, the toasts and the status line keep
 - `background.rs`: dither loop, primitives and about 200 bytes of bitmaps, about 2.5 KiB;
 - `scene.rs` and the solver lines: about 0.6 KiB;
 - 7 `Thresholds` fields in two presets, their key strings and setters: about 0.6 KiB;
-- the roster filter, the new-look mode and the lifecycle hooks: about 1 KiB;
-- the HAX backing and one title string: under 0.2 KiB.
+- the roster filter, the Realm retirement and the lifecycle hooks: about 1 KiB;
+- the HAX backing and the two Gone-screen lines: under 0.2 KiB.
 
 Lights Out stays.
 
