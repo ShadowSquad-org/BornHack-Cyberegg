@@ -1467,13 +1467,14 @@ impl GameState {
 
     /// The tick at which the engine must run next: when something the
     /// player can see (the [`status::StatusLine`] with its danger flag, animation, sleep, phase,
-    /// action) first changes, but never later than `MAX_SLEEP_TICKS`.
+    /// action, the background: sky and floor items) first changes, but never later than `MAX_SLEEP_TICKS`.
     ///
     /// The bisection is exact only while these hold, so keep them true:
     /// - inside one `segment` every mood term, level and rate is linear, so
     ///   "the view differs" cannot flip back (two linear terms cross once);
     /// - every line the view reads (the danger lines, the happy-mood line, the
-    ///   band edges) is a threshold edge or a `solver::sig` line, sharing one
+    ///   band edges, the floor lines) is a threshold edge or a `solver::sig`
+    ///   line (the sky switch is a `timer_bound` timer), sharing one
     ///   const with `status` and `display_anim` (`needs::*_PCT`), so no
     ///   segment steps over it unseen;
     /// - everything that ages is advanced by `advance` alone (needs do not

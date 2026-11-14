@@ -2,7 +2,8 @@
 //! clock, the floor items from dirt, grass for a content pet, the red cross
 //! for a poorly one. A pure function of the pet; drawing lives in the UI.
 //! Every line read here is a clock boundary or a dirt line, so the wake
-//! stays exact (Task 2 makes them solver boundaries).
+//! stays exact: the floor lines are dirt lines and the sky switch is a timer
+//! in the solver.
 
 use super::GameState;
 use super::Phase;

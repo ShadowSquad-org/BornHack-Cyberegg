@@ -336,14 +336,10 @@ pub fn on_wall_clock_set(now_unix: u32) {
         // The pet learns the time of day (or a re-sync moves it).
         let before = s.day_min;
         s.sync_clock(now_tick(), Some(minute_of_day(now_unix)));
-        if clock_sync_needs_redraw(before, s.day_min) {
-            // The sky differs, or its next switch now comes before the
-            // planned wake: run the display loop, which plans it again.
-            crate::TOAST_SIGNAL.signal(());
-        }
-        if applied.is_some_and(|m| m > 0) {
-            // The pet jumped ahead: wake the display loop so the screen, the
-            // status line show it now, not at the next scheduled wake.
+        // Wake the display loop now, not at the next scheduled wake: the pet
+        // jumped ahead (catch-up), or the sky differs or its next switch now
+        // comes before the planned wake. The loop plans the next wake again.
+        if applied.is_some_and(|m| m > 0) || clock_sync_needs_redraw(before, s.day_min) {
             crate::TOAST_SIGNAL.signal(());
         }
     }
