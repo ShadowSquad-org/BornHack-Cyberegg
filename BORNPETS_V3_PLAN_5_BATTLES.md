@@ -274,7 +274,7 @@ pub enum Decisive { Factor(Factor), OutOfSteam(u8) }
 /// Returns (loser_is_a, why).
 pub fn decisive(o: &Outcome, a: &Snapshot, b: &Snapshot) -> Option<(bool, Decisive)>;
 ```
-- `seed`: `let ids = (u16::from_le_bytes(id_a) as u32) << 16 | u16::from_le_bytes(id_b) as u32; let x = ((nonce_a as u32) << 16 | nonce_b as u32) ^ ids ^ 0x9E37_79B9; xorshift32(xorshift32(x | 1))`. A fallback fight uses `nonce_b = 0`.
+- `seed`: `let ids = (u16::from_le_bytes(id_a) as u32) << 16 | u16::from_le_bytes(id_b) as u32; let x = ((nonce_a as u32) << 16 | nonce_b as u32) ^ ids ^ 0x9E37_79B9; xorshift32(xorshift32(x))` (no `| 1`: `fight` applies `seed | 1` itself; controller ruling at Task 2 review). A fallback fight uses `nonce_b = 0`.
 - `win_chance`: `w` = wins of `a` over the 64 seeds; `((w * 100 + 32) / 64 + 2) / 5 * 5`. The target shows `100 - win_chance(a, b)`, so both badges show figures that add up to 100.
 - Form keys (Classic / Casual): `BATTLE_FORM_TOP_PCT` 65 / 65, `BATTLE_FORM_IN_PCT` 50 / 50, `BATTLE_FORM_OFF_PCT` 30 / 30 (Top at or above TOP, In at or above IN, Off at or above OFF, else Poor). `validate`: `OFF < IN < TOP` else all three preset. The form reads per-badge config; it is the pet's own reading, not part of the wire contract.
 - The spec's form words are renamed for the menu row budget: `fit to fight` → `in form`, `in no state` → `poor form` (owner allows label changes; "Battle: poor form" is 17 columns).
