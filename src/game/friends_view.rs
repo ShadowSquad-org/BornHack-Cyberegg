@@ -14,11 +14,9 @@
 //! - **Detail**: full stats for one friend — kind, how long you've known
 //!   them, how long since their last beacon, their cached combat-stat
 //!   snapshot, and your head-to-head Battle record against them. That
-//!   record is kept in sync between both badges — see
-//!   `battle::challenge` (challenger's side) and
-//!   `battle::on_battle_result` (target's side), which both update
-//!   `friends::record_battle_vs` for the same pair of device IDs. Any
-//!   button returns to the list.
+//!   record is kept in sync between both badges — `battle_link` updates
+//!   it through `friends::note_fight` on both sides for the same pair of
+//!   device IDs. Any button returns to the list.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 

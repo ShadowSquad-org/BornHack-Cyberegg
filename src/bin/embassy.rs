@@ -624,6 +624,8 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(advert_ticker_task());
     #[cfg(all(feature = "mesh", feature = "game"))]
     spawner.must_spawn(pet_beacon_ticker_task());
+    #[cfg(all(feature = "mesh", feature = "game"))]
+    spawner.must_spawn(battle_timer_task());
 
     // ── USB mass storage ──────────────────────────────────────────────────
     // Spawn BEFORE the sponsor slideshow so the host can mount the FAT
@@ -1663,12 +1665,12 @@ async fn advert_ticker_task() {
 /// (identity + pet snapshot + current combat stats) as `GrpData` so other
 /// badges on SHDW can record a new/returning friend — see
 /// `game::friends::on_pet_beacon` — and cache combat stats fresh enough
-/// to battle against later (`game::battle::challenge`).
+/// to battle against later (`game::battle_link::challenge`).
 /// Skipped entirely when no pet is active (nothing to announce).
 #[cfg(all(feature = "mesh", feature = "game"))]
 #[embassy_executor::task]
 async fn pet_beacon_ticker_task() {
-    use bornhack_aegg::game::{engine::PET_NAME_MAX, friends, lifecycle};
+    use bornhack_aegg::game::friends;
 
     const PET_BEACON_INTERVAL_SECS: u64 = 15 * 60;
 
@@ -1677,30 +1679,7 @@ async fn pet_beacon_ticker_task() {
     Timer::after(embassy_time::Duration::from_secs(45)).await;
 
     loop {
-        if lifecycle::is_started() {
-            let kind = lifecycle::pet_kind();
-            let name = lifecycle::pet_name();
-            let mut beacon_name = [0u8; PET_NAME_MAX];
-            let n = name.len().min(PET_NAME_MAX);
-            beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
-
-            let snap = lifecycle::snapshot();
-            let beacon = friends::PetBeacon {
-                device_id: bornhack_aegg::fw::device_id::get(),
-                pet_kind: kind.id(),
-                generation: lifecycle::pet_generation(),
-                name: beacon_name,
-                name_len: n as u8,
-                power: snap.map_or(0, |s| s.power),
-                guard: snap.map_or(0, |s| s.guard),
-                speed: snap.map_or(0, |s| s.speed),
-                hp: snap.map_or(0, |s| s.hp),
-                stamina: snap.map_or(0, |s| s.stamina),
-                focus: snap.map_or(0, |s| s.focus),
-                demo: lifecycle::is_demo(),
-                v3: true,
-            };
-
+        if let Some(beacon) = friends::beacon_now() {
             let mut data: heapless::Vec<u8, { bornhack_aegg::fw::mesh::MAX_CHANNEL_DATA }> =
                 heapless::Vec::new();
             let _ = data.extend_from_slice(&beacon.to_bytes());
@@ -1722,6 +1701,31 @@ async fn pet_beacon_ticker_task() {
         }
 
         Timer::after(embassy_time::Duration::from_secs(PET_BEACON_INTERVAL_SECS)).await;
+    }
+}
+
+/// Sleeps until the challenge Session's own deadline, then lets it act (the
+/// target's window closing, the challenger's fallback fight). A one-shot
+/// timer set to that single instant, re-armed when the deadline moves; with
+/// no challenge pending it waits on the signal and costs nothing.
+#[cfg(all(feature = "mesh", feature = "game"))]
+#[embassy_executor::task]
+async fn battle_timer_task() {
+    use bornhack_aegg::game::battle_link;
+    use embassy_futures::select::{Either, select};
+
+    loop {
+        match battle_link::deadline_ms() {
+            None => battle_link::DEADLINE_CHANGED.wait().await,
+            Some(t) => {
+                let wait = battle_link::ms_until(t, bornhack_aegg::platform::uptime_ms_u32());
+                let timer = Timer::after(embassy_time::Duration::from_millis(wait as u64));
+                if let Either::First(_) = select(timer, battle_link::DEADLINE_CHANGED.wait()).await
+                {
+                    battle_link::on_deadline();
+                }
+            }
+        }
     }
 }
 

@@ -497,6 +497,8 @@ pub fn toggle_demo() -> Result<bool, super::engine::doses::Reason> {
     event_at(s, now_tick(), |_| {});
     let on = !s.is_demo();
     s.set_demo(on)?;
+    // A challenge belongs to the league it was made in.
+    super::battle_link::cancel();
     Ok(on)
 }
 

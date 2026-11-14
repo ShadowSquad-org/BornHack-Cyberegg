@@ -3,7 +3,7 @@
 //! Every badge running this firmware auto-joins a channel called "SHDW"
 //! (see `crate::fw::mesh::channels::ensure_shdw_channel`) and periodically
 //! broadcasts a small [`PetBeacon`] on it (see
-//! `crate::fw::mesh::meshcore::pet_beacon_ticker_task`). When another
+//! the firmware's `pet_beacon_ticker_task`). When another
 //! badge's beacon is received, [`on_pet_beacon`] records it as a friend
 //! and nudges happiness — a bigger one-time bump for a brand-new friend,
 //! a smaller cooldown-gated bump for spending time with one already known.
@@ -168,7 +168,7 @@ pub struct FriendRecord {
     /// Head-to-head mesh Battle record against this specific friend —
     /// distinct from the pet's own overall `wins`/`losses` in
     /// `engine::GameState`. Updated on both badges for every battle
-    /// between them (see `battle::challenge`/`battle::on_battle_result`),
+    /// between them (see `battle_link`),
     /// so the tally reads the same from either side.
     pub wins: u16,
     pub losses: u16,
@@ -656,9 +656,8 @@ pub fn name_of(device_id: [u8; 2]) -> Option<([u8; PET_NAME_MAX], u8)> {
 /// `device_id` isn't a known friend (e.g. a battle result arrived
 /// before we'd ever received a beacon from them).
 ///
-/// Called from both `battle::challenge` (the challenger's side) and
-/// `battle::on_battle_result` (the target's side) so the tally reads
-/// the same from either badge — see module docs.
+/// Called through `note_fight` from `battle_link`, on both the challenger's
+/// and the target's side, so the tally reads the same from either badge.
 pub fn record_battle_vs(device_id: [u8; 2], won: bool) {
     let list = unsafe { &mut *FRIENDS.get() };
     if let Some(friend) = list.find_mut(device_id) {
@@ -730,6 +729,32 @@ pub(super) fn local_device_id() -> [u8; 2] {
 #[cfg(not(feature = "embassy-core"))]
 pub(super) fn local_device_id() -> [u8; 2] {
     [0, 0]
+}
+
+/// The beacon this badge broadcasts now: identity plus the current fight
+/// numbers, in the v3 layout. `None` without a pet. The firmware ticker only
+/// sends what this builds.
+pub fn beacon_now() -> Option<PetBeacon> {
+    let snap = super::lifecycle::snapshot()?;
+    let name = super::lifecycle::pet_name();
+    let n = name.len().min(PET_NAME_MAX);
+    let mut beacon_name = [0u8; PET_NAME_MAX];
+    beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
+    Some(PetBeacon {
+        device_id: local_device_id(),
+        pet_kind: super::lifecycle::pet_kind().id(),
+        generation: super::lifecycle::pet_generation(),
+        name: beacon_name,
+        name_len: n as u8,
+        power: snap.power,
+        guard: snap.guard,
+        speed: snap.speed,
+        hp: snap.hp,
+        stamina: snap.stamina,
+        focus: snap.focus,
+        demo: super::lifecycle::is_demo(),
+        v3: true,
+    })
 }
 
 /// Handle a `PetBeacon` received on the SHDW channel: record the friend

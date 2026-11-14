@@ -365,9 +365,24 @@ fn try_challenge() {
         return;
     }
 
-    // Until the challenge protocol is wired in (`battle_link`), a friend
-    // cannot be fought from here.
-    set_picker_msg(MSG_NOT_READY, 0);
+    let cursor = CURSOR.load(Ordering::Relaxed) as usize;
+    if !super::friends::get(cursor).is_some_and(|f| f.has_numbers()) {
+        set_picker_msg(MSG_NOT_READY, 0);
+        return;
+    }
+    match super::battle_link::challenge(cursor) {
+        Ok(()) => clear_picker_msg(),
+        Err(super::engine::doses::Reason::Wait(secs)) => {
+            set_picker_msg(MSG_COOLDOWN, secs.min(u16::MAX as u32) as u16);
+        }
+        Err(_) => set_picker_msg(MSG_BUSY, 0),
+    }
+}
+
+/// The pre-battle screen opens or changes (the Session has its numbers).
+/// Until the dedicated screen exists this only makes the Battle view active.
+pub fn open_pre_battle() {
+    ACTIVE.store(true, Ordering::Relaxed);
 }
 
 /// Show the card of a fight that just ended against the friend named
@@ -397,6 +412,8 @@ pub fn handle_input(btn: ButtonId) {
             crate::platform::uptime_ms_u32().wrapping_sub(RESULT_SHOWN_MS.load(Ordering::Relaxed));
         if elapsed >= RESULT_DISMISS_GUARD_MS {
             close();
+            // The card is done with: the Session forgets its finished screen.
+            super::battle_link::cancel();
         }
         return;
     }
