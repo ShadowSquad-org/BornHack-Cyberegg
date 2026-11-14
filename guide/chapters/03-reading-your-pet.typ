@@ -59,7 +59,7 @@ the line, and the badge does it with the redraw it was doing anyway.
     one more each time dirt passes a line:
 
     #word-table(see: false,
-      table.header([*On the floor*], [*Dirt over*]),
+      table.header([*On the floor*], [*Dirt reaches*]),
       [Crumbs], [#v("FLOOR_CRUMBS_DIRT_PCT")],
       [A peel], [#v("FLOOR_PEEL_DIRT_PCT")],
       [A can], [#v("FLOOR_CAN_DIRT_PCT")],
