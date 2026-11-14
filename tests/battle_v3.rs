@@ -508,12 +508,13 @@ mod snapshot {
 
 mod fight {
     use super::snapshot::{build, builds};
-    use bornhack_aegg::game::engine::combat::Body;
     use bornhack_aegg::game::engine::combat::{
-        Decisive, Factor, Form, ROUNDS, Snapshot, chance_seed, decisive, derive, factors, fight,
-        form, seed, win_chance,
+        Body, Decisive, Factor, Form, ROUNDS, Snapshot, chance_seed, decisive, derive, factors,
+        fight, form, seed, win_chance,
     };
     use bornhack_aegg::game::engine::thresholds as t;
+
+    const GOLDEN_SEED: u32 = 1_560_395_003;
 
     fn snap(name: &str) -> Snapshot {
         derive(&build(name))
@@ -579,10 +580,12 @@ mod fight {
     #[test]
     fn fight_reads_no_config() {
         let src = include_str!("../src/game/engine/combat.rs");
-        let from = src.find("pub fn fight").expect("fight");
+        let from = src.find("pub const ROUNDS").expect("consts");
         let to = src.find("pub fn form").expect("form");
         assert!(from < to);
         let order = [
+            "pub const ROUNDS",
+            "fn strike",
             "pub fn fight",
             "pub fn seed",
             "pub fn chance_seed",
@@ -623,7 +626,16 @@ mod fight {
         assert_ne!(s, seed(na, nb, ib, ia));
         assert_ne!(s, seed(nb, na, ia, ib));
         assert_ne!(s, seed(na ^ 1, nb, ia, ib));
-        assert_ne!(s, seed(na, nb ^ 2, ia, ib));
+        assert_ne!(s, seed(na, nb ^ 1, ia, ib));
+        assert_ne!(s, seed(na, nb, ia, [ib[0] ^ 1, ib[1]]));
+        // Golden values: the wire contract must not drift between builds.
+        assert_eq!(s, GOLDEN_SEED);
+        assert_eq!(chance_seed(0), 7);
+        assert_eq!(chance_seed(1), 2_654_435_768);
+        assert_eq!(
+            chance_seed(64),
+            64u32.wrapping_mul(2_654_435_761).wrapping_add(7)
+        );
         // A fallback fight uses nonce_b = 0.
         assert_ne!(seed(na, 0, ia, ib), s);
     }
@@ -732,5 +744,22 @@ mod fight {
         for f in [Form::Top, Form::In, Form::Off, Form::Poor] {
             assert!("Battle: ".len() + f.text().len() <= 17, "{}", f.text());
         }
+    }
+
+    #[test]
+    fn form_keys_are_validated_as_a_triple() {
+        use bornhack_aegg::game::engine::thresholds::{Thresholds, validate};
+        let mut t = Thresholds::CLASSIC;
+        t.BATTLE_FORM_OFF_PCT = 60;
+        t.BATTLE_FORM_IN_PCT = 50;
+        let v = validate(&t, &Thresholds::CLASSIC);
+        assert_eq!(
+            (
+                v.BATTLE_FORM_TOP_PCT,
+                v.BATTLE_FORM_IN_PCT,
+                v.BATTLE_FORM_OFF_PCT
+            ),
+            (65, 50, 30)
+        );
     }
 }

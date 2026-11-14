@@ -546,13 +546,15 @@ pub fn fight(seed: u32, a: &Snapshot, b: &Snapshot) -> Outcome {
 }
 
 /// Seed of a live fight: both badges compute it from the same four values,
-/// challenger first. A fallback fight uses `nonce_b = 0`.
+/// challenger first: `xorshift32(xorshift32(nonces ^ ids ^ 0x9E37_79B9))`.
+/// A fallback fight uses `nonce_b = 0`. `fight` ORs 1 into the seed itself.
 pub fn seed(nonce_a: u16, nonce_b: u16, id_a: [u8; 2], id_b: [u8; 2]) -> u32 {
     let ids = (u16::from_le_bytes(id_a) as u32) << 16 | u16::from_le_bytes(id_b) as u32;
     let x = ((nonce_a as u32) << 16 | nonce_b as u32) ^ ids ^ 0x9E37_79B9;
-    crate::platform::xorshift32(crate::platform::xorshift32(x | 1))
+    crate::platform::xorshift32(crate::platform::xorshift32(x))
 }
 
+/// Seed of the k-th chance fight (wire contract).
 pub fn chance_seed(k: u32) -> u32 {
     k.wrapping_mul(2_654_435_761).wrapping_add(7)
 }
@@ -563,7 +565,7 @@ pub fn win_chance(a: &Snapshot, b: &Snapshot) -> u8 {
     let w = (0..CHANCE_FIGHTS)
         .filter(|&k| fight(chance_seed(k), a, b).a_won)
         .count() as u32;
-    (((w * 100 + 32) / 64 + 2) / 5 * 5) as u8
+    (((w * 100 + CHANCE_FIGHTS / 2) / CHANCE_FIGHTS + 2) / 5 * 5) as u8
 }
 
 /// How the pet feels about a fight against an average pet.
