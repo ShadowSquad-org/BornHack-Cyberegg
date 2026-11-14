@@ -7,9 +7,11 @@
 
 use std::cell::Cell;
 
+use super::causes::{Cause, StrainWhy};
+use super::combat::{self, Body, derive};
 use super::needs::P;
 use super::thresholds::{self, Mode, Thresholds};
-use super::{Action, DrinkKind, FoodKind, GameState, MiniGame, PetKind, Phase};
+use super::{Action, DrinkKind, FoodKind, Fought, GameState, MiniGame, PetKind, Phase};
 use crate::game::pacing;
 
 /// Engine ticks per minute (1 tick = 10 s).
@@ -51,6 +53,10 @@ pub enum Act {
     /// Meeting a new mesh friend (stimulation +15).
     Friend,
     Insulin,
+    /// Fight the reference pet now: refused counts as refused; else the live
+    /// costs land, the prize is paid, and the seed comes from the clock and
+    /// the run's seed.
+    Battle,
 }
 
 /// What a routine returns for one minute: at most eight steps.
@@ -100,6 +106,19 @@ pub struct Outcome {
     /// simulator does not load. Idle frames are not counted. The Oracle has no
     /// wakes, so its figure is the action frames alone: not comparable.
     pub refreshes_per_day: f32,
+    /// Fights the pet took (not refused).
+    pub fights: u32,
+    pub fights_won: u32,
+    /// `Act::Battle` steps the engine refused.
+    pub fights_refused: u32,
+    /// Fights that tore a muscle (`TornMuscle(Fight)` causes).
+    pub fight_injuries: u32,
+    /// HAX paid as battle prizes.
+    pub prizes_hax: u32,
+    /// Win share against `Body::REFERENCE`: 200 seeded fights on each day's
+    /// first `Act::Battle`, from the pet as it stood then, averaged. 0 when
+    /// the run never fought.
+    pub win_pct_vs_reference: u8,
 }
 
 /// How a run starts. `run_full` is `run_with` and `Setup::default()`.
@@ -111,6 +130,9 @@ pub struct Setup {
     pub clock: bool,
     /// The pet's own care is animated (else instant with a note).
     pub animated: bool,
+    /// Leave the HAX gate on (the routines never earn HAX, so by default it
+    /// is switched off); the battle prizes then pay in.
+    pub money: bool,
 }
 
 /// An `Outcome` plus the cost of the `next_wake_tick` calls the delta
@@ -148,7 +170,20 @@ struct Probe {
     /// Causes queued, and action ticks run, since the run began.
     causes: u32,
     action_ticks: u64,
+    fights: u32,
+    fights_won: u32,
+    fights_refused: u32,
+    fight_injuries: u32,
+    prizes_hax: u32,
+    /// Wins out of `WIN_SAMPLE` fights, summed over `win_days` days, and the
+    /// day last sampled.
+    win_sum: u32,
+    win_days: u32,
+    win_day: u32,
 }
+
+/// Seeded fights per day behind `win_pct_vs_reference`.
+const WIN_SAMPLE: u32 = 200;
 
 const PROBE_NEW: Probe = Probe {
     mood_sum2: 0,
@@ -164,6 +199,14 @@ const PROBE_NEW: Probe = Probe {
     leaving: false,
     causes: 0,
     action_ticks: 0,
+    fights: 0,
+    fights_won: 0,
+    fights_refused: 0,
+    fight_injuries: 0,
+    prizes_hax: 0,
+    win_sum: 0,
+    win_days: 0,
+    win_day: u32::MAX,
 };
 
 /// The figures `note_segment` reads off the pet at one end of a segment.
@@ -395,7 +438,7 @@ impl Probes {
 }
 
 /// Start one step. `true` when it started (a timed action) or happened.
-fn perform(s: &mut GameState, a: Act) -> bool {
+fn perform(s: &mut GameState, a: Act, seed: u64) -> bool {
     match a {
         Act::Wake => s.wake(),
         Act::Sleep => s.sleep(),
@@ -409,6 +452,7 @@ fn perform(s: &mut GameState, a: Act) -> bool {
             s.friend_boost(true);
             true
         }
+        Act::Battle => battle(s, seed),
         Act::Mini(g) => {
             if s.game_refusal(MiniGame::TicTacToe).is_some() {
                 return false;
@@ -417,6 +461,57 @@ fn perform(s: &mut GameState, a: Act) -> bool {
             true
         }
     }
+}
+
+/// One `Act::Battle`: the first of a day also samples the win share; a
+/// refusal is counted; else the fight against the reference pet is played
+/// with its live costs and prize. `true` when it was fought.
+fn battle(s: &mut GameState, seed: u64) -> bool {
+    let reference = derive(&Body::REFERENCE);
+    let day = s.last_update_tick / TICKS_PER_DAY;
+    let mine = s.snapshot();
+    PROBE.with(|p| {
+        let mut v = p.get();
+        if v.win_day != day {
+            v.win_day = day;
+            let wins = (0..WIN_SAMPLE)
+                .filter(|&k| combat::fight(combat::chance_seed(k), &mine, &reference).a_won)
+                .count() as u32;
+            v.win_sum += wins;
+            v.win_days += 1;
+        }
+        p.set(v);
+    });
+    if s.battle_refusal().is_some() {
+        PROBE.with(|p| {
+            let mut v = p.get();
+            v.fights_refused += 1;
+            p.set(v);
+        });
+        return false;
+    }
+    let fight_seed = crate::platform::xorshift32((s.last_update_tick ^ seed as u32) | 1);
+    let o = combat::fight(fight_seed, &mine, &reference);
+    let (prize, queued) = s.queued_by(|s| {
+        s.fight_over(Fought {
+            won: o.a_won,
+            hp_left_pct: o.a_hp_pct,
+            costs: true,
+            paid: true,
+        })
+    });
+    let torn = queued
+        .iter()
+        .any(|c| matches!(c, Cause::TornMuscle(StrainWhy::Fight)));
+    PROBE.with(|p| {
+        let mut v = p.get();
+        v.fights += 1;
+        v.fights_won += o.a_won as u32;
+        v.fight_injuries += torn as u32;
+        v.prizes_hax += prize;
+        p.set(v);
+    });
+    true
 }
 
 /// `update` to `to`, after telling the engine the wall clock the way the
@@ -430,12 +525,12 @@ fn step(s: &mut GameState, to: u32, clock: bool) {
 
 /// Play every step of a plan in order. A timed action runs to its end (the
 /// action ticks age no need) before the next step; a refused step is skipped.
-fn play_plan(s: &mut GameState, plan: &Plan, injuries: &mut u16, clock: bool) {
+fn play_plan(s: &mut GameState, plan: &Plan, injuries: &mut u16, clock: bool, seed: u64) {
     for &a in plan.iter() {
         if s.phase == Phase::Gone {
             return;
         }
-        if !perform(s, a) {
+        if !perform(s, a, seed) {
             continue;
         }
         if s.active_action.is_some() {
@@ -463,8 +558,11 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
     let care_before = self_care_acts();
     let probes = Probes::new();
     let mut s = GameState::new_egg(seed, PetKind::DEFAULT);
-    // The routines never earn HAX; with the gate on they would starve.
-    s.money_enabled = false;
+    // The routines earn no HAX but battle prizes; with the gate on they would
+    // starve, so only a money run keeps it.
+    if !setup.money {
+        s.money_enabled = false;
+    }
     // The egg hatches and the pet is fresh at 08:00 on day 0, as in the
     // prototype (hatching ticks past the countdown age nothing).
     s.update(START_MINUTE * TPM);
@@ -493,7 +591,7 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
                     }
                     if probes.fires(routine, d, m) {
                         let plan = routine(d, m, &s);
-                        play_plan(&mut s, &plan, &mut injuries, setup.clock);
+                        play_plan(&mut s, &plan, &mut injuries, setup.clock, seed);
                     }
                 }
                 step(&mut s, day_end, setup.clock);
@@ -526,7 +624,7 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
                         break;
                     }
                     let plan = routine(d, m, &s);
-                    play_plan(&mut s, &plan, &mut injuries, setup.clock);
+                    play_plan(&mut s, &plan, &mut injuries, setup.clock, seed);
                     m += 1;
                 }
             }
@@ -589,6 +687,16 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
                 + probe.action_ticks as f64 * pacing::SECS_PER_TICK as f64
                     / pacing::MIN_FRAME_SECS as f64) as f32
                 / days_run,
+            fights: probe.fights,
+            fights_won: probe.fights_won,
+            fights_refused: probe.fights_refused,
+            fight_injuries: probe.fight_injuries,
+            prizes_hax: probe.prizes_hax,
+            win_pct_vs_reference: if probe.win_days == 0 {
+                0
+            } else {
+                (probe.win_sum as f64 * 100.0 / (WIN_SAMPLE * probe.win_days) as f64).round() as u8
+            },
         },
         wake_queries: queries,
         wake_calls_total: calls_total,
@@ -696,9 +804,13 @@ pub fn balanced(_d: u32, m: u32, s: &GameState) -> Plan {
 
 /// Two exercise sessions a day and lighter food.
 pub fn sporty(_d: u32, m: u32, s: &GameState) -> Plan {
+    habits(sporty_plan(m, s), s, true)
+}
+
+fn sporty_plan(m: u32, s: &GameState) -> Plan {
     use Act::*;
     use FoodKind::*;
-    let p = if at(m, 7, 30) {
+    if at(m, 7, 30) {
         plan(&[Wake, Eat(Apple), Eat(Salad)])
     } else if at(m, 9, 30) {
         plan(&[Sport])
@@ -724,8 +836,7 @@ pub fn sporty(_d: u32, m: u32, s: &GameState) -> Plan {
         plan(&[Sleep])
     } else {
         Plan::new()
-    };
-    habits(p, s, true)
+    }
 }
 
 /// Sleeps late, lives on pizza, cake and cola. No weight habit.
@@ -867,4 +978,68 @@ pub fn helper(_d: u32, m: u32, _s: &GameState) -> Plan {
     } else {
         Plan::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Battle lifestyles (plan 5, spec 18.4)
+// ---------------------------------------------------------------------------
+
+/// `p` with a fight first (so it comes before the step that goes with it).
+fn fight_first(mut p: Plan) -> Plan {
+    let _ = p.insert(0, Act::Battle);
+    p
+}
+
+/// Minutes from 20:00 on at which the six-a-day lifestyles fight.
+fn six_times(m: u32) -> bool {
+    (20 * 60..=22 * 60 + 30).contains(&m) && m % 30 == 0
+}
+
+/// Sporty, and one fight a day at 20:00.
+pub fn fighter(d: u32, m: u32, s: &GameState) -> Plan {
+    let p = sporty(d, m, s);
+    if at(m, 20, 0) { fight_first(p) } else { p }
+}
+
+/// Sporty, and a fight every half hour from 20:00 to 22:30.
+pub fn fighter_six(d: u32, m: u32, s: &GameState) -> Plan {
+    let p = sporty(d, m, s);
+    if six_times(m) { fight_first(p) } else { p }
+}
+
+/// Party, two beers at 19:30 and a fight at 20:00.
+pub fn brawler(d: u32, m: u32, s: &GameState) -> Plan {
+    let beer = Act::Drink(DrinkKind::Beer);
+    if at(m, 19, 30) {
+        habits(plan(&[beer, beer]), s, false)
+    } else if at(m, 20, 0) {
+        fight_first(party(d, m, s))
+    } else {
+        party(d, m, s)
+    }
+}
+
+/// Party, two beers at 19:30 and six fights from 20:00.
+pub fn brawler_six(d: u32, m: u32, s: &GameState) -> Plan {
+    let p = brawler(d, m, s);
+    if six_times(m) && !at(m, 20, 0) {
+        fight_first(p)
+    } else {
+        p
+    }
+}
+
+/// Sporty, with rich food while the weight is under 72 %, and a fight at
+/// 20:00. The weight habit that would slim it down is off.
+pub fn sumo(_d: u32, m: u32, s: &GameState) -> Plan {
+    let mut p = sporty_plan(m, s);
+    if s.weight < pct_lvl(72) {
+        for a in p.iter_mut() {
+            if matches!(a, Act::Eat(FoodKind::Apple | FoodKind::Salad)) {
+                *a = Act::Eat(FoodKind::Pizza);
+            }
+        }
+    }
+    let p = habits(p, s, false);
+    if at(m, 20, 0) { fight_first(p) } else { p }
 }

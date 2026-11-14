@@ -2365,6 +2365,7 @@ mod balance {
         demo: true,
         clock: true,
         animated: false,
+        money: false,
     };
     const ANIMATED: Setup = Setup {
         animated: true,

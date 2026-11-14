@@ -65,6 +65,7 @@ fn casual_demo_alone_for_10_days() {
         demo: true,
         clock: true,
         animated: false,
+        money: false,
     };
     let o = sim::run_with(&sim::absent, 10, Driver::Delta, 1, setup).outcome;
     println!("casual demo alone: {o:?}");

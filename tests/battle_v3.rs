@@ -2637,3 +2637,160 @@ mod protocol {
         }
     }
 }
+
+/// Task 10: battle lifestyles and money in the simulator (spec 18.4, 18.5).
+/// The long runs are `#[ignore]`d and run on CI (`--include-ignored`).
+mod balance {
+    use bornhack_aegg::game::engine::GameState;
+    use bornhack_aegg::game::engine::sim::{self, Driver, Outcome, Plan, Setup};
+
+    const SEEDS: [u64; 3] = [1, 2, 3];
+    const MONEY: Setup = Setup {
+        demo: false,
+        clock: true,
+        animated: false,
+        money: true,
+    };
+    const CLOCK: Setup = Setup {
+        money: false,
+        ..MONEY
+    };
+
+    type Routine = fn(u32, u32, &GameState) -> Plan;
+
+    fn run(r: Routine, days: u32, driver: Driver, seed: u64, setup: Setup) -> Outcome {
+        sim::run_with(&r, days, driver, seed, setup).outcome
+    }
+
+    fn runs(name: &str, r: Routine, setup: Setup) -> Vec<Outcome> {
+        SEEDS
+            .iter()
+            .map(|&seed| {
+                let o = run(r, 30, Driver::Delta, seed, setup);
+                eprintln!(
+                    "{name} seed {seed}: alive={} min_health={} win%={} fights={} won={} refused={} fight_injuries={} prizes={} mood={}",
+                    o.alive,
+                    o.min_health_pct,
+                    o.win_pct_vs_reference,
+                    o.fights,
+                    o.fights_won,
+                    o.fights_refused,
+                    o.fight_injuries,
+                    o.prizes_hax,
+                    o.avg_mood_pct
+                );
+                o
+            })
+            .collect()
+    }
+
+    fn diff(a: u8, b: u8) -> i32 {
+        (a as i32 - b as i32).abs()
+    }
+
+    #[test]
+    fn battle_smoke_three_days() {
+        let o = run(sim::fighter, 3, Driver::Delta, 1, CLOCK);
+        eprintln!("smoke: {o:?}");
+        assert!(o.alive);
+        assert_eq!(o.fights, 3);
+        assert_eq!(o.fight_injuries, 0);
+        assert_eq!(o.prizes_hax, 0, "money is off");
+    }
+
+    #[test]
+    #[ignore]
+    fn fit_fighter_one_a_day() {
+        for o in runs("fighter", sim::fighter, CLOCK) {
+            assert!(o.alive);
+            assert!(o.min_health_pct >= 70, "min health {}", o.min_health_pct);
+            assert_eq!(o.fight_injuries, 0);
+            assert!(o.win_pct_vs_reference >= 70, "{}", o.win_pct_vs_reference);
+            assert_eq!(o.fights_refused, 0);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn fit_fighter_six_a_day_pays_for_it() {
+        for o in runs("fighter_six", sim::fighter_six, CLOCK) {
+            assert!(o.alive);
+            assert!(o.fight_injuries >= 5, "injuries {}", o.fight_injuries);
+            assert!(o.win_pct_vs_reference <= 50, "{}", o.win_pct_vs_reference);
+            assert!(o.fights_refused >= 20, "refused {}", o.fights_refused);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn brawler_one_a_day() {
+        for o in runs("brawler", sim::brawler, CLOCK) {
+            assert!(o.alive);
+            assert!(o.win_pct_vs_reference <= 45, "{}", o.win_pct_vs_reference);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn brawler_six_a_day_is_ruinous() {
+        for o in runs("brawler_six", sim::brawler_six, CLOCK) {
+            assert!(
+                !o.alive || o.min_health_pct < 30,
+                "alive and min health {}",
+                o.min_health_pct
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn sumo_matches_the_fit_fighter() {
+        let fit = runs("fighter", sim::fighter, CLOCK);
+        for (o, f) in runs("sumo", sim::sumo, CLOCK).iter().zip(&fit) {
+            assert!(o.alive);
+            assert!(
+                diff(o.win_pct_vs_reference, f.win_pct_vs_reference) <= 10,
+                "sumo {} vs fighter {}",
+                o.win_pct_vs_reference,
+                f.win_pct_vs_reference
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn prize_rule_caps_income() {
+        for o in runs("fighter_six money", sim::fighter_six, MONEY) {
+            assert!(o.prizes_hax <= 30 * (100 + 5 * 20), "{}", o.prizes_hax);
+        }
+        for o in runs("fighter money", sim::fighter, MONEY) {
+            assert!(o.prizes_hax <= 30 * 100, "{}", o.prizes_hax);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn battle_delta_matches_oracle() {
+        let both = [
+            ("fighter", sim::fighter as Routine),
+            ("brawler", sim::brawler),
+        ];
+        for (name, r) in both {
+            for seed in [1u64, 2] {
+                let o = run(r, 10, Driver::Oracle, seed, CLOCK);
+                let d = run(r, 10, Driver::Delta, seed, CLOCK);
+                eprintln!("{name} seed {seed}: oracle {o:?}\n  delta {d:?}");
+                assert_eq!(o.alive, d.alive, "{name}: alive");
+                assert_eq!(o.fights, d.fights, "{name}: fights");
+                assert_eq!(o.fights_won, d.fights_won, "{name}: won");
+                assert_eq!(o.fights_refused, d.fights_refused, "{name}: refused");
+                assert_eq!(o.fight_injuries, d.fight_injuries, "{name}: injuries");
+                assert!(diff(o.avg_mood_pct, d.avg_mood_pct) <= 1, "{name}: mood");
+                assert!(
+                    diff(o.end_health_pct, d.end_health_pct) <= 1,
+                    "{name}: health"
+                );
+            }
+        }
+    }
+}
