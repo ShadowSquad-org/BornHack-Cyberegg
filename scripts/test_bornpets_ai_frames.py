@@ -444,6 +444,22 @@ class StateCommand(Base):
         self.assertEqual(ids[-1], "panda_throwing_up_0")
 
 
+class V3StateRows(unittest.TestCase):
+    def test_frame_index_has_the_states(self):
+        for pet, (_prefix, cfg, _sheet, seq) in ac.ART_PETS.items():
+            seqs = afm.load_sequences(ac.REPO / "assets" / cfg)
+            self.assertEqual(len(seqs), 51, pet)
+            for i, state in enumerate(ac.STATES):
+                s = seqs[0x29 + i]
+                self.assertEqual(
+                    (s.name, s.frames, s.frame_width, s.frame_height),
+                    (f"{seq}_{state}", 1, 152, 75), f"{pet} row {0x29 + i:#x}")
+        # frame_index() reads the pet chosen at import (panda)
+        idx = afm.frame_index()
+        for state in ac.STATES:
+            self.assertIn(f"panda_{state}_0", idx)
+
+
 class Profiles(unittest.TestCase):
     def test_profiles_load_and_pair_only_when_anchored(self):
         code = (
@@ -457,7 +473,9 @@ class Profiles(unittest.TestCase):
             "assert any(k.startswith(ac.ART_PETS[pet][3] + '_') for k in idx) if pet in ac.ART_PETS else True\n"
             % str(SCRIPTS)
         )
-        for pet in ("bartholomeus", "cat", "panda", "badger", "seastar", "jellyfish"):
+        # jellyfish is paired with the panda sheet and stays at 41 rows after A3
+        # (plan 7 deletes it), so it is deliberately not loaded here.
+        for pet in ("bartholomeus", "cat", "panda", "badger", "seastar"):
             env = {k: v for k, v in os.environ.items() if k != "BORNPETS_PET"}
             env["BORNPETS_PET"] = pet
             res = REAL_RUN([sys.executable, "-I", "-c", code, pet],

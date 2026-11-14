@@ -18,6 +18,22 @@ deps beyond stdlib.
 | `bornpets_art_check.py` | dev (assets)     | BornPets v3 new-state art: `diff` two exports, `budget` (FAT12 clusters), `review` files for the owner gallery |
 | `bornpets_litter.py`  | dev (assets)       | BornPets floor litter in the pets' style via the OpenAI images API: `generate` (5 items, `--note-file` feedback), `assemble` the strip, `rust` (only from a committed strip) / `check` the firmware source |
 
+### BornPets sheet export order (`asset-gen export`)
+
+The pet configs only land on the right `PP` byte when exported in this order
+(all under `assets/`), e.g. `asset-gen export <these, in order> -o target/v3art/export-new`:
+
+```
+bornpets-bartholomeus.json5 bornpets-sponsors-cat.json5 bornpets-sponsors-slug.json5
+sponsors.json5 bornpets-menu-icons.json5 bornpets-sponsors-panda.json5
+bornpets-sponsors-badger.json5 bornpets-sponsors-seastar.json5 bornpets-sponsors-jellyfish.json5
+```
+
+Not `bornpets-sponsors.json5`, `-v2` or `-v3`. Never export into `assets/to-badge`
+directly; export to `target/` and compare with `bornpets_art_check.py diff`. The
+five art pets (`ART_PETS`) have rows `0x29`-`0x32` for the v3 states; add or
+re-layout rows with `asset-gen migrate <old json5> <new json5>` so existing frames keep their places.
+
 ---
 
 ## One-time host setup (per factory laptop)
