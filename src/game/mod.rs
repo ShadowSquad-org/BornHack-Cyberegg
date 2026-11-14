@@ -58,8 +58,7 @@ use crate::{BLACK, TriColor};
 use timed_flag::TimedFlag;
 
 /// Action feedback shown briefly after an action.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Toast {
     None = 0,

@@ -18,7 +18,8 @@
 //! never persisted and never touches the pet's real `sick`/lifecycle
 //! stats, so losing a battle cannot harm the pet.
 
-use super::engine::PetStats;
+use super::engine::combat::{SNAPSHOT_LEN, Snapshot};
+use super::engine::{PET_NAME_MAX, PetStats};
 use super::friends::FriendRecord;
 
 // ---------------------------------------------------------------------------
@@ -161,6 +162,7 @@ pub fn simulate(seed: u32, challenger: CombatStats, target: CombatStats) -> Batt
 /// `friends::PET_BEACON_TYPE`.
 pub const PET_BATTLE_TYPE: u16 = 0xBA71;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BattleResultMsg {
     pub challenger_id: [u8; 2],
     pub target_id: [u8; 2],
@@ -218,6 +220,130 @@ impl BattleResultMsg {
             target_hp_pct: buf[6],
             challenger_kind,
             target_kind,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire packets of a v3 fight: CHALLENGE, ACCEPT, DECLINE (little-endian, ids
+// first, like `BattleResultMsg`). A longer buffer is tolerated; a shorter one
+// or an invalid snapshot decodes to `None`.
+// ---------------------------------------------------------------------------
+
+pub const PET_CHALLENGE_TYPE: u16 = 0xBA72;
+pub const PET_ACCEPT_TYPE: u16 = 0xBA73;
+pub const PET_DECLINE_TYPE: u16 = 0xBA74;
+
+/// `DeclineMsg::why` when the player pressed Decline; otherwise it is the
+/// first half of `Reason::pack()`.
+pub const WHY_DECLINED: u8 = 0xFE;
+
+const CHALLENGE_LEN: usize = 4 + SNAPSHOT_LEN + 2 + 1 + PET_NAME_MAX + 1;
+const ACCEPT_LEN: usize = 4 + SNAPSHOT_LEN + 2;
+const DECLINE_LEN: usize = 4 + 1 + 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChallengeMsg {
+    pub challenger_id: [u8; 2],
+    pub target_id: [u8; 2],
+    pub snap: Snapshot,
+    pub nonce: u16,
+    pub kind: u8,
+    pub name: [u8; PET_NAME_MAX],
+    pub name_len: u8,
+}
+
+impl ChallengeMsg {
+    pub fn to_bytes(&self) -> [u8; CHALLENGE_LEN] {
+        let mut b = [0u8; CHALLENGE_LEN];
+        b[0..2].copy_from_slice(&self.challenger_id);
+        b[2..4].copy_from_slice(&self.target_id);
+        b[4..13].copy_from_slice(&self.snap.to_wire());
+        b[13..15].copy_from_slice(&self.nonce.to_le_bytes());
+        b[15] = self.kind;
+        b[16..16 + PET_NAME_MAX].copy_from_slice(&self.name);
+        b[16 + PET_NAME_MAX] = self.name_len;
+        b
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < CHALLENGE_LEN {
+            return None;
+        }
+        let mut name = [0u8; PET_NAME_MAX];
+        name.copy_from_slice(&b[16..16 + PET_NAME_MAX]);
+        Some(Self {
+            challenger_id: [b[0], b[1]],
+            target_id: [b[2], b[3]],
+            snap: Snapshot::from_wire(&b[4..13])?,
+            nonce: u16::from_le_bytes([b[13], b[14]]),
+            kind: b[15],
+            name,
+            name_len: b[16 + PET_NAME_MAX],
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcceptMsg {
+    pub challenger_id: [u8; 2],
+    pub target_id: [u8; 2],
+    pub snap: Snapshot,
+    pub nonce: u16,
+}
+
+impl AcceptMsg {
+    pub fn to_bytes(&self) -> [u8; ACCEPT_LEN] {
+        let mut b = [0u8; ACCEPT_LEN];
+        b[0..2].copy_from_slice(&self.challenger_id);
+        b[2..4].copy_from_slice(&self.target_id);
+        b[4..13].copy_from_slice(&self.snap.to_wire());
+        b[13..15].copy_from_slice(&self.nonce.to_le_bytes());
+        b
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < ACCEPT_LEN {
+            return None;
+        }
+        Some(Self {
+            challenger_id: [b[0], b[1]],
+            target_id: [b[2], b[3]],
+            snap: Snapshot::from_wire(&b[4..13])?,
+            nonce: u16::from_le_bytes([b[13], b[14]]),
+        })
+    }
+}
+
+/// `why` and `secs` are the `Reason::pack` pair (`secs` is the wait of a
+/// pair cooldown), or [`WHY_DECLINED`] and 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeclineMsg {
+    pub challenger_id: [u8; 2],
+    pub target_id: [u8; 2],
+    pub why: u8,
+    pub secs: u16,
+}
+
+impl DeclineMsg {
+    pub fn to_bytes(&self) -> [u8; DECLINE_LEN] {
+        let mut b = [0u8; DECLINE_LEN];
+        b[0..2].copy_from_slice(&self.challenger_id);
+        b[2..4].copy_from_slice(&self.target_id);
+        b[4] = self.why;
+        b[5..7].copy_from_slice(&self.secs.to_le_bytes());
+        b
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < DECLINE_LEN {
+            return None;
+        }
+        Some(Self {
+            challenger_id: [b[0], b[1]],
+            target_id: [b[2], b[3]],
+            why: b[4],
+            secs: u16::from_le_bytes([b[5], b[6]]),
         })
     }
 }
@@ -285,10 +411,10 @@ pub fn challenge(friend: &FriendRecord) -> Option<(BattleOutcome, u32)> {
 
     let my_stats = super::lifecycle::combat_stats()?;
     let their_stats = CombatStats {
-        attack: friend.attack,
-        defense: friend.defense,
+        attack: friend.power,
+        defense: friend.guard,
         speed: friend.speed,
-        max_hp: friend.max_hp,
+        max_hp: friend.hp,
     };
 
     let seed = super::lifecycle::now_tick()

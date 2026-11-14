@@ -26,8 +26,8 @@ pub const PET_BEACON_TYPE: u16 = 0xBEAC;
 
 /// Fixed-size beacon payload: sender identity + pet snapshot.
 ///
-/// `attack`/`defense`/`speed`/`max_hp` are the sender's current derived
-/// combat stats (see `crate::game::battle::CombatStats`) — carried here so
+/// `power`/`guard`/`speed`/`hp` (and stamina, focus) are the sender's current
+/// fight numbers (see `crate::game::engine::combat::Snapshot`) — carried here so
 /// a friend's badge can cache them and battle against them later without
 /// needing the opponent to be in range at that exact moment.
 pub struct PetBeacon {
@@ -36,13 +36,23 @@ pub struct PetBeacon {
     pub generation: u16,
     pub name: [u8; PET_NAME_MAX],
     pub name_len: u8,
-    pub attack: u8,
-    pub defense: u8,
+    pub power: u8,
+    pub guard: u8,
     pub speed: u8,
-    pub max_hp: u8,
+    pub hp: u8,
+    pub stamina: u8,
+    pub focus: i8,
+    pub demo: bool,
+    /// True when decoded from a 25-byte v3 beacon; an old badge's 22 bytes
+    /// leave stamina 3, focus 0 and no demo flag.
+    pub v3: bool,
 }
 
-const BEACON_SIZE: usize = 22; // 2 + 1 + 2 + 12 + 1 + 4
+/// v3 beacon: bytes 0..18 as before, then power, guard, speed, hp, stamina,
+/// focus, flags (bit 0 demo).
+const BEACON_SIZE: usize = 25;
+/// An older badge's beacon: 2 + 1 + 2 + 12 + 1 + 4.
+const BEACON_SIZE_OLD: usize = 22;
 
 impl PetBeacon {
     pub fn to_bytes(&self) -> [u8; BEACON_SIZE] {
@@ -52,17 +62,21 @@ impl PetBeacon {
         buf[3..5].copy_from_slice(&self.generation.to_le_bytes());
         buf[5..17].copy_from_slice(&self.name);
         buf[17] = self.name_len;
-        buf[18] = self.attack;
-        buf[19] = self.defense;
+        buf[18] = self.power;
+        buf[19] = self.guard;
         buf[20] = self.speed;
-        buf[21] = self.max_hp;
+        buf[21] = self.hp;
+        buf[22] = self.stamina;
+        buf[23] = self.focus as u8;
+        buf[24] = self.demo as u8;
         buf
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
-        if buf.len() < BEACON_SIZE {
+        if buf.len() < BEACON_SIZE_OLD {
             return None;
         }
+        let v3 = buf.len() >= BEACON_SIZE;
         let mut name = [0u8; PET_NAME_MAX];
         name.copy_from_slice(&buf[5..17]);
         Some(Self {
@@ -71,10 +85,14 @@ impl PetBeacon {
             generation: u16::from_le_bytes([buf[3], buf[4]]),
             name,
             name_len: buf[17],
-            attack: buf[18],
-            defense: buf[19],
+            power: buf[18],
+            guard: buf[19],
             speed: buf[20],
-            max_hp: buf[21],
+            hp: buf[21],
+            stamina: if v3 { buf[22] } else { 3 },
+            focus: if v3 { buf[23] as i8 } else { 0 },
+            demo: v3 && buf[24] & 1 != 0,
+            v3,
         })
     }
 }
@@ -109,10 +127,10 @@ pub struct FriendRecord {
     /// Cached combat-stat snapshot from this friend's most recent beacon —
     /// see `crate::game::battle::CombatStats`. Used to battle them without
     /// needing their badge in range at that exact moment.
-    pub attack: u8,
-    pub defense: u8,
+    pub power: u8,
+    pub guard: u8,
     pub speed: u8,
-    pub max_hp: u8,
+    pub hp: u8,
     /// Head-to-head mesh Battle record against this specific friend —
     /// distinct from the pet's own overall `wins`/`losses` in
     /// `engine::GameState`. Updated on both badges for every battle
@@ -144,10 +162,10 @@ impl FriendRecord {
         first_seen_tick: 0,
         last_boost_tick: 0,
         last_seen_tick: 0,
-        attack: 0,
-        defense: 0,
+        power: 0,
+        guard: 0,
         speed: 0,
-        max_hp: 0,
+        hp: 0,
         wins: 0,
         losses: 0,
     };
@@ -160,10 +178,10 @@ impl FriendRecord {
         buf[16..20].copy_from_slice(&self.first_seen_tick.to_le_bytes());
         buf[20..24].copy_from_slice(&self.last_boost_tick.to_le_bytes());
         buf[24..28].copy_from_slice(&self.last_seen_tick.to_le_bytes());
-        buf[28] = self.attack;
-        buf[29] = self.defense;
+        buf[28] = self.power;
+        buf[29] = self.guard;
         buf[30] = self.speed;
-        buf[31] = self.max_hp;
+        buf[31] = self.hp;
         buf[32..34].copy_from_slice(&self.wins.to_le_bytes());
         buf[34..36].copy_from_slice(&self.losses.to_le_bytes());
     }
@@ -179,10 +197,10 @@ impl FriendRecord {
             first_seen_tick: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
             last_boost_tick: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
             last_seen_tick: u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]),
-            attack: buf[28],
-            defense: buf[29],
+            power: buf[28],
+            guard: buf[29],
             speed: buf[30],
-            max_hp: buf[31],
+            hp: buf[31],
             wins: u16::from_le_bytes([buf[32], buf[33]]),
             losses: u16::from_le_bytes([buf[34], buf[35]]),
         }
@@ -496,10 +514,10 @@ pub async fn on_pet_beacon(data: &[u8]) {
             friend.name = beacon.name;
             friend.name_len = beacon.name_len;
             friend.pet_kind = beacon.pet_kind;
-            friend.attack = beacon.attack;
-            friend.defense = beacon.defense;
+            friend.power = beacon.power;
+            friend.guard = beacon.guard;
             friend.speed = beacon.speed;
-            friend.max_hp = beacon.max_hp;
+            friend.hp = beacon.hp;
             friend.last_seen_tick = now;
             let boost = if now.saturating_sub(friend.last_boost_tick) < FRIEND_BOOST_COOLDOWN_TICKS
             {
@@ -522,10 +540,10 @@ pub async fn on_pet_beacon(data: &[u8]) {
                 first_seen_tick: now,
                 last_boost_tick: now,
                 last_seen_tick: now,
-                attack: beacon.attack,
-                defense: beacon.defense,
+                power: beacon.power,
+                guard: beacon.guard,
                 speed: beacon.speed,
-                max_hp: beacon.max_hp,
+                hp: beacon.hp,
                 wins: 0,
                 losses: 0,
             });
@@ -556,10 +574,14 @@ mod tests {
             generation: 3,
             name: *b"Rex\0\0\0\0\0\0\0\0\0",
             name_len: 3,
-            attack: 40,
-            defense: 30,
+            power: 40,
+            guard: 30,
             speed: 20,
-            max_hp: 100,
+            hp: 100,
+            stamina: 3,
+            focus: 0,
+            demo: false,
+            v3: true,
         }
     }
 
@@ -572,10 +594,10 @@ mod tests {
             first_seen_tick,
             last_boost_tick,
             last_seen_tick: last_boost_tick,
-            attack: 0,
-            defense: 0,
+            power: 0,
+            guard: 0,
             speed: 0,
-            max_hp: 0,
+            hp: 0,
             wins: 0,
             losses: 0,
         }
@@ -643,10 +665,10 @@ mod tests {
         assert_eq!(restored.generation, 3);
         assert_eq!(restored.name_len, 3);
         assert_eq!(&restored.name[..3], b"Rex");
-        assert_eq!(restored.attack, 40);
-        assert_eq!(restored.defense, 30);
+        assert_eq!(restored.power, 40);
+        assert_eq!(restored.guard, 30);
         assert_eq!(restored.speed, 20);
-        assert_eq!(restored.max_hp, 100);
+        assert_eq!(restored.hp, 100);
     }
 
     #[test]
@@ -713,10 +735,10 @@ mod tests {
             first_seen_tick: 100,
             last_boost_tick: 200,
             last_seen_tick: 250,
-            attack: 55,
-            defense: 45,
+            power: 55,
+            guard: 45,
             speed: 35,
-            max_hp: 120,
+            hp: 120,
             wins: 7,
             losses: 3,
         });
@@ -728,10 +750,10 @@ mod tests {
         assert_eq!(restored.friends[0].first_seen_tick, 100);
         assert_eq!(restored.friends[0].last_boost_tick, 200);
         assert_eq!(restored.friends[0].last_seen_tick, 250);
-        assert_eq!(restored.friends[0].attack, 55);
-        assert_eq!(restored.friends[0].defense, 45);
+        assert_eq!(restored.friends[0].power, 55);
+        assert_eq!(restored.friends[0].guard, 45);
         assert_eq!(restored.friends[0].speed, 35);
-        assert_eq!(restored.friends[0].max_hp, 120);
+        assert_eq!(restored.friends[0].hp, 120);
         assert_eq!(restored.friends[0].wins, 7);
         assert_eq!(restored.friends[0].losses, 3);
     }

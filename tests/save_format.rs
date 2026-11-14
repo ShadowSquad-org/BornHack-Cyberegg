@@ -556,10 +556,10 @@ fn friend(
         first_seen_tick: ticks[0],
         last_boost_tick: ticks[1],
         last_seen_tick: ticks[2],
-        attack: combat[0],
-        defense: combat[1],
+        power: combat[0],
+        guard: combat[1],
         speed: combat[2],
-        max_hp: combat[3],
+        hp: combat[3],
         wins: wl[0],
         losses: wl[1],
     }
@@ -605,10 +605,10 @@ fn friends_golden_bytes_round_trip() {
         assert_eq!(a.first_seen_tick, b.first_seen_tick);
         assert_eq!(a.last_boost_tick, b.last_boost_tick);
         assert_eq!(a.last_seen_tick, b.last_seen_tick);
-        assert_eq!(a.attack, b.attack);
-        assert_eq!(a.defense, b.defense);
+        assert_eq!(a.power, b.power);
+        assert_eq!(a.guard, b.guard);
         assert_eq!(a.speed, b.speed);
-        assert_eq!(a.max_hp, b.max_hp);
+        assert_eq!(a.hp, b.hp);
         assert_eq!(a.wins, b.wins);
         assert_eq!(a.losses, b.losses);
     }
@@ -634,42 +634,66 @@ const BEACON_GOLDEN: [u8; 22] = [
     0x00, 0x05, 0x31, 0x42, 0x53, 0x64,
 ];
 
+const BEACON_V3_GOLDEN: [u8; 25] = [
+    0xE5, 0xF6, 0x06, 0x0B, 0x0A, 0x50, 0x69, 0x78, 0x65, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x05, 0x31, 0x42, 0x53, 0x64, 0x07, 0xFB, 0x01,
+];
+
 #[test]
-fn pet_beacon_golden_bytes_round_trip() {
+fn pet_beacon_v3_golden_bytes() {
     let beacon = PetBeacon {
         device_id: [0xE5, 0xF6],
         pet_kind: 6,
         generation: 0x0A0B,
         name: name12("Pixel"),
         name_len: 5,
-        attack: 0x31,
-        defense: 0x42,
+        power: 0x31,
+        guard: 0x42,
         speed: 0x53,
-        max_hp: 0x64,
+        hp: 0x64,
+        stamina: 7,
+        focus: -5,
+        demo: true,
+        v3: true,
     };
-    assert_eq!(beacon.to_bytes(), BEACON_GOLDEN);
+    assert_eq!(beacon.to_bytes(), BEACON_V3_GOLDEN);
 
-    let b = PetBeacon::from_bytes(&BEACON_GOLDEN).unwrap();
+    let b = PetBeacon::from_bytes(&BEACON_V3_GOLDEN).unwrap();
     assert_eq!(b.device_id, [0xE5, 0xF6]);
     assert_eq!(b.pet_kind, 6);
     assert_eq!(b.generation, 0x0A0B);
     assert_eq!(b.name, name12("Pixel"));
     assert_eq!(b.name_len, 5);
     assert_eq!(
-        (b.attack, b.defense, b.speed, b.max_hp),
+        (b.power, b.guard, b.speed, b.hp),
         (0x31, 0x42, 0x53, 0x64)
     );
-    assert_eq!(b.to_bytes(), BEACON_GOLDEN);
+    assert_eq!((b.stamina, b.focus, b.demo, b.v3), (7, -5, true, true));
+    assert_eq!(b.to_bytes(), BEACON_V3_GOLDEN);
 
     // Too short -> rejected; longer is tolerated (trailing bytes ignored).
-    assert!(PetBeacon::from_bytes(&BEACON_GOLDEN[..21]).is_none());
+    assert!(PetBeacon::from_bytes(&BEACON_V3_GOLDEN[..21]).is_none());
     assert!(PetBeacon::from_bytes(&[]).is_none());
-    let mut long = BEACON_GOLDEN.to_vec();
+    let mut long = BEACON_V3_GOLDEN.to_vec();
     long.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(PetBeacon::from_bytes(&long).unwrap().to_bytes(), BEACON_V3_GOLDEN);
+}
+
+#[test]
+fn pet_beacon_old_still_decodes() {
+    let b = PetBeacon::from_bytes(&BEACON_GOLDEN).unwrap();
+    assert_eq!(b.device_id, [0xE5, 0xF6]);
+    assert_eq!(b.pet_kind, 6);
+    assert_eq!(b.generation, 0x0A0B);
+    assert_eq!(b.name, name12("Pixel"));
     assert_eq!(
-        PetBeacon::from_bytes(&long).unwrap().to_bytes(),
-        BEACON_GOLDEN
+        (b.power, b.guard, b.speed, b.hp),
+        (0x31, 0x42, 0x53, 0x64)
     );
+    assert_eq!((b.stamina, b.focus, b.demo, b.v3), (3, 0, false, false));
+    // 23 and 24 bytes are also an old beacon (the extra bytes are not a v3 tail).
+    assert!(!PetBeacon::from_bytes(&BEACON_V3_GOLDEN[..24]).unwrap().v3);
+    assert!(PetBeacon::from_bytes(&BEACON_GOLDEN[..21]).is_none());
 }
 
 // ---------------------------------------------------------------------------

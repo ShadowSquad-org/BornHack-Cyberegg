@@ -1684,17 +1684,21 @@ async fn pet_beacon_ticker_task() {
             let n = name.len().min(PET_NAME_MAX);
             beacon_name[..n].copy_from_slice(&name.as_bytes()[..n]);
 
-            let combat = lifecycle::combat_stats();
+            let snap = lifecycle::snapshot();
             let beacon = friends::PetBeacon {
                 device_id: bornhack_aegg::fw::device_id::get(),
                 pet_kind: kind.id(),
                 generation: lifecycle::pet_generation(),
                 name: beacon_name,
                 name_len: n as u8,
-                attack: combat.map_or(0, |c| c.attack),
-                defense: combat.map_or(0, |c| c.defense),
-                speed: combat.map_or(0, |c| c.speed),
-                max_hp: combat.map_or(0, |c| c.max_hp),
+                power: snap.map_or(0, |s| s.power),
+                guard: snap.map_or(0, |s| s.guard),
+                speed: snap.map_or(0, |s| s.speed),
+                hp: snap.map_or(0, |s| s.hp),
+                stamina: snap.map_or(0, |s| s.stamina),
+                focus: snap.map_or(0, |s| s.focus),
+                demo: lifecycle::is_demo(),
+                v3: true,
             };
 
             let mut data: heapless::Vec<u8, { bornhack_aegg::fw::mesh::MAX_CHANNEL_DATA }> =

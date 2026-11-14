@@ -229,6 +229,85 @@ pub const WIRE_HP: (u8, u8) = (15, 120);
 pub const WIRE_STAMINA: (u8, u8) = (0, 10);
 pub const WIRE_FOCUS: (i8, i8) = (-100, 20);
 
+/// Bytes of a snapshot on the wire.
+pub const SNAPSHOT_LEN: usize = 9;
+
+/// Flag bits that never travel: 20 and 21 are unused, 22 is the plan-8 star.
+const WIRE_FLAG_HOLES: u32 = 0b111 << 20;
+
+fn in_range(v: u8, r: (u8, u8)) -> bool {
+    v >= r.0 && v <= r.1
+}
+
+impl Snapshot {
+    /// power, guard, speed, hp, stamina, focus (i8 as u8), flags as 3 bytes
+    /// little-endian.
+    pub fn to_wire(&self) -> [u8; SNAPSHOT_LEN] {
+        let f = self.flags.0.to_le_bytes();
+        [
+            self.power,
+            self.guard,
+            self.speed,
+            self.hp,
+            self.stamina,
+            self.focus as u8,
+            f[0],
+            f[1],
+            f[2],
+        ]
+    }
+
+    /// None when the input is short, a number is outside its `WIRE_*` range
+    /// (so `hp` is never 0 and `stamina` never 255: `fight` divides by `hp`,
+    /// `decisive` adds 1 to `stamina`), or flag bits 20, 21 or 22 are set.
+    pub fn from_wire(b: &[u8]) -> Option<Snapshot> {
+        if b.len() < SNAPSHOT_LEN {
+            return None;
+        }
+        let focus = b[5] as i8;
+        let flags = u32::from_le_bytes([b[6], b[7], b[8], 0]);
+        let ok = in_range(b[0], WIRE_POWER)
+            && in_range(b[1], WIRE_GUARD)
+            && in_range(b[2], WIRE_SPEED)
+            && in_range(b[3], WIRE_HP)
+            && in_range(b[4], WIRE_STAMINA)
+            && focus >= WIRE_FOCUS.0
+            && focus <= WIRE_FOCUS.1
+            && flags & WIRE_FLAG_HOLES == 0;
+        ok.then_some(Snapshot {
+            power: b[0],
+            guard: b[1],
+            speed: b[2],
+            hp: b[3],
+            stamina: b[4],
+            focus,
+            flags: Flags(flags),
+        })
+    }
+
+    /// A beacon's six numbers (no condition flags), clamped into the `WIRE_*`
+    /// ranges (an old badge's numbers are on another scale), with the demo bit.
+    pub fn from_beacon(
+        power: u8,
+        guard: u8,
+        speed: u8,
+        hp: u8,
+        stamina: u8,
+        focus: i8,
+        demo: bool,
+    ) -> Snapshot {
+        Snapshot {
+            power: power.clamp(WIRE_POWER.0, WIRE_POWER.1),
+            guard: guard.clamp(WIRE_GUARD.0, WIRE_GUARD.1),
+            speed: speed.clamp(WIRE_SPEED.0, WIRE_SPEED.1),
+            hp: hp.clamp(WIRE_HP.0, WIRE_HP.1),
+            stamina: stamina.clamp(WIRE_STAMINA.0, WIRE_STAMINA.1),
+            focus: focus.clamp(WIRE_FOCUS.0, WIRE_FOCUS.1),
+            flags: Flags(0).with_demo(demo),
+        }
+    }
+}
+
 /// How much of the drink the pet feels: a light pet feels more of it.
 /// `booze * (base - weight) / 100`, kept in 0..=100 (a custom base below the
 /// weight must not turn the drink into a bonus). The one copy of the rule;

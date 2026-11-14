@@ -254,12 +254,12 @@ where
     const BAR_H: u32 = 12;
     const BAR_X: i32 = 36;
     let bars: [(&str, u8); 4] = [
-        (BAR_LABELS[0], friend.attack.min(100)),
-        (BAR_LABELS[1], friend.defense.min(100)),
+        (BAR_LABELS[0], friend.power.min(100)),
+        (BAR_LABELS[1], friend.guard.min(100)),
         (BAR_LABELS[2], friend.speed.min(100)),
         (
             BAR_LABELS[3],
-            (((friend.max_hp.saturating_sub(20) as u32) * 100) / 130).min(100) as u8,
+            (((friend.hp.saturating_sub(20) as u32) * 100) / 130).min(100) as u8,
         ),
     ];
     for (label, pct) in bars {

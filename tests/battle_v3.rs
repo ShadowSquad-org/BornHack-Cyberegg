@@ -1308,3 +1308,211 @@ mod decline {
         }
     }
 }
+
+mod wire {
+    use bornhack_aegg::game::battle::{
+        AcceptMsg, ChallengeMsg, DeclineMsg, PET_ACCEPT_TYPE, PET_BATTLE_TYPE, PET_CHALLENGE_TYPE,
+        PET_DECLINE_TYPE, WHY_DECLINED,
+    };
+    use bornhack_aegg::game::engine::combat::{
+        Flags, SNAPSHOT_LEN, Snapshot, WIRE_FOCUS, WIRE_GUARD, WIRE_HP, WIRE_POWER, WIRE_SPEED,
+        WIRE_STAMINA,
+    };
+    use bornhack_aegg::game::friends::PET_BEACON_TYPE;
+
+    fn lcg(s: &mut u32) -> u32 {
+        *s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+        *s >> 8
+    }
+
+    fn pick(s: &mut u32, r: (u8, u8)) -> u8 {
+        r.0 + (lcg(s) % (r.1 - r.0 + 1) as u32) as u8
+    }
+
+    fn good() -> Snapshot {
+        Snapshot {
+            power: 40,
+            guard: 20,
+            speed: 50,
+            hp: 80,
+            stamina: 6,
+            focus: -10,
+            flags: Flags(0b101).with_demo(true),
+        }
+    }
+
+    #[test]
+    fn snapshot_wire_round_trips_every_field() {
+        let mut s = 7u32;
+        for i in 0..2000 {
+            let focus = match i {
+                0 => WIRE_FOCUS.0,
+                1 => WIRE_FOCUS.1,
+                _ => (WIRE_FOCUS.0 as i32 + (lcg(&mut s) % 121) as i32) as i8,
+            };
+            // Condition bits 0..=19 and the demo bit 23.
+            let flags = Flags(lcg(&mut s) & 0xF_FFFF | (lcg(&mut s) & 1) << 23);
+            let snap = Snapshot {
+                power: pick(&mut s, WIRE_POWER),
+                guard: pick(&mut s, WIRE_GUARD),
+                speed: pick(&mut s, WIRE_SPEED),
+                hp: pick(&mut s, WIRE_HP),
+                stamina: pick(&mut s, WIRE_STAMINA),
+                focus,
+                flags,
+            };
+            let b = snap.to_wire();
+            assert_eq!(b.len(), SNAPSHOT_LEN);
+            assert_eq!(Snapshot::from_wire(&b), Some(snap), "case {i}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_snapshot_is_refused() {
+        assert_eq!(Snapshot::from_wire(&good().to_wire()), Some(good()));
+        // One field at a time, just past each end (and 0 / 255 where they are
+        // the dangerous values: fight divides by hp, decisive adds 1 to stamina).
+        let mut bad: Vec<[u8; SNAPSHOT_LEN]> = Vec::new();
+        for (idx, vals) in [
+            (0usize, vec![WIRE_POWER.0 - 1, WIRE_POWER.1 + 1, 0, 255]),
+            (1, vec![WIRE_GUARD.1 + 1, 255]),
+            (2, vec![WIRE_SPEED.0 - 1, WIRE_SPEED.1 + 1, 0, 255]),
+            (3, vec![0, WIRE_HP.0 - 1, WIRE_HP.1 + 1, 255]),
+            (4, vec![WIRE_STAMINA.1 + 1, 255]),
+            (5, vec![(WIRE_FOCUS.0 - 1) as u8, (WIRE_FOCUS.1 + 1) as u8, 127, 128]),
+        ] {
+            for v in vals {
+                let mut b = good().to_wire();
+                b[idx] = v;
+                bad.push(b);
+            }
+        }
+        for bit in [20u32, 21, 22] {
+            let mut b = good().to_wire();
+            let f = u32::from_le_bytes([b[6], b[7], b[8], 0]) | 1 << bit;
+            b[6..9].copy_from_slice(&f.to_le_bytes()[..3]);
+            bad.push(b);
+        }
+        for b in &bad {
+            assert_eq!(Snapshot::from_wire(b), None, "{b:?}");
+        }
+        // Too short.
+        assert_eq!(Snapshot::from_wire(&good().to_wire()[..SNAPSHOT_LEN - 1]), None);
+        // Every u8 in every number slot: accepted only inside its range.
+        let ranges = [WIRE_POWER, WIRE_GUARD, WIRE_SPEED, WIRE_HP, WIRE_STAMINA];
+        for (idx, r) in ranges.iter().enumerate() {
+            for v in 0..=255u8 {
+                let mut b = good().to_wire();
+                b[idx] = v;
+                assert_eq!(
+                    Snapshot::from_wire(&b).is_some(),
+                    v >= r.0 && v <= r.1,
+                    "slot {idx} value {v}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn beacon_numbers_are_clamped() {
+        let s = Snapshot::from_beacon(100, 100, 100, 150, 3, 0, false);
+        assert_eq!((s.power, s.guard, s.speed, s.hp), (70, 40, 100, 120));
+        assert_eq!((s.stamina, s.focus), (3, 0));
+        assert!(!s.flags.demo());
+        assert_eq!(s.flags.0 & 0xF_FFFF, 0);
+        let low = Snapshot::from_beacon(0, 0, 0, 0, 255, -128, true);
+        assert_eq!((low.power, low.guard, low.speed, low.hp), (5, 0, 5, 15));
+        assert_eq!((low.stamina, low.focus), (10, -100));
+        assert!(low.flags.demo());
+        assert!(Snapshot::from_wire(&low.to_wire()).is_some());
+    }
+
+    #[test]
+    fn packets_round_trip() {
+        let mut name = [0u8; 12];
+        name[..4].copy_from_slice(b"Bram");
+        let ch = ChallengeMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            snap: good(),
+            nonce: 0xBEEF,
+            kind: 5,
+            name,
+            name_len: 4,
+        };
+        let b = ch.to_bytes();
+        assert_eq!(b.len(), 29);
+        assert_eq!(ChallengeMsg::from_bytes(&b), Some(ch));
+        assert_eq!(ChallengeMsg::from_bytes(&b[..28]), None);
+
+        let ac = AcceptMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            snap: good(),
+            nonce: 0x1234,
+        };
+        let b = ac.to_bytes();
+        assert_eq!(b.len(), 15);
+        assert_eq!(AcceptMsg::from_bytes(&b), Some(ac));
+        assert_eq!(AcceptMsg::from_bytes(&b[..14]), None);
+
+        let de = DeclineMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            why: 6,
+            secs: 0x0102,
+        };
+        let b = de.to_bytes();
+        assert_eq!(b.len(), 7);
+        assert_eq!(&b[5..7], &[0x02, 0x01]);
+        assert_eq!(DeclineMsg::from_bytes(&b), Some(de));
+        assert_eq!(DeclineMsg::from_bytes(&b[..6]), None);
+        assert_eq!(WHY_DECLINED, 0xFE);
+
+        // Longer is tolerated.
+        let mut long = ac.to_bytes().to_vec();
+        long.push(0);
+        assert_eq!(AcceptMsg::from_bytes(&long), Some(ac));
+    }
+
+    #[test]
+    fn invalid_snapshot_in_a_packet_is_refused() {
+        let mut ac = AcceptMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            snap: good(),
+            nonce: 1,
+        }
+        .to_bytes();
+        ac[4 + 3] = 0; // hp 0
+        assert_eq!(AcceptMsg::from_bytes(&ac), None);
+        let mut ch = ChallengeMsg {
+            challenger_id: [1, 2],
+            target_id: [3, 4],
+            snap: good(),
+            nonce: 1,
+            kind: 0,
+            name: [0; 12],
+            name_len: 0,
+        }
+        .to_bytes();
+        ch[4 + 4] = 255; // stamina 255
+        assert_eq!(ChallengeMsg::from_bytes(&ch), None);
+    }
+
+    #[test]
+    fn packet_types_are_distinct() {
+        let t = [
+            PET_BEACON_TYPE,
+            PET_BATTLE_TYPE,
+            PET_CHALLENGE_TYPE,
+            PET_ACCEPT_TYPE,
+            PET_DECLINE_TYPE,
+        ];
+        for i in 0..t.len() {
+            for j in i + 1..t.len() {
+                assert_ne!(t[i], t[j]);
+            }
+        }
+    }
+}
