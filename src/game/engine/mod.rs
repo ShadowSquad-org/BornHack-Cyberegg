@@ -1110,6 +1110,16 @@ impl GameState {
         true
     }
 
+    /// The pet leaves for good now: phase Gone, no running action, not
+    /// hibernating, `realm_pending` false (the caller has pushed the record).
+    pub fn retire(&mut self) {
+        self.phase = Phase::Gone;
+        self.active_action = None;
+        self.hibernating = false;
+        self.realm_pending = false;
+        self.request_save();
+    }
+
     /// End hibernation — progression resumes from this moment.
     /// Marks the state for immediate persistence (see `hibernate`).
     pub fn wake_from_hibernation(&mut self) -> bool {
@@ -2456,7 +2466,7 @@ pub fn pick_save(v3: Option<&[u8]>, v2: Option<&[u8]>) -> Option<(GameState, boo
 pub const PET_NAME_MAX: usize = 12;
 
 /// Compact record of a past pet for the Unicorn Realm.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PetRecord {
     pub generation: u16,
     pub age_ticks: u32,

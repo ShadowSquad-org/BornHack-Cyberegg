@@ -53,6 +53,10 @@ pub fn install_pets_from_repo_cfg() {
     let mut pets: heapless::Vec<PetDef, MAX_PETS> = heapless::Vec::new();
     crate::game::pets_cfg::parse(CFG, &mut pets);
     pet_registry::install(&pets);
+    pet_registry::drop_without_sprites(|id| {
+        let idle = crate::game::engine::anim_files::anim_id_for(crate::game::engine::DisplayAnim::Idle);
+        crate::game::sprite_loader::count_anim_frames(id, idle) > 0
+    });
 }
 
 /// Enlargement of the saved PNGs: the 152 px screen becomes 608 px.

@@ -74,6 +74,36 @@ static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
     [const { [const { core::sync::atomic::AtomicU16::new(0) }; AA_MAX] }; PP_MAX];
 
 #[cfg(not(feature = "simulator"))]
+/// Set once `init` walked the directory to its real end.  A `dir.next()` error
+/// ends the walk without it, and the missing-sprite retirement then stands down.
+#[cfg(feature = "embassy-core")]
+static CATALOGUE_COMPLETE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static TEST_INCOMPLETE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Whether the sprite catalogue is complete.  The simulator has no catalogue
+/// to walk and always is.
+pub fn catalogue_complete() -> bool {
+    #[cfg(test)]
+    if TEST_INCOMPLETE.load(core::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    #[cfg(feature = "embassy-core")]
+    {
+        CATALOGUE_COMPLETE.load(core::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "embassy-core"))]
+    {
+        true
+    }
+}
+
+/// Test hook: pretend the directory walk failed.
+#[cfg(test)]
+pub(crate) fn set_incomplete_for_test(v: bool) {
+    TEST_INCOMPLETE.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
 static FRAME_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------
@@ -100,7 +130,16 @@ pub async fn init() {
     };
 
     let mut total: u8 = 0;
-    while let Ok(Some((name, _file))) = dir.next().await {
+    let mut walked_to_end = false;
+    loop {
+        let (name, _file) = match dir.next().await {
+            Ok(Some(e)) => e,
+            Ok(None) => {
+                walked_to_end = true;
+                break;
+            }
+            Err(_) => break,
+        };
         if &name[8..11] != b"PCX" {
             continue;
         }
@@ -123,6 +162,7 @@ pub async fn init() {
     }
 
     FRAME_COUNT.store(total, core::sync::atomic::Ordering::Relaxed);
+    CATALOGUE_COMPLETE.store(walked_to_end, core::sync::atomic::Ordering::Relaxed);
     if total == 0 {
         defmt::info!("sprite: no PCX files found on FAT12");
     } else {

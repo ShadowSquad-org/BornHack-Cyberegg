@@ -410,6 +410,9 @@ const ALERT_ALCOHOL_HINT: &str = "Give rehab soon";
 /// The gone screen: the farewell (when there is no farewell animation) and
 /// the two prompt lines.
 const GONE_LEFT: &str = "Your pet has left";
+/// Replaces `GONE_LEFT` for a pet moved to the Unicorn Realm because the badge
+/// has no sprites for its kind.
+const RETIRED_LINES: [&str; 2] = ["Moved to the", "Unicorn Realm"];
 const GONE_PROMPT: [&str; 2] = ["Press Fire", "for a new egg"];
 /// The pet area when the sprite files are missing.
 const NO_SPRITES: &str = "No sprites on flash";
@@ -433,7 +436,7 @@ pub fn screen_words() -> std::vec::Vec<(&'static str, &'static str)> {
     for text in [ALERT_DIABETES_HINT, ALERT_ALCOHOL_HINT, GONE_LEFT, NO_SPRITES] {
         out.push(("screen", text));
     }
-    for line in GONE_PROMPT {
+    for line in RETIRED_LINES.into_iter().chain(GONE_PROMPT) {
         out.push(("screen", line));
     }
     out.push(("screen", NAME_PROMPT));
@@ -1040,7 +1043,12 @@ where
             modal::close();
         }
         // Farewell animation blitted by embassy.rs if available.
-        if sprite_loader::frame_count() == 0 {
+        if lifecycle::is_hidden_kind(lifecycle::pet_kind()) {
+            for (line, y) in RETIRED_LINES.into_iter().zip([50, 66]) {
+                Text::with_text_style(line, Point::new(76, y), font_red, centered)
+                    .draw(display)?;
+            }
+        } else if sprite_loader::frame_count() == 0 {
             Text::with_text_style(GONE_LEFT, Point::new(76, 50), font_red, centered)
                 .draw(display)?;
         }
@@ -1189,7 +1197,7 @@ where
     }
 
     // Debug: show animation name when no artwork loaded.
-    if !has_sprite && lifecycle::is_started() {
+    if !has_sprite && lifecycle::is_started() && lifecycle::display_anim() != DisplayAnim::Gone {
         use embedded_graphics::text::{Text};
 
         let anim = lifecycle::display_anim();
@@ -1717,6 +1725,39 @@ mod tests {
         assert_eq!(super::next_ui_deadline_tick(), u32::MAX);
         super::modal::close();
         crate::game::lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn the_gone_screen_says_where_it_went() {
+        use crate::game::engine::{GameState, PetKind, Phase};
+        use crate::game::pet_registry;
+        let _guard = super::lock_test_state();
+        let _clear = ClearPet;
+        pet_registry::install_test_roster();
+        pet_registry::set_dropped_for_test(1 << 8);
+        let nav = crate::game::nav::get_nav();
+        let draw = |kind: u8| {
+            let mut s = GameState::new_egg(7, PetKind(kind));
+            s.phase = Phase::Gone;
+            crate::game::lifecycle::set_state_for_test(Some(s));
+            let mut c = Canvas::new();
+            super::draw_screen_game(&mut c, nav).unwrap();
+            c
+        };
+        let retired = draw(8);
+        assert!(retired.any(rows(42, 54), RED), "first line");
+        assert!(retired.any(rows(58, 70), RED), "second line");
+        assert!(retired.any(rows(82, 96), RED), "Press Fire");
+        assert!(retired.any(rows(98, 112), RED), "for a new egg");
+        // frame_count() is u8::MAX on the simulator, so a farewell-less kind 0
+        // draws no text of its own in these rows.
+        let left = draw(0);
+        assert!(!left.any(rows(42, 70), RED), "no retired lines for a known kind");
+        pet_registry::set_dropped_for_test(0);
+        for line in super::RETIRED_LINES {
+            assert!(line.len() <= 21, "{line}");
+            assert!(super::screen_words().iter().any(|(_, w)| *w == line), "{line}");
+        }
     }
 
     #[test]

@@ -568,8 +568,18 @@ async fn main(spawner: Spawner) {
     // ── Game engine + sprite loader ─────────────────────────────────────
     #[cfg(feature = "game")]
     {
-        bornhack_aegg::game::lifecycle::init().await;
         bornhack_aegg::game::sprite_loader::init().await;
+        bornhack_aegg::game::pet_registry::drop_without_sprites(|id| {
+            let idle = bornhack_aegg::game::engine::anim_files::anim_id_for(
+                bornhack_aegg::game::engine::DisplayAnim::Idle,
+            );
+            bornhack_aegg::game::sprite_loader::count_anim_frames(id, idle) > 0
+        });
+        bornhack_aegg::game::lifecycle::init().await;
+        defmt::info!(
+            "game: retire hidden pet: {}",
+            bornhack_aegg::game::lifecycle::retire_hidden_pet()
+        );
     }
 
     // ── Temperature ──────────────────────────────────────────────────────
