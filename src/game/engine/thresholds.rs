@@ -137,7 +137,7 @@ thresholds_table! {
     BATTLE_PRIZE_FIRST_HAX: u16,
     BATTLE_PRIZE_LATER_HAX: u16,
     BATTLE_PRIZE_BEACON_MIN: u16,
-    BATTLE_DECLINE_MOOD_PCT: u8,
+    BATTLE_DECLINE_MOOD_PCT: u16,
     BATTLE_DECLINE_MIN: u16,
     // v3 need bands (percent, 1..=99); see engine::needs
     FULL_LO_PCT: u8,
@@ -2095,7 +2095,7 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("BATTLE_PRIZE_FIRST_HAX", |t, v| t.BATTLE_PRIZE_FIRST_HAX = clamp_u16(v)),
     ("BATTLE_PRIZE_LATER_HAX", |t, v| t.BATTLE_PRIZE_LATER_HAX = clamp_u16(v)),
     ("BATTLE_PRIZE_BEACON_MIN", |t, v| t.BATTLE_PRIZE_BEACON_MIN = clamp_u16(v)),
-    ("BATTLE_DECLINE_MOOD_PCT", |t, v| t.BATTLE_DECLINE_MOOD_PCT = v.min(100) as u8),
+    ("BATTLE_DECLINE_MOOD_PCT", |t, v| t.BATTLE_DECLINE_MOOD_PCT = v.min(100) as u16),
     ("BATTLE_DECLINE_MIN", |t, v| t.BATTLE_DECLINE_MIN = clamp_u16(v)),
 ];
 

@@ -1208,7 +1208,11 @@ mod decline {
             before - mood_target(&s),
             t::BATTLE_DECLINE_MOOD_PCT() as i32 * P
         );
+        // The hour must cross no need floor, or the target moves for other reasons.
         let t0 = s.last_update_tick;
+        let mut probe = content();
+        probe.update(t0 + t::BATTLE_DECLINE_MIN() as u32 * 6);
+        assert_eq!(mood_target(&probe), before, "fixture drifts over the hour");
         s.update(t0 + t::BATTLE_DECLINE_MIN() as u32 * 6);
         assert_eq!(s.decline_min, 0);
         assert_eq!(mood_target(&s), before);
@@ -1230,6 +1234,13 @@ mod decline {
         assert_eq!(cut.decline_min, 0);
         cut.update(end + 60);
         assert_eq!(whole.to_bytes(), cut.to_bytes());
+        // One minute earlier decline_min is 1: a bound at `remaining` or none
+        // at all splits the span differently and the bytes differ.
+        let mut early = s.clone();
+        early.update(end - 6);
+        assert_eq!(early.decline_min, 1);
+        early.update(end + 60);
+        assert_eq!(whole.to_bytes(), early.to_bytes());
         // (b) the target term is exactly 3 * P at decline_min = 1.
         let mut a = content();
         a.decline_min = 1;
