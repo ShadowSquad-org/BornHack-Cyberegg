@@ -7,7 +7,7 @@
 //! Casual or custom band moves the fight with it); the slopes and divisors
 //! of the formula are structure and stay literals.
 
-use super::needs::{self, SORE_PCT};
+use super::needs::SORE_PCT;
 use super::{GameState, regime, thresholds as t, trait_pct};
 
 /// The pet as the fight sees it, every field in whole percent (traits 0..=100).
