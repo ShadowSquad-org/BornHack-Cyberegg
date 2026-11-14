@@ -78,7 +78,7 @@ class Checker(unittest.TestCase):
             Path(n, "060E05.PCX").write_bytes(b"x")     # added, not a shipped name
             res = ac.diff_exports(o, n)
             self.assertEqual(res, {"changed": ["000100.PCX"], "removed": ["000200.PCX"],
-                                   "added": ["060E05.PCX"]})
+                                   "added": ["060E05.PCX"], "protected": []})
             self.assertEqual(ac.main(["diff", o, n]), 1)
 
     def test_diff_ok_when_only_shipped_names_are_added(self):
@@ -92,7 +92,44 @@ class Checker(unittest.TestCase):
         with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
             Path(o, "030000.PCX").write_bytes(b"a")
             Path(n, "030000.PCX").write_bytes(b"b")
-            self.assertEqual(ac.diff_exports(o, n), {"changed": [], "removed": [], "added": []})
+            self.assertEqual(ac.diff_exports(o, n),
+                             {"changed": [], "removed": [], "added": [], "protected": []})
+
+    def test_diff_reports_slug_hand_added_and_icons_as_protected(self):
+        names = ["021500.PCX", "002000.PCX", "012800.PCX", "022400.PCX", "040600.PCX", "040700.PCX"]
+        with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
+            for name in names:
+                Path(o, name).write_bytes(b"old")
+                Path(n, name).write_bytes(b"new")
+            Path(o, "002900.PCX").write_bytes(b"a")    # a new-state name is not protected
+            Path(n, "002900.PCX").write_bytes(b"a")
+            Path(o, "000900.PCX").write_bytes(b"a")
+            Path(n, "000900.PCX").write_bytes(b"a")
+            res = ac.diff_exports(o, n)
+            self.assertEqual(res["changed"], [])
+            self.assertEqual(res["removed"], [])
+            self.assertEqual(res["added"], [])
+            self.assertEqual(res["protected"], sorted(names))
+            self.assertEqual(ac.main(["diff", o, n]), 0)
+            os.remove(Path(n, "002000.PCX"))      # even a vanished hand-added file is not flagged
+            self.assertEqual(ac.diff_exports(o, n)["removed"], [])
+
+    def test_is_protected_edges(self):
+        for name in ("020000.PCX", "0020FF.PCX", "002000.PCX", "002800.PCX", "012100.PCX",
+                     "040601.PCX", "040799.PCX"):
+            self.assertTrue(ac.is_protected(name), name)
+        for name in ("001F00.PCX", "002900.PCX", "052000.PCX", "000000.PCX", "040500.PCX"):
+            self.assertFalse(ac.is_protected(name), name)
+
+    def test_budget_keeps_counting_protected_files(self):
+        with tempfile.TemporaryDirectory() as t:
+            for name in ac.new_files():
+                pad_file(Path(t, name), 100)
+            pad_file(Path(t, "021500.PCX"), 3000)    # 2 clusters
+            pad_file(Path(t, "002000.PCX"), 100)     # 1 cluster
+            res = ac.budget(t)
+            self.assertEqual(res["total"], 50)
+            self.assertEqual(res["protected_clusters"], 3)
 
     def test_budget_counts_and_lists_files_over_2048(self):
         with tempfile.TemporaryDirectory() as t:
@@ -178,6 +215,7 @@ class Checker(unittest.TestCase):
             self.assertEqual(m["budget"]["limit"], 55)
             self.assertEqual(m["budget"]["total"], 50)
             self.assertEqual(len(m["frames"]), 50)
+            self.assertTrue(m["budget"]["fits"])
             self.assertTrue(old.exists())
             f0 = m["frames"][0]
             self.assertEqual((f0["pet"], f0["state"], f0["anim_id"], f0["frame_id"], f0["pcx"]),
@@ -188,6 +226,110 @@ class Checker(unittest.TestCase):
                 self.assertEqual(Image.open(Path(o, f["idle"])).size, (152 * 4, 75 * 4))
                 self.assertTrue(Path(o, f["sheet"]).is_file())
                 self.assertEqual(set(f["metrics"]), {"outline", "coverage", "height", "dy", "cut_off"})
+                self.assertFalse(f["missing"])
+                self.assertEqual(f["bytes"], Path(e, f["pcx"]).stat().st_size)
+                self.assertEqual(f["clusters"], 1)
+                self.assertEqual(f["metrics"]["outline"][1], 2)
+                self.assertEqual(f["metrics"]["coverage"][1], 100)
+                self.assertEqual(f["metrics"]["height"][1], 20)
+                self.assertNotIn("frame_size", f["flags"])
+            # colour map: black outline, white fill, transparent shows white, red stays red
+            img = Image.open(Path(o, f0["file"])).convert("RGB")
+            self.assertEqual(img.getpixel((40 * 4 + 1, 20 * 4 + 1)), (0, 0, 0))
+            self.assertEqual(img.getpixel((50 * 4 + 1, 30 * 4 + 1)), (255, 255, 255))
+            self.assertEqual(img.getpixel((1, 1)), (255, 255, 255))
+
+    def test_review_maps_red_and_flags_a_wrong_frame_size(self):
+        with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \
+                tempfile.TemporaryDirectory() as lit:
+            self._export(e)
+            rows = box()
+            rows[5][5] = 1
+            write_pcx(Path(e, "002900.PCX"), rows)
+            write_pcx(Path(e, "002A00.PCX"), [r[:100] for r in box()])
+            m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
+            by = {f["pcx"]: f for f in m["frames"]}
+            self.assertEqual(Image.open(Path(o, "bartholomeus/tipsy.png")).convert("RGB")
+                             .getpixel((5 * 4, 5 * 4)), (255, 0, 0))
+            self.assertIn("frame_size", by["002A00.PCX"]["flags"])
+            self.assertNotIn("frame_size", by["002900.PCX"]["flags"])
+
+    def test_review_of_a_partial_export_is_marked_incomplete(self):
+        with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \
+                tempfile.TemporaryDirectory() as lit:
+            self._export(e)
+            os.remove(Path(e, "063200.PCX"))
+            m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
+            self.assertEqual(len(m["frames"]), 50)
+            self.assertFalse(m["budget"]["fits"])
+            self.assertEqual(m["budget"]["total"], 49)
+            gone = [f for f in m["frames"] if f["missing"]]
+            self.assertEqual([f["pcx"] for f in gone], ["063200.PCX"])
+            self.assertIsNone(gone[0]["file"])
+            self.assertIn("missing", gone[0]["flags"])
+            self.assertFalse(Path(o, "badger/throwing_up.png").exists())
+
+    def _litter(self, lit, skip=(), strip=True, plan7=True, metrics=True):
+        lit = Path(lit)
+        (lit / "items").mkdir()
+        (lit / "plan7").mkdir()
+        data = {}
+        for item in ac.FLOOR_ITEMS:
+            if item in skip:
+                continue
+            im = Image.new("RGBA", (12, 5), (0, 0, 0, 0))
+            im.save(lit / "items" / f"{item}.png")
+            if plan7:
+                Image.new("RGBA", (152, 10), (0, 0, 0, 0)).save(lit / "plan7" / f"{item}.png")
+            data[item] = {"slot": [2, 105, 12, 5], "bytes": 10, "flags": ["speck"],
+                          "metrics": {"outline": 1, "coverage": 100, "bottom": True,
+                                      "ink_pct": 41, "red": 0}}
+        if strip:
+            Image.new("RGBA", (152, 10), (0, 0, 0, 0)).save(lit / "strip.png")
+        if metrics:
+            (lit / "metrics.json").write_text(json.dumps(data))
+        return lit
+
+    def test_review_with_a_missing_floor_item_keeps_the_others(self):
+        with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \
+                tempfile.TemporaryDirectory() as lit:
+            self._export(e)
+            self._litter(lit, skip=("sock",))
+            m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
+            floor = {f["state"]: f for f in m["frames"] if f["pet"] == "floor"}
+            self.assertEqual(list(floor), list(ac.FLOOR_ITEMS))
+            self.assertTrue(floor["sock"]["missing"])
+            self.assertIsNone(floor["sock"]["file"])
+            self.assertFalse(m["budget"]["fits"])
+            for item in ("crumbs", "peel", "can", "pizza_box"):
+                self.assertFalse(floor[item]["missing"])
+                self.assertEqual(floor[item]["flags"], ["speck"])
+                self.assertEqual(floor[item]["metrics"]["ink_pct"], 41)
+                self.assertTrue(Path(o, floor[item]["file"]).is_file())
+
+    def test_floor_entries_reference_only_written_files(self):
+        with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \
+                tempfile.TemporaryDirectory() as lit:
+            self._export(e)
+            self._litter(lit, strip=False, plan7=False, metrics=False)
+            m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
+            for f in (f for f in m["frames"] if f["pet"] == "floor"):
+                self.assertIsNone(f["idle"])
+                self.assertIsNone(f["sheet"])
+                self.assertEqual(f["flags"], ["no_metrics"])
+                self.assertTrue(Path(o, f["file"]).is_file())
+            self.assertFalse(Path(o, "floor/scene.png").exists())
+
+    def test_floor_metrics_json_rejects_other_shapes(self):
+        for bad in ({"items": {}}, {"crumbs": {"slot": [0, 0, 1, 1], "bytes": 1, "flags": [],
+                                               "outline": 1}}):
+            with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \
+                    tempfile.TemporaryDirectory() as lit:
+                self._export(e)
+                self._litter(lit)
+                Path(lit, "metrics.json").write_text(json.dumps(bad))
+                with self.assertRaises(ValueError):
+                    ac.write_review(e, 1, out_dir=o, litter_dir=lit)
 
     def test_review_without_litter_has_no_floor(self):
         with tempfile.TemporaryDirectory() as e, tempfile.TemporaryDirectory() as o, \

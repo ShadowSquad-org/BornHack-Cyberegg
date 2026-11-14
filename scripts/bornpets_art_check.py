@@ -14,6 +14,26 @@ This module is the shared home of STATES / ART_PETS / FRAME / decode_pcx / edge_
 and the floor names. bornpets_ai_frames.py and bornpets_litter.py import from here;
 it never imports either of them (no cycle). The litter generator writes its working
 files under LITTER_DIR and write_review only reads them.
+
+Floor input contract (the one shape A2b must write under LITTER_DIR):
+  items/<item>.png    1x RGBA, the item at its slot size, for each of FLOOR_ITEMS
+  plan7/<item>.png    1x RGBA, plan 7's old bitmap (optional; the gallery omits "idle" without it)
+  strip.png           1x RGBA, 152 x 10 (optional; the gallery omits "sheet" and scene.png without it)
+  metrics.json        {"<item>": {"slot": [x, y, w, h], "bytes": int, "flags": [str, ...],
+                                  "metrics": {"outline": int, "coverage": int, "bottom": bool,
+                                              "ink_pct": int, "red": int}}}
+                      keys are exactly FLOOR_ITEMS names; any other top-level key (for example
+                      an "items" wrapper) or any other per-item key is a ValueError.
+Floor entries appear once any items/<item>.png exists. An item without its PNG, or without a
+metrics.json entry, still gets an entry: "missing": true, or the flag "no_metrics".
+
+Completeness: write_review never drops a frame silently. A missing export PCX or floor item
+gets a manifest entry with "missing": true and the flag "missing"; budget.fits is false then.
+
+Protected files (PROTECTED / is_protected): the Slug (02xxxx), hand-added rows 0x20-0x28 of
+prefixes 00, 01 and 02, and the menu icons 0406xx / 0407xx. diff_exports never reports them as
+changed, removed or added (they come back under "protected"); budget reports the clusters they
+use under "protected_clusters" so they still count as existing volume usage.
 """
 from __future__ import annotations
 
@@ -54,6 +74,26 @@ FLOOR_STRIP = (152, 10)
 SCALE = 4
 WHITE_RGB = (255, 255, 255)
 
+# Files this tool must never flag: Slug art, hand-added rows, menu icons.
+PROTECTED = {
+    "prefixes": ("02",),                          # every 02xxxx (the Slug)
+    "hand_added": (("00", "01", "02"), range(0x20, 0x29)),   # prefix, anim id
+    "icons": ("0406", "0407"),                    # name starts with
+}
+
+
+def is_protected(name: str) -> bool:
+    n = name.upper()
+    if not n.endswith(".PCX") or len(n) != 10:
+        return False
+    if n.startswith(PROTECTED["prefixes"]) or n.startswith(PROTECTED["icons"]):
+        return True
+    prefixes, anims = PROTECTED["hand_added"]
+    try:
+        return n[:2] in prefixes and int(n[2:4], 16) in anims
+    except ValueError:
+        return False
+
 
 # ---------------------------------------------------------------- PCX
 
@@ -90,11 +130,15 @@ def new_files() -> list[str]:
 
 def diff_exports(old_dir, new_dir, prefixes=tuple(p for p, *_ in ART_PETS.values())) -> dict:
     def names(d):
-        return {p.name for p in Path(d).iterdir() if p.is_file() and p.name.startswith(tuple(prefixes))}
-    old, new = names(old_dir), names(new_dir)
+        return {p.name for p in Path(d).iterdir() if p.is_file()}
+    both = names(old_dir) | names(new_dir)
+    protected = sorted(n for n in both if is_protected(n))
+    old = {n for n in names(old_dir) if n.startswith(tuple(prefixes)) and not is_protected(n)}
+    new = {n for n in names(new_dir) if n.startswith(tuple(prefixes)) and not is_protected(n)}
     changed = sorted(n for n in old & new
                      if (Path(old_dir) / n).read_bytes() != (Path(new_dir) / n).read_bytes())
-    return {"changed": changed, "removed": sorted(old - new), "added": sorted(new - old)}
+    return {"changed": changed, "removed": sorted(old - new), "added": sorted(new - old),
+            "protected": protected}
 
 
 def budget(export_dir) -> dict:
@@ -107,9 +151,12 @@ def budget(export_dir) -> dict:
         else:
             missing.append(name)
     total = sum(c for _, _, c in files)
+    prot = sum(clusters(p.stat().st_size) for p in Path(export_dir).iterdir()
+               if p.is_file() and is_protected(p.name))
     return {"files": files, "total": total,
             "over": [n for n, b, _ in files if b > CLUSTER_BYTES],
-            "missing": missing, "fits": total <= NEW_PCX_BUDGET}
+            "missing": missing, "protected_clusters": prot,
+            "fits": total <= NEW_PCX_BUDGET and not missing}
 
 
 # ---------------------------------------------------------------- drift
@@ -217,39 +264,40 @@ def rgba_on_white(path, scale: int = SCALE) -> Image.Image:
     return bg.convert("RGB").resize((src.width * scale, src.height * scale), Image.NEAREST)
 
 
+_METRIC_KEYS = {"slot", "bytes", "flags", "metrics"}
+
+
+def _load_floor_metrics(litter_dir: Path) -> dict:
+    mpath = litter_dir / "metrics.json"
+    if not mpath.is_file():
+        return {}
+    data = json.loads(mpath.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{mpath}: expected an object keyed by item")
+    for item, m in data.items():
+        if item not in FLOOR_ITEMS:
+            raise ValueError(f"{mpath}: unknown key {item!r}; expected only {list(FLOOR_ITEMS)}")
+        if not isinstance(m, dict) or set(m) != _METRIC_KEYS or not isinstance(m["metrics"], dict):
+            raise ValueError(f"{mpath}: {item!r} must be exactly {sorted(_METRIC_KEYS)} "
+                             "with metrics an object")
+    return data
+
+
 def _floor_entries(litter_dir: Path, out_dir: Path) -> list[dict]:
-    """Floor files and manifest entries; [] unless all five items are present."""
+    """Floor files and entries; [] only when the litter has no item PNG at all."""
     items = litter_dir / "items"
-    if not all((items / f"{i}.png").is_file() for i in FLOOR_ITEMS):
+    if not any((items / f"{i}.png").is_file() for i in FLOOR_ITEMS):
         return []
+    metrics = _load_floor_metrics(litter_dir)
     floor = out_dir / "floor"
     floor.mkdir(parents=True, exist_ok=True)
-    metrics = {}
-    mpath = litter_dir / "metrics.json"
-    if mpath.is_file():
-        metrics = json.loads(mpath.read_text(encoding="utf-8"))
-        metrics = metrics.get("items", metrics)
-    entries = []
-    for item in FLOOR_ITEMS:
-        rgba_on_white(items / f"{item}.png").save(floor / f"{item}.png")
-        old = litter_dir / "plan7" / f"{item}.png"
-        if old.is_file():
-            rgba_on_white(old).save(floor / f"{item}_plan7.png")
-        m = metrics.get(item, {})
-        inline = {k: v for k, v in m.items() if k not in ("slot", "bytes", "flags", "metrics")}
-        entries.append({
-            "pet": "floor", "prefix": None, "state": item, "anim_id": None,
-            "frame_id": f"floor_{item}", "file": f"floor/{item}.png",
-            "idle": f"floor/{item}_plan7.png", "sheet": "floor/strip.png", "pcx": None,
-            "bytes": m.get("bytes", 0), "clusters": 0, "slot": m.get("slot"),
-            "note": "slot size is the planner's call (design §3.5)",
-            "flags": m.get("flags", []), "metrics": m.get("metrics", inline)})
     strip_path = litter_dir / "strip.png"
-    if strip_path.is_file():
+    have_strip = strip_path.is_file()
+    if have_strip:
         rgba_on_white(strip_path).save(floor / "strip.png")
         strip = Image.open(strip_path).convert("RGBA")
         _, _, idle = decode_pcx(TO_BADGE / "050100.PCX")
-        scene = Image.new("RGBA", (FRAME[0], FRAME[1]), WHITE_RGB + (255,))
+        scene = Image.new("RGBA", FRAME, WHITE_RGB + (255,))
         scene.alpha_composite(strip, (0, FRAME[1] - strip.height))
         pet = Image.new("RGBA", FRAME, (0, 0, 0, 0))
         pet.putdata([(0, 0, 0, 255) if v == 0 else (255, 0, 0, 255) if v == 1
@@ -258,6 +306,28 @@ def _floor_entries(litter_dir: Path, out_dir: Path) -> list[dict]:
         scene.alpha_composite(pet)
         scene.convert("RGB").resize((FRAME[0] * SCALE, FRAME[1] * SCALE), Image.NEAREST) \
             .save(floor / "scene.png")
+    entries = []
+    for item in FLOOR_ITEMS:
+        base = {"pet": "floor", "prefix": None, "state": item, "anim_id": None,
+                "frame_id": f"floor_{item}", "pcx": None, "clusters": 0,
+                "note": "slot size is the planner's call (design §3.5)"}
+        png = items / f"{item}.png"
+        if not png.is_file():
+            entries.append({**base, "missing": True, "file": None, "idle": None, "sheet": None,
+                            "bytes": 0, "slot": None, "flags": ["missing"], "metrics": None})
+            continue
+        rgba_on_white(png).save(floor / f"{item}.png")
+        old = litter_dir / "plan7" / f"{item}.png"
+        if old.is_file():
+            rgba_on_white(old).save(floor / f"{item}_plan7.png")
+        m = metrics.get(item)
+        entries.append({
+            **base, "missing": False, "file": f"floor/{item}.png",
+            "idle": f"floor/{item}_plan7.png" if old.is_file() else None,
+            "sheet": "floor/strip.png" if have_strip else None,
+            "bytes": m["bytes"] if m else 0, "slot": m["slot"] if m else None,
+            "flags": list(m["flags"]) if m else ["no_metrics"],
+            "metrics": m["metrics"] if m else None})
     return entries
 
 
@@ -280,22 +350,29 @@ def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR, litter_dir=LITTE
             anim = FIRST_STATE_ANIM + i
             name = f"{prefix}{anim:02X}00.PCX"
             path = export_dir / name
+            base = {"pet": pet, "prefix": prefix, "state": state, "anim_id": f"0x{anim:02X}",
+                    "frame_id": f"{seq}_{state}_0", "pcx": name, "idle": f"{pet}/idle.png",
+                    "sheet": f"{pet}/sheet.png"}
             if not path.is_file():
+                frames.append({**base, "missing": True, "file": None, "bytes": 0, "clusters": 0,
+                               "flags": ["missing"], "metrics": None})
                 continue
-            _, _, rows = decode_pcx(path)
+            w, h, rows = decode_pcx(path)
             rows_to_image(rows).save(pdir / f"{state}.png")
             d = drift(rows, idle)
             size = path.stat().st_size
+            flags = d["flags"] + (["frame_size"] if (w, h) != FRAME else [])
             frames.append({
-                "pet": pet, "prefix": prefix, "state": state, "anim_id": f"0x{anim:02X}",
-                "frame_id": f"{seq}_{state}_0", "file": f"{pet}/{state}.png",
-                "idle": f"{pet}/idle.png", "sheet": f"{pet}/sheet.png", "pcx": name,
-                "bytes": size, "clusters": clusters(size), "flags": d["flags"],
+                **base, "missing": False, "file": f"{pet}/{state}.png",
+                "bytes": size, "clusters": clusters(size), "flags": flags,
                 "metrics": {"outline": list(d["outline"]), "coverage": list(d["coverage"]),
                             "height": list(d["height"]), "dy": d["dy"], "cut_off": d["cut_off"]}})
-    frames += _floor_entries(litter_dir, out_dir)
+    floor = _floor_entries(litter_dir, out_dir)
+    frames += floor
+    incomplete = bool(bud["missing"]) or any(f["missing"] for f in floor)
     manifest = {"round": round_no,
-                "budget": {"total": bud["total"], "limit": NEW_PCX_BUDGET, "fits": bud["fits"]},
+                "budget": {"total": bud["total"], "limit": NEW_PCX_BUDGET,
+                           "fits": bud["fits"] and not incomplete},
                 "frames": frames}
     mpath = out_dir / "manifest.json"
     mpath.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -319,7 +396,7 @@ def main(argv=None) -> int:
 
     if a.cmd == "diff":
         res = diff_exports(a.old, a.new)
-        for k in ("changed", "removed", "added"):
+        for k in ("changed", "removed", "added", "protected"):
             print(f"{k}: {len(res[k])}")
             for n in res[k]:
                 print(f"  {n}")
