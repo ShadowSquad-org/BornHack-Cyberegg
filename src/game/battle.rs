@@ -344,6 +344,9 @@ pub enum Out {
     },
     /// `BattleWon` / `BattleLost` for a heard result.
     Toast(Toast),
+    /// The player's Fight was turned away: tell them why (never for a
+    /// window that ran out).
+    Refused(Reason),
 }
 
 pub type Outs = heapless::Vec<Out, 4>;
@@ -408,6 +411,14 @@ fn why_for(
     i_am_a: bool,
 ) -> Option<(bool, Decisive)> {
     combat::decisive(o, a, b).map(|(loser_is_a, d)| (loser_is_a == i_am_a, d))
+}
+
+/// Why the pet cannot take a fight now (`None` when it can). The one rule the
+/// Session and the screens share. A demo pet that is asleep cannot answer; a
+/// player's sleeping pet is woken by its own Fight.
+pub fn target_refusal(s: &GameState) -> Option<Reason> {
+    s.target_refusal()
+        .or_else(|| (s.demo.on && s.is_sleeping).then_some(Reason::Refused(Refusal::Asleep)))
 }
 
 fn push_decline(outs: &mut Outs, challenger: [u8; 2], me: [u8; 2], r: Reason) {
@@ -602,19 +613,20 @@ impl Session {
             let _ = outs.push(Out::Close);
             return outs;
         }
-        self.fight_as_target(me, s, p)
+        self.fight_as_target(me, s, p, true)
     }
 
-    /// The target fights: from `answer(true)` or an unattended demo pet.
-    fn fight_as_target(&mut self, me: &Me, s: &mut GameState, p: Pending) -> Outs {
+    /// The target fights: from `answer(true)` (`by_player`) or an unattended
+    /// demo pet at the deadline.
+    fn fight_as_target(&mut self, me: &Me, s: &mut GameState, p: Pending, by_player: bool) -> Outs {
         let mut outs = Outs::new();
         let peer = p.pre.peer_id;
         // The pet may have changed in the window.
-        let refusal = s
-            .target_refusal()
-            .or_else(|| (s.demo.on && s.is_sleeping).then_some(Reason::Refused(Refusal::Asleep)));
-        if let Some(why) = refusal {
+        if let Some(why) = target_refusal(s) {
             push_decline(&mut outs, peer, me.id, why);
+            if by_player {
+                let _ = outs.push(Out::Refused(why));
+            }
             self.pending = None;
             let _ = outs.push(Out::Close);
             return outs;
@@ -787,7 +799,7 @@ impl Session {
         }
         if p.pre.role == Role::Target {
             if s.demo.on {
-                return self.fight_as_target(me, s, p);
+                return self.fight_as_target(me, s, p, false);
             }
             self.pending = None;
             let _ = outs.push(Out::Close);

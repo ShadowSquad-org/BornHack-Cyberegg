@@ -841,14 +841,6 @@ pub fn battle_refusal() -> Option<super::engine::doses::Reason> {
     state.battle_refusal()
 }
 
-/// Why the pet cannot answer a challenge now (`None` when it can), caught up
-/// to now. A sleeper is woken by its own Fight, so sleep does not count.
-pub fn target_refusal() -> Option<super::engine::doses::Reason> {
-    let mut why = None;
-    with_game_now(|s| why = s.target_refusal());
-    why
-}
-
 /// Tick the display must be redrawn by for the sleep-animation floor to end
 /// (`SLEEP_ANIM_UNTIL_TICK`), or `u32::MAX` when none is pending.
 pub fn sleep_anim_deadline_tick() -> u32 {

@@ -23,6 +23,13 @@ pub fn dispatch(btn: ButtonId) -> bool {
         return false;
     }
 
+    // ── Battle screen: owns its own input logic across its states. It is
+    // ahead of the other views, so a challenge's Fire and Cancel reach it. ──
+    if super::battle_view::is_active() {
+        super::battle_view::handle_input(btn);
+        return true;
+    }
+
     // ── Rolled-stats view: any button closes it ────────────────────────
     if super::traits_view::is_active() {
         super::traits_view::close();
@@ -41,12 +48,6 @@ pub fn dispatch(btn: ButtonId) -> bool {
     // ── Friends view: owns its own input logic across its two states ────
     if super::friends_view::is_active() {
         super::friends_view::handle_input(btn);
-        return true;
-    }
-
-    // ── Battle screen: owns its own input logic across its two states ───
-    if super::battle_view::is_active() {
-        super::battle_view::handle_input(btn);
         return true;
     }
 

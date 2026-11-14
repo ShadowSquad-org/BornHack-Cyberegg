@@ -81,6 +81,7 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
     let mut fought = false;
     let mut closed = false;
     let mut shown = false;
+    let mut refused = None;
     for out in outs.iter() {
         match *out {
             Out::Send(p) => send(&p),
@@ -121,6 +122,7 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
             }
             Out::Recorded { peer, won } => friends::note_fight(peer, won, now_tick),
             Out::Toast(t) => super::show_toast(t),
+            Out::Refused(why) => refused = Some(why),
         }
     }
     if fought {
@@ -133,6 +135,10 @@ fn apply(outs: Outs, before: Option<PreBattle>, now_tick: u32) {
     } else if closed {
         super::battle_view::close();
         wake_display();
+    }
+    // After the screen is closed, so the toast is raised over the game screen.
+    if let Some(why) = refused {
+        super::show_reason(why);
     }
 }
 
@@ -192,7 +198,8 @@ fn send(_p: &Packet) {}
 /// screen shows it); "Friend not ready" stays the view's own check.
 pub fn challenge(friend_index: usize) -> Result<(), Reason> {
     // Firmware without the mesh cannot send, so no Session is left waiting
-    // for an answer that can never come (the view says "Friend not ready").
+    // for an answer that can never come. The Battle screen checks this first
+    // and says "No radio on badge"; this branch is for other callers.
     #[cfg(all(feature = "embassy-core", not(feature = "mesh")))]
     {
         let _ = friend_index;
@@ -537,5 +544,44 @@ mod tests {
         assert_eq!(ms_until(1_000, 400), 600);
         assert_eq!(ms_until(400, 1_000), 0, "already due");
         assert_eq!(ms_until(100, u32::MAX - 99), 200, "across the wrap");
+    }
+
+    #[test]
+    fn an_accept_queues_the_exact_frame_for_the_challenger_only() {
+        let _guard = lock_test_state();
+        reset_for_test();
+        crate::game::battle_view::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        let id = [0xA4, 0x0B];
+        friends::insert_for_test(friend(id));
+        assert!(challenge(0).is_ok());
+        let snap = lifecycle::snapshot().unwrap();
+        let theirs = crate::game::engine::combat::derive(&crate::game::engine::combat::Body {
+            fit: 90,
+            ..crate::game::engine::combat::Body::REFERENCE
+        });
+        let acc = crate::game::battle::AcceptMsg {
+            challenger_id: friends::local_device_id(),
+            target_id: id,
+            snap: theirs,
+            nonce: 7,
+        };
+        handle_accept(&acc.to_bytes());
+        assert!(crate::game::battle_view::take_pre_show(), "a frame was queued");
+        let q = crate::game::battle_view::queued_pre_for_test().expect("the frame");
+        assert!(!q.estimate, "the exact chance, not the estimate");
+        assert_eq!(q.chance, crate::game::engine::combat::win_chance(&snap, &theirs));
+        assert_eq!(q.role, crate::game::battle::Role::Challenger);
+        // The target fights without a pre-frame.
+        crate::game::battle_view::reset_for_test();
+        crate::game::battle_view::clear_queued_pre_for_test();
+        inject_challenge_for_shot("Bram", 1);
+        answer(true);
+        assert!(last_fight().is_some());
+        assert!(!crate::game::battle_view::take_pre_show());
+        assert!(crate::game::battle_view::queued_pre_for_test().is_none());
+        lifecycle::set_state_for_test(None);
+        reset_for_test();
+        crate::game::battle_view::reset_for_test();
     }
 }

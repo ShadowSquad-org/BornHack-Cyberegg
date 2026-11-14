@@ -459,6 +459,15 @@ fn try_challenge() {
 pub fn open_pre_battle() {
     // A fresh state, so the card of an old fight never reopens.
     clear_picker_msg();
+    // A challenge must be answerable wherever the player is: put the game
+    // screen in front and close the views that would cover or swallow the
+    // buttons (like an NFC bonus, which also jumps to the game screen).
+    if super::battle_link::view().is_some_and(|p| p.role == Role::Target) {
+        super::friends_view::close();
+        super::diary_view::close();
+        super::traits_view::close();
+        crate::DISPLAY_STATE.with_mut(|s| s.set_active_screen(crate::SCREEN_GAME));
+    }
     STATE.store(STATE_PRE, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
@@ -513,13 +522,9 @@ fn handle_pre_input(btn: ButtonId) {
     match (p.role, p.note) {
         (Role::Target, Note::Waiting) => match btn {
             ButtonId::Fire | ButtonId::Execute => {
-                // A pet that cannot fight now says why (the Session sends the
-                // refusal; the toast shows after this screen closes).
-                let why = super::lifecycle::target_refusal();
+                // A pet that cannot fight now says why: the Session sends the
+                // refusal and the glue shows the reason.
                 super::battle_link::answer(true);
-                if let Some(why) = why {
-                    super::show_reason(why);
-                }
             }
             // Decline is the only path that counts as a decline.
             ButtonId::Cancel => super::battle_link::answer(false),
@@ -885,6 +890,19 @@ pub fn take_pre_show() -> bool {
     PRE_SHOT_DUE.swap(false, Ordering::Relaxed)
 }
 
+/// Test hook: the queued frame, if any.
+#[cfg(test)]
+pub(crate) fn queued_pre_for_test() -> Option<PreBattle> {
+    unsafe { *PRE_SHOT.get() }
+}
+
+/// Test hook: forget the queued frame.
+#[cfg(test)]
+pub(crate) fn clear_queued_pre_for_test() {
+    unsafe { *PRE_SHOT.get() = None };
+    PRE_SHOT_DUE.store(false, Ordering::Relaxed);
+}
+
 /// Draw the queued pre-battle frame (the caller cleared the display).
 pub fn draw_queued_pre<D>(display: &mut D) -> Result<(), D::Error>
 where
@@ -1159,6 +1177,7 @@ mod pre_tests {
     use crate::game::engine::doses::{Reason, Refusal};
     use crate::game::engine::{GameState, PetKind, Phase};
     use crate::game::friends::{self, FriendRecord};
+    use crate::game::friends_view;
     use crate::game::test_canvas::Canvas;
     use crate::game::{lifecycle, lock_test_state};
 
@@ -1535,5 +1554,69 @@ mod pre_tests {
         draw_queued_pre(&mut probe).unwrap();
         assert!(probe.inside > 300);
         assert!(!take_pre_show(), "taken once");
+    }
+
+    #[test]
+    fn a_challenge_pulls_the_player_to_the_pre_battle_screen() {
+        let _guard = lock_test_state();
+        battle_link::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        for open in [
+            friends_view::open as fn(),
+            super::super::diary_view::open,
+            super::super::traits_view::open,
+        ] {
+            open();
+            crate::DISPLAY_STATE.with_mut(|s| s.set_active_screen(crate::SCREEN_MAIN));
+            battle_link::inject_challenge_for_shot("Bram", 1);
+            assert!(is_active() && STATE.load(Ordering::Relaxed) == STATE_PRE);
+            assert!(!friends_view::is_active());
+            assert!(!super::super::diary_view::is_active());
+            assert!(!super::super::traits_view::is_active());
+            assert_eq!(
+                crate::DISPLAY_STATE.with(|s| s.active_screen()),
+                crate::SCREEN_GAME
+            );
+            // The press reaches the pre-battle screen (not a hidden one).
+            crate::menu::dispatch_press(ButtonId::Cancel);
+            assert!(battle_link::view().is_none() && !is_active());
+        }
+        lifecycle::set_state_for_test(None);
+        battle_link::reset_for_test();
+    }
+
+    #[test]
+    fn the_pre_battle_screen_outranks_the_other_views_for_input() {
+        let _guard = lock_test_state();
+        battle_link::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        battle_link::inject_challenge_for_shot("Bram", 1);
+        // Even if one of them is somehow open, Fire/Cancel go to the battle.
+        super::super::traits_view::open();
+        assert!(crate::game::input::dispatch(ButtonId::Cancel));
+        assert!(battle_link::view().is_none(), "declined, not a traits close");
+        super::super::traits_view::close();
+        lifecycle::set_state_for_test(None);
+        battle_link::reset_for_test();
+    }
+
+    #[test]
+    fn a_refused_fire_toasts_the_reason() {
+        let _guard = lock_test_state();
+        battle_link::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        battle_link::inject_challenge_for_shot("Bram", 1);
+        lifecycle::with_state(|s| {
+            s.injured_min = 60;
+            true
+        });
+        handle_input(ButtonId::Fire);
+        assert!(!is_active());
+        assert_eq!(
+            crate::game::reason_toast(),
+            Some(Reason::Refused(Refusal::Injured))
+        );
+        lifecycle::set_state_for_test(None);
+        battle_link::reset_for_test();
     }
 }

@@ -2422,6 +2422,57 @@ mod protocol {
         assert!(toast(&r.sb.on_result(&later, &mut r.b, &res, Some(false))).is_some());
     }
 
+    fn refused_reason(o: &Outs) -> Option<Reason> {
+        o.iter().find_map(|x| if let Out::Refused(r) = x { Some(*r) } else { None })
+    }
+
+    #[test]
+    fn a_refused_fight_press_names_its_reason() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        r.b.injured_min = 30;
+        let outs = r.sb.answer(&mb, &mut r.b, true);
+        assert_eq!(refused_reason(&outs), Some(Reason::Refused(Refusal::Injured)));
+        assert_eq!(
+            decline_of(&outs).reason(),
+            Some(Reason::Refused(Refusal::Injured))
+        );
+    }
+
+    #[test]
+    fn a_sleeping_demo_target_names_its_reason() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        r.b.demo.on = true;
+        let mb = r.mb(MS + 1000, 0x2222);
+        // The challenge was made against a player pet, so only the answer's
+        // own rule is under test: the demo pet fell asleep in the window.
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        if r.sb.view().is_none() {
+            return; // refused on arrival (league): nothing to answer
+        }
+        r.b.is_sleeping = true;
+        let outs = r.sb.answer(&mb, &mut r.b, true);
+        assert_eq!(refused_reason(&outs), Some(Reason::Refused(Refusal::Asleep)));
+    }
+
+    #[test]
+    fn a_timeout_names_no_refusal() {
+        let mut r = Rig::new();
+        let c = r.challenge();
+        let mb = r.mb(MS + 1000, 0x2222);
+        r.sb.on_challenge(&mb, &mut r.b, &c, None);
+        r.b.injured_min = 30;
+        let end = r.sb.deadline_ms().unwrap();
+        let late = r.mb(end + 1, 0x2222);
+        let outs = r.sb.answer(&late, &mut r.b, true);
+        assert!(refused_reason(&outs).is_none());
+        let outs = r.sb.on_deadline(&late, &mut r.b, None);
+        assert!(refused_reason(&outs).is_none());
+    }
+
     #[test]
     fn late_fight_press_is_the_window_running_out() {
         let mut r = Rig::new();
