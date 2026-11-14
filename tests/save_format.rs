@@ -19,7 +19,7 @@ use bornhack_aegg::game::engine::{
     REALM_MAX_PETS, REALM_SAVE_SIZE, SAVE_FORMAT_VERSION, SAVE_SIZE, SAVE_SIZE_V2, pick_save,
 };
 use bornhack_aegg::game::friends::{
-    FRIENDS_MAX, FRIENDS_SAVE_SIZE, FriendRecord, FriendsList, PetBeacon,
+    FRIENDS_MAX, FRIENDS_SAVE_SIZE, FRIENDS_SAVE_SIZE_OLD, FriendRecord, FriendsList, PetBeacon,
 };
 
 // ---------------------------------------------------------------------------
@@ -564,6 +564,11 @@ fn friend(
         guard: combat[1],
         speed: combat[2],
         hp: combat[3],
+        stamina: 0,
+        focus: 0,
+        demo: false,
+        v3: false,
+        fought_tick: 0,
         wins: wl[0],
         losses: wl[1],
     }
@@ -591,15 +596,57 @@ fn friends_value() -> FriendsList {
     f
 }
 
+/// The old `list` blob decodes through `from_old_bytes`, new fields zero.
+#[test]
+fn friends_golden_old_blob_migrates() {
+    assert_eq!(FRIENDS_SAVE_SIZE_OLD, 721);
+    let golden: [u8; FRIENDS_SAVE_SIZE_OLD] = padded(&FRIENDS_PREFIX);
+    let f = FriendsList::from_old_bytes(&golden);
+    assert_eq!(f.count, 2);
+    let want = friends_value();
+    for i in 0..2 {
+        let (a, b) = (&f.friends[i], &want.friends[i]);
+        assert_eq!(a.device_id, b.device_id);
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.first_seen_tick, b.first_seen_tick);
+        assert_eq!(a.last_boost_tick, b.last_boost_tick);
+        assert_eq!(a.last_seen_tick, b.last_seen_tick);
+        assert_eq!((a.power, a.guard, a.speed, a.hp), (b.power, b.guard, b.speed, b.hp));
+        assert_eq!((a.wins, a.losses), (b.wins, b.losses));
+        assert_eq!((a.stamina, a.focus, a.demo, a.v3, a.fought_tick), (0, 0, false, false, 0));
+    }
+}
+
+// `list_v3`: layout 3, count 2, two 43-byte records (the old 36 bytes, then
+// stamina, focus, flags, fought_tick); the other eighteen slots are zero.
+const FRIENDS_V3_PREFIX: [u8; 89] = [
+    0x03, 0x02, 0xA1, 0xB2, 0x04, 0x52, 0x65, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B, 0x0A, 0x09, 0x29, 0x20,
+    0x17, 0x72, 0x02, 0x01, 0x04, 0x03, 0x05, 0xFE, 0x03, 0x78, 0x56, 0x34, 0x12, 0xC3, 0xD4, 0x08,
+    0x46, 0x6C, 0x75, 0x66, 0x66, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x14, 0x13, 0x12,
+    0x11, 0x18, 0x17, 0x16, 0x15, 0x1C, 0x1B, 0x1A, 0x19, 0x37, 0x42, 0x4D, 0x58, 0x12, 0x11, 0x14,
+    0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+fn friends_v3_value() -> FriendsList {
+    let mut f = friends_value();
+    f.friends[0].stamina = 5;
+    f.friends[0].focus = -2;
+    f.friends[0].demo = true;
+    f.friends[0].v3 = true;
+    f.friends[0].fought_tick = 0x1234_5678;
+    f
+}
+
 #[test]
 fn friends_golden_bytes_round_trip() {
-    assert_eq!(FRIENDS_SAVE_SIZE, 721);
-    let golden: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_PREFIX);
-    assert_eq!(friends_value().to_bytes(), golden);
+    assert_eq!(FRIENDS_SAVE_SIZE, 862);
+    let golden: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_V3_PREFIX);
+    assert_eq!(friends_v3_value().to_bytes(), golden);
 
     let f = FriendsList::from_bytes(&golden);
     assert_eq!(f.count, 2);
-    let want = friends_value();
+    let want = friends_v3_value();
     for i in 0..2 {
         let (a, b) = (&f.friends[i], &want.friends[i]);
         assert_eq!(a.device_id, b.device_id);
@@ -613,6 +660,8 @@ fn friends_golden_bytes_round_trip() {
         assert_eq!(a.guard, b.guard);
         assert_eq!(a.speed, b.speed);
         assert_eq!(a.hp, b.hp);
+        assert_eq!((a.stamina, a.focus), (b.stamina, b.focus));
+        assert_eq!((a.demo, a.v3, a.fought_tick), (b.demo, b.v3, b.fought_tick));
         assert_eq!(a.wins, b.wins);
         assert_eq!(a.losses, b.losses);
     }
@@ -622,11 +671,13 @@ fn friends_golden_bytes_round_trip() {
 #[test]
 fn friends_short_and_oversized_input() {
     assert_eq!(FriendsList::from_bytes(&[]).count, 0);
-    let mut b: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_PREFIX);
-    b[0] = 250;
+    // An old blob (first byte is a count, not layout 3) is not a v3 blob.
+    assert_eq!(FriendsList::from_bytes(&FRIENDS_PREFIX).count, 0);
+    let mut b: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_V3_PREFIX);
+    b[1] = 250;
     assert_eq!(FriendsList::from_bytes(&b).count as usize, FRIENDS_MAX);
     // Truncated mid second record: first decodes, second stays default.
-    let f = FriendsList::from_bytes(&FRIENDS_PREFIX[..1 + 36 + 10]);
+    let f = FriendsList::from_bytes(&FRIENDS_V3_PREFIX[..2 + 43 + 10]);
     assert_eq!(f.count, 2);
     assert_eq!(f.friends[0].device_id, [0xA1, 0xB2]);
     assert_eq!(f.friends[1].device_id, [0, 0]);

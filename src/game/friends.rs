@@ -111,8 +111,21 @@ impl PetBeacon {
 pub const FRIEND_BOOST_COOLDOWN_TICKS: u32 = 360 * 4;
 
 pub const FRIENDS_MAX: usize = 20;
-const FRIEND_RECORD_SIZE: usize = 36; // 2 + 1 + 12 + 1 + 4 + 4 + 4 + 4 + 2 + 2
-pub const FRIENDS_SAVE_SIZE: usize = 1 + FRIENDS_MAX * FRIEND_RECORD_SIZE;
+/// Today's record: 2 + 1 + 12 + 1 + 4 + 4 + 4 + 4 + 2 + 2 = 36, then stamina,
+/// focus, flags, and the 4-byte `fought_tick`.
+const FRIEND_RECORD_SIZE: usize = 43;
+/// A pre-v3 record (`list`), read for the upgrade only.
+const FRIEND_RECORD_SIZE_OLD: usize = 36;
+/// First byte of `list_v3`.
+pub const FRIENDS_LAYOUT: u8 = 3;
+/// `[layout][count][20 x 43]`.
+pub const FRIENDS_SAVE_SIZE: usize = 2 + FRIENDS_MAX * FRIEND_RECORD_SIZE;
+/// The pre-v3 blob, `[count][20 x 36]`.
+pub const FRIENDS_SAVE_SIZE_OLD: usize = 1 + FRIENDS_MAX * FRIEND_RECORD_SIZE_OLD;
+/// KV key the friends list is saved under.
+pub const FRIENDS_KEY: &str = "list_v3";
+/// The pre-v3 KV key: read for the upgrade, never written.
+pub const FRIENDS_KEY_OLD: &str = "list";
 
 #[derive(Clone, Copy)]
 pub struct FriendRecord {
@@ -135,6 +148,18 @@ pub struct FriendRecord {
     pub guard: u8,
     pub speed: u8,
     pub hp: u8,
+    /// Stamina and focus from the same beacon (an old beacon's defaults when
+    /// it carried none).
+    pub stamina: u8,
+    pub focus: i8,
+    /// Flags bit 0: the last beacon was from a demo-mode badge.
+    pub demo: bool,
+    /// Flags bit 1: the last beacon was a v3 beacon. Task 7 reads it so a
+    /// non-v3 friend is never challenged.
+    pub v3: bool,
+    /// Tick of the last fight between the two pets (0 = never); rebased on
+    /// reboot like the other ticks. Drives the per-pair cooldown.
+    pub fought_tick: u32,
     /// Head-to-head mesh Battle record against this specific friend —
     /// distinct from the pet's own overall `wins`/`losses` in
     /// `engine::GameState`. Updated on both badges for every battle
@@ -170,9 +195,65 @@ impl FriendRecord {
         guard: 0,
         speed: 0,
         hp: 0,
+        stamina: 0,
+        focus: 0,
+        demo: false,
+        v3: false,
+        fought_tick: 0,
         wins: 0,
         losses: 0,
     };
+
+    /// A beacon with numbers has arrived (an unfought friend added from an
+    /// old save has `hp` 0).
+    pub fn has_numbers(&self) -> bool {
+        self.hp > 0
+    }
+
+    /// The fight numbers we hold for this friend, as an estimate.
+    pub fn estimate_snapshot(&self) -> super::engine::combat::Snapshot {
+        super::engine::combat::Snapshot::from_beacon(
+            self.power,
+            self.guard,
+            self.speed,
+            self.hp,
+            self.stamina,
+            self.focus,
+            self.demo,
+        )
+    }
+
+    /// Seconds until these two pets may fight again, or `None` when they may
+    /// (never fought, or the pair cooldown has run out). One tick is 10 s.
+    pub fn pair_wait_secs(&self, now_tick: u32) -> Option<u32> {
+        if self.fought_tick == 0 {
+            return None;
+        }
+        let cooldown = super::engine::thresholds::BATTLE_PAIR_COOLDOWN_MIN() as u32 * 6;
+        let elapsed = now_tick.saturating_sub(self.fought_tick);
+        if elapsed >= cooldown {
+            None
+        } else {
+            Some((cooldown - elapsed) * 10)
+        }
+    }
+
+    /// Copy everything a beacon carries onto this record (the same update
+    /// `on_pet_beacon` applies on every sighting).
+    fn refresh(&mut self, beacon: &PetBeacon, now: u32) {
+        self.name = beacon.name;
+        self.name_len = beacon.name_len;
+        self.pet_kind = beacon.pet_kind;
+        self.power = beacon.power;
+        self.guard = beacon.guard;
+        self.speed = beacon.speed;
+        self.hp = beacon.hp;
+        self.stamina = beacon.stamina;
+        self.focus = beacon.focus;
+        self.demo = beacon.demo;
+        self.v3 = beacon.v3;
+        self.last_seen_tick = now;
+    }
 
     fn to_bytes(self, buf: &mut [u8]) {
         buf[0..2].copy_from_slice(&self.device_id);
@@ -188,9 +269,15 @@ impl FriendRecord {
         buf[31] = self.hp;
         buf[32..34].copy_from_slice(&self.wins.to_le_bytes());
         buf[34..36].copy_from_slice(&self.losses.to_le_bytes());
+        buf[36] = self.stamina;
+        buf[37] = self.focus as u8;
+        buf[38] = self.demo as u8 | (self.v3 as u8) << 1;
+        buf[39..43].copy_from_slice(&self.fought_tick.to_le_bytes());
     }
 
-    fn from_bytes(buf: &[u8]) -> Self {
+    /// Decode the first 36 bytes (shared by both layouts); the v3 fields are
+    /// zero.
+    fn from_old_bytes(buf: &[u8]) -> Self {
         let mut name = [0u8; PET_NAME_MAX];
         name.copy_from_slice(&buf[3..15]);
         Self {
@@ -205,9 +292,24 @@ impl FriendRecord {
             guard: buf[29],
             speed: buf[30],
             hp: buf[31],
+            stamina: 0,
+            focus: 0,
+            demo: false,
+            v3: false,
+            fought_tick: 0,
             wins: u16::from_le_bytes([buf[32], buf[33]]),
             losses: u16::from_le_bytes([buf[34], buf[35]]),
         }
+    }
+
+    fn from_bytes(buf: &[u8]) -> Self {
+        let mut rec = Self::from_old_bytes(buf);
+        rec.stamina = buf[36];
+        rec.focus = buf[37] as i8;
+        rec.demo = buf[38] & 1 != 0;
+        rec.v3 = buf[38] & 2 != 0;
+        rec.fought_tick = u32::from_le_bytes([buf[39], buf[40], buf[41], buf[42]]);
+        rec
     }
 
     /// Friend's pet name as a str.
@@ -277,24 +379,44 @@ impl FriendsList {
 
     pub fn to_bytes(&self) -> [u8; FRIENDS_SAVE_SIZE] {
         let mut buf = [0u8; FRIENDS_SAVE_SIZE];
-        buf[0] = self.count;
+        buf[0] = FRIENDS_LAYOUT;
+        buf[1] = self.count;
         for i in 0..self.count as usize {
-            let offset = 1 + i * FRIEND_RECORD_SIZE;
+            let offset = 2 + i * FRIEND_RECORD_SIZE;
             self.friends[i].to_bytes(&mut buf[offset..offset + FRIEND_RECORD_SIZE]);
         }
         buf
     }
 
+    /// Decode `list_v3` (layout 3). An empty or foreign-layout blob gives an
+    /// empty list.
     pub fn from_bytes(buf: &[u8]) -> Self {
+        let mut list = Self::new();
+        if buf.len() < 2 || buf[0] != FRIENDS_LAYOUT {
+            return list;
+        }
+        list.count = buf[1].min(FRIENDS_MAX as u8);
+        for i in 0..list.count as usize {
+            let offset = 2 + i * FRIEND_RECORD_SIZE;
+            if offset + FRIEND_RECORD_SIZE <= buf.len() {
+                list.friends[i] = FriendRecord::from_bytes(&buf[offset..]);
+            }
+        }
+        list
+    }
+
+    /// Decode today's pre-v3 `list` blob, `[count][20 x 36]`; the new fields
+    /// are zero.
+    pub fn from_old_bytes(buf: &[u8]) -> Self {
         let mut list = Self::new();
         if buf.is_empty() {
             return list;
         }
         list.count = buf[0].min(FRIENDS_MAX as u8);
         for i in 0..list.count as usize {
-            let offset = 1 + i * FRIEND_RECORD_SIZE;
-            if offset + FRIEND_RECORD_SIZE <= buf.len() {
-                list.friends[i] = FriendRecord::from_bytes(&buf[offset..]);
+            let offset = 1 + i * FRIEND_RECORD_SIZE_OLD;
+            if offset + FRIEND_RECORD_SIZE_OLD <= buf.len() {
+                list.friends[i] = FriendRecord::from_old_bytes(&buf[offset..]);
             }
         }
         list
@@ -331,7 +453,7 @@ impl FriendsList {
     fn rebase_after_reboot(&mut self, now: u32) {
         let max_stored = self.friends[..self.count as usize]
             .iter()
-            .flat_map(|f| [f.first_seen_tick, f.last_seen_tick, f.last_boost_tick])
+            .flat_map(|f| [f.first_seen_tick, f.last_seen_tick, f.last_boost_tick, f.fought_tick])
             .max()
             .unwrap_or(0);
         if max_stored <= now {
@@ -342,6 +464,10 @@ impl FriendsList {
             f.first_seen_tick = f.first_seen_tick.saturating_sub(rebase);
             f.last_seen_tick = f.last_seen_tick.saturating_sub(rebase);
             f.last_boost_tick = f.last_boost_tick.saturating_sub(rebase);
+            if f.fought_tick != 0 {
+                // Stay non-zero: 0 means "never fought".
+                f.fought_tick = f.fought_tick.saturating_sub(rebase).max(1);
+            }
         }
     }
 }
@@ -360,8 +486,21 @@ pub async fn init() {
     use crate::fw::kv;
     let ns = kv::namespace("friends");
     let mut buf = [0u8; FRIENDS_SAVE_SIZE];
-    if let Ok(n) = ns.get("list", &mut buf).await {
-        let mut list = FriendsList::from_bytes(&buf[..n]);
+    let loaded = if let Ok(n) = ns.get(FRIENDS_KEY, &mut buf).await {
+        Some(FriendsList::from_bytes(&buf[..n]))
+    } else {
+        // No `list_v3` yet: upgrade the old `list` (read only) and mark
+        // dirty so the next save writes `list_v3`.
+        let mut old = [0u8; FRIENDS_SAVE_SIZE_OLD];
+        match ns.get(FRIENDS_KEY_OLD, &mut old).await {
+            Ok(n) => {
+                FRIENDS_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+                Some(FriendsList::from_old_bytes(&old[..n]))
+            }
+            Err(_) => None,
+        }
+    };
+    if let Some(mut list) = loaded {
         list.rebase_after_reboot(super::lifecycle::now_tick());
         defmt::info!("friends: loaded {} known friends", list.count);
         unsafe {
@@ -384,7 +523,7 @@ pub async fn save_if_needed() {
     let list = unsafe { &*FRIENDS.get() };
     let buf = list.to_bytes();
     let ns = crate::fw::kv::namespace("friends");
-    if ns.set("list", &buf, true).await.is_err() {
+    if ns.set(FRIENDS_KEY, &buf, true).await.is_err() {
         FRIENDS_DIRTY.store(true, Ordering::Relaxed); // retry next cycle
         defmt::warn!("friends: save failed");
     }
@@ -455,6 +594,24 @@ pub fn record_battle_vs(device_id: [u8; 2], won: bool) {
     }
 }
 
+/// A known friend by device id (a copy), or `None`.
+pub fn by_id(device_id: [u8; 2]) -> Option<FriendRecord> {
+    let list = unsafe { &*FRIENDS.get() };
+    list.find_index(device_id).map(|i| list.friends[i])
+}
+
+/// A fight with this friend just ended: bump the head-to-head record and
+/// stamp `fought_tick` (the pair cooldown starts). No-op for an unknown id.
+pub fn note_fight(device_id: [u8; 2], won: bool, now_tick: u32) {
+    record_battle_vs(device_id, won);
+    let list = unsafe { &mut *FRIENDS.get() };
+    if let Some(friend) = list.find_mut(device_id) {
+        // 0 means "never fought", so a fight at tick 0 is stamped as 1.
+        friend.fought_tick = now_tick.max(1);
+        FRIENDS_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Zero the head-to-head Battle record (wins/losses) on every known
 /// friend. Paired with `GameState::debug_reset_battle_record` (which
 /// zeros the pet's own overall tally) by the debug-cheat menu — lets a
@@ -515,14 +672,7 @@ pub async fn on_pet_beacon(data: &[u8]) {
     let big_boost = match list.find_index(beacon.device_id) {
         Some(idx) => {
             let friend = &mut list.friends[idx];
-            friend.name = beacon.name;
-            friend.name_len = beacon.name_len;
-            friend.pet_kind = beacon.pet_kind;
-            friend.power = beacon.power;
-            friend.guard = beacon.guard;
-            friend.speed = beacon.speed;
-            friend.hp = beacon.hp;
-            friend.last_seen_tick = now;
+            friend.refresh(&beacon, now);
             let boost = if now.saturating_sub(friend.last_boost_tick) < FRIEND_BOOST_COOLDOWN_TICKS
             {
                 None // seen too recently — no boost, just refreshed the record above
@@ -548,6 +698,11 @@ pub async fn on_pet_beacon(data: &[u8]) {
                 guard: beacon.guard,
                 speed: beacon.speed,
                 hp: beacon.hp,
+                stamina: beacon.stamina,
+                focus: beacon.focus,
+                demo: beacon.demo,
+                v3: beacon.v3,
+                fought_tick: 0,
                 wins: 0,
                 losses: 0,
             });
@@ -602,6 +757,11 @@ mod tests {
             guard: 0,
             speed: 0,
             hp: 0,
+            stamina: 0,
+            focus: 0,
+            demo: false,
+            v3: false,
+            fought_tick: 0,
             wins: 0,
             losses: 0,
         }
@@ -743,6 +903,11 @@ mod tests {
             guard: 45,
             speed: 35,
             hp: 120,
+            stamina: 0,
+            focus: 0,
+            demo: false,
+            v3: false,
+            fought_tick: 0,
             wins: 7,
             losses: 3,
         });
@@ -821,5 +986,127 @@ mod tests {
         let at_boundary = last_boost_tick + FRIEND_BOOST_COOLDOWN_TICKS;
         assert!(just_under.saturating_sub(last_boost_tick) < FRIEND_BOOST_COOLDOWN_TICKS);
         assert!(at_boundary.saturating_sub(last_boost_tick) >= FRIEND_BOOST_COOLDOWN_TICKS);
+    }
+
+    #[test]
+    fn friends_v3_round_trip() {
+        let mut list = FriendsList::new();
+        for i in 0..3u8 {
+            let mut r = friend_record([i + 1, i + 1], 10 + i as u32, 20 + i as u32);
+            r.power = 40 + i;
+            r.guard = 30 + i;
+            r.speed = 20 + i;
+            r.hp = 100 + i;
+            r.stamina = 2 + i;
+            r.focus = -3 + i as i8;
+            r.demo = i % 2 == 0;
+            r.v3 = true;
+            r.fought_tick = 500 + i as u32;
+            r.wins = i as u16;
+            list.push(r);
+        }
+        let bytes = list.to_bytes();
+        assert_eq!(bytes.len(), FRIENDS_SAVE_SIZE);
+        assert_eq!(bytes[0], 3);
+        let back = FriendsList::from_bytes(&bytes);
+        assert_eq!(back.count, 3);
+        for i in 0..3 {
+            let (a, b) = (&back.friends[i], &list.friends[i]);
+            assert_eq!(a.device_id, b.device_id);
+            assert_eq!((a.power, a.guard, a.speed, a.hp), (b.power, b.guard, b.speed, b.hp));
+            assert_eq!((a.stamina, a.focus), (b.stamina, b.focus));
+            assert_eq!((a.demo, a.v3, a.fought_tick), (b.demo, b.v3, b.fought_tick));
+            assert_eq!((a.first_seen_tick, a.last_seen_tick), (b.first_seen_tick, b.last_seen_tick));
+            assert_eq!(a.wins, b.wins);
+        }
+        assert_eq!(back.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn old_friends_blob_migrates() {
+        let mut old = [0u8; FRIENDS_SAVE_SIZE_OLD];
+        old[0] = 2;
+        for (i, id) in [[0xA1u8, 0xB2], [0xC3, 0xD4]].iter().enumerate() {
+            let o = 1 + i * FRIEND_RECORD_SIZE_OLD;
+            old[o..o + 2].copy_from_slice(id);
+            old[o + 2] = 4;
+            old[o + 3..o + 6].copy_from_slice(b"Rex");
+            old[o + 15] = 3;
+            old[o + 16..o + 20].copy_from_slice(&77u32.to_le_bytes());
+            old[o + 28..o + 32].copy_from_slice(&[41, 32, 23, 114]);
+            old[o + 32..o + 34].copy_from_slice(&5u16.to_le_bytes());
+            old[o + 34..o + 36].copy_from_slice(&6u16.to_le_bytes());
+        }
+        let list = FriendsList::from_old_bytes(&old);
+        assert_eq!(list.count, 2);
+        assert_eq!(list.friends[1].device_id, [0xC3, 0xD4]);
+        let f = &list.friends[0];
+        assert_eq!(f.device_id, [0xA1, 0xB2]);
+        assert_eq!(f.name_str(), "Rex");
+        assert_eq!((f.first_seen_tick, f.wins, f.losses), (77, 5, 6));
+        assert_eq!((f.power, f.guard, f.speed, f.hp), (41, 32, 23, 114));
+        assert_eq!(f.stamina, 0);
+        assert!(!f.v3 && !f.demo);
+        assert_eq!(f.fought_tick, 0);
+    }
+
+    #[test]
+    fn never_writes_the_old_friends_key() {
+        let src = include_str!("friends.rs");
+        // Built in pieces so this test's own text does not match.
+        let needle = concat!("ns.", "set", "(");
+        assert_eq!(src.matches(needle).count(), 1);
+        let at = src.find(needle).unwrap() + needle.len();
+        assert!(src[at..].starts_with("FRIENDS_KEY,"));
+        assert_eq!(FRIENDS_KEY, "list_v3");
+        assert_eq!(FRIENDS_KEY_OLD, "list");
+    }
+
+    #[test]
+    fn pair_cooldown_counts_down() {
+        let mut r = friend_record([1, 1], 1, 1);
+        r.fought_tick = 1000;
+        assert_eq!(r.pair_wait_secs(1000 + 300), Some(600));
+        assert_eq!(r.pair_wait_secs(1000 + 360), None);
+        r.fought_tick = 0;
+        assert_eq!(r.pair_wait_secs(5), None);
+    }
+
+    #[test]
+    fn rebase_moves_fought_tick() {
+        let mut list = FriendsList::new();
+        let mut a = friend_record([1, 1], 100, 5000);
+        a.fought_tick = 4500;
+        list.push(a);
+        list.push(friend_record([2, 2], 100, 4000));
+        list.rebase_after_reboot(1000);
+        assert_eq!(list.find_mut([1, 1]).unwrap().fought_tick, 500);
+        assert_eq!(list.find_mut([2, 2]).unwrap().fought_tick, 0);
+        // A fallback fight newer than every beacon counts toward the shift.
+        let mut list = FriendsList::new();
+        let mut b = friend_record([3, 3], 100, 200);
+        b.fought_tick = 3000;
+        list.push(b);
+        list.rebase_after_reboot(500);
+        assert_eq!(list.find_mut([3, 3]).unwrap().fought_tick, 500);
+        assert_eq!(list.find_mut([3, 3]).unwrap().last_seen_tick, 0);
+    }
+
+    #[test]
+    fn beacon_updates_the_fighting_numbers() {
+        let mut b = beacon([1, 1]);
+        b.stamina = 5;
+        b.focus = -2;
+        b.demo = true;
+        let mut r = friend_record([1, 1], 1, 1);
+        assert!(!r.has_numbers());
+        r.refresh(&b, 99);
+        assert_eq!((r.power, r.guard, r.speed, r.hp), (40, 30, 20, 100));
+        assert_eq!((r.stamina, r.focus), (5, -2));
+        assert!(r.demo && r.v3);
+        assert_eq!(r.last_seen_tick, 99);
+        assert_eq!(r.name_str(), "Rex");
+        assert!(r.has_numbers());
+        assert_eq!(r.estimate_snapshot().power, 40);
     }
 }
