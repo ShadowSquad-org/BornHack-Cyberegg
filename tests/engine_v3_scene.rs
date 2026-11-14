@@ -359,8 +359,11 @@ mod budget {
         )
         .outcome;
         eprintln!(
-            "absent, demo, clock: {:.2} scene changes a day, {:.2} engine wakes a day, {:.2} refreshes a day",
-            demo.scene_changes_per_day, demo.engine_wakes_per_day, demo.refreshes_per_day
+            "absent, demo, clock: {:.2} scene changes a day ({:.2} scene-only), {:.2} engine wakes a day, {:.2} refreshes a day",
+            demo.scene_changes_per_day,
+            demo.scene_only_changes_per_day,
+            demo.engine_wakes_per_day,
+            demo.refreshes_per_day
         );
         assert!(
             demo.scene_changes_per_day > 0.0,
@@ -380,10 +383,13 @@ mod budget {
         )
         .outcome;
         eprintln!(
-            "balanced, clock: {:.2} scene changes a day, {:.2} engine wakes a day, {:.2} refreshes a day",
-            care.scene_changes_per_day, care.engine_wakes_per_day, care.refreshes_per_day
+            "balanced, clock: {:.2} scene changes a day ({:.2} scene-only), {:.2} engine wakes a day, {:.2} refreshes a day",
+            care.scene_changes_per_day,
+            care.scene_only_changes_per_day,
+            care.engine_wakes_per_day,
+            care.refreshes_per_day
         );
-        assert!(care.scene_changes_per_day <= 6.0);
+        assert!(care.scene_only_changes_per_day <= 6.0);
     }
 
     #[test]

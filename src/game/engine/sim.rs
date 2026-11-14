@@ -105,6 +105,9 @@ pub struct Outcome {
     /// one seen, so a change between updates (a wash, a player action) counts
     /// too. One change is at most one background-caused refresh.
     pub scene_changes_per_day: f32,
+    /// The scene changes where nothing else visible changed since the last
+    /// snapshot. Only these cost a refresh the pet screen would not make.
+    pub scene_only_changes_per_day: f32,
 }
 
 /// How a run starts. `run_full` is `run_with` and `Setup::default()`.
@@ -154,8 +157,9 @@ struct Probe {
     causes: u32,
     action_ticks: u64,
     /// The last `scene::wake_view` seen, and how often it changed.
-    last_scene: Option<u8>,
+    last_scene: Option<(u8, Rest)>,
     scene_changes: u32,
+    scene_only_changes: u32,
 }
 
 const PROBE_NEW: Probe = Probe {
@@ -174,6 +178,7 @@ const PROBE_NEW: Probe = Probe {
     action_ticks: 0,
     last_scene: None,
     scene_changes: 0,
+    scene_only_changes: 0,
 };
 
 /// The figures `note_segment` reads off the pet at one end of a segment.
@@ -187,7 +192,19 @@ pub(super) struct Snap {
     day_min: Option<u16>,
     phase: Phase,
     scene: u8,
+    rest: Rest,
 }
+
+/// Everything in `Visible` but the scene byte.
+type Rest = (
+    super::status::StatusLine,
+    super::DisplayAnim,
+    bool,
+    Phase,
+    Option<super::Action>,
+    u8,
+    u8,
+);
 
 impl Snap {
     pub(super) fn of(s: &GameState) -> Self {
@@ -200,6 +217,10 @@ impl Snap {
             day_min: s.day_min,
             phase: s.phase,
             scene: super::scene::wake_view(s),
+            rest: {
+                let (a, b, c, d, e, f, g, _) = s.visible();
+                (a, b, c, d, e, f, g)
+            },
         }
     }
 }
@@ -315,11 +336,14 @@ pub(super) fn note_segment(before: Snap, after: Snap, dt: u32) {
         let mut v = p.get();
         v.mood_sum2 += (before.mood as i64 + after.mood as i64) * dt as i64;
         v.minutes += dt as u64;
-        for scene in [before.scene, after.scene] {
-            if v.last_scene.is_some_and(|last| last != scene) {
+        for (scene, rest) in [(before.scene, before.rest), (after.scene, after.rest)] {
+            if let Some((last, last_rest)) = v.last_scene
+                && last != scene
+            {
                 v.scene_changes += 1;
+                v.scene_only_changes += (last_rest == rest) as u32;
             }
-            v.last_scene = Some(scene);
+            v.last_scene = Some((scene, rest));
         }
         v.min_health = v.min_health.min(before.health).min(after.health);
         for (acc, m) in v
@@ -608,6 +632,7 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
                     / pacing::MIN_FRAME_SECS as f64) as f32
                 / days_run,
             scene_changes_per_day: probe.scene_changes as f32 / days_run,
+            scene_only_changes_per_day: probe.scene_only_changes as f32 / days_run,
         },
         wake_queries: queries,
         wake_calls_total: calls_total,
