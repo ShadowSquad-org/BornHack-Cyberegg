@@ -101,7 +101,7 @@ fn wasted(s: &GameState) -> bool {
 fn filthy(s: &GameState) -> bool {
     s.dirt as i32 > DIRT_DANGER_PCT as i32 * P
 }
-fn poorly(s: &GameState) -> bool {
+pub(crate) fn poorly(s: &GameState) -> bool {
     (s.health as i32) < HEALTH_DANGER_PCT as i32 * P
 }
 

@@ -21,6 +21,7 @@ pub mod food;
 pub mod hint;
 pub mod needs;
 pub mod regime;
+pub mod scene;
 #[cfg(feature = "simulator")]
 pub mod sim;
 pub mod solver;

@@ -364,8 +364,15 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DEMO_PICK_WATER_PCT` | 70 | 70 |
 | `DEMO_PICK_COLA_PCT` | 20 | 20 |
 | `DEMO_PICK_GAME_PCT` | 30 | 30 |
+| `BG_NIGHT_FROM_MIN` | 1260 | 1260 |
+| `BG_NIGHT_TO_MIN` | 420 | 420 |
+| `FLOOR_CRUMBS_DIRT_PCT` | 40 | 40 |
+| `FLOOR_PEEL_DIRT_PCT` | 55 | 55 |
+| `FLOOR_CAN_DIRT_PCT` | 70 | 70 |
+| `FLOOR_SOCK_DIRT_PCT` | 85 | 85 |
+| `FLOOR_PIZZA_DIRT_PCT` | 95 | 95 |
 
-Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. Unknown keys are logged and skipped.
+Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. The five `FLOOR_*_DIRT_PCT` lines must rise in order, and `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` must differ: if not, all five floor lines (or both night minutes) fall back to the preset together. Unknown keys are logged and skipped.
 
 To go back to a preset, delete `BPETS_V3.CFG` from the drive and reboot.
 
