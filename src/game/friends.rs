@@ -459,10 +459,12 @@ impl FriendsList {
     /// no earlier tick exists, so the wait restarts in full: never shorter).
     ///
     /// This can't recover real elapsed offline time (there's no RTC to
-    /// know it), but it keeps every "ago" value sane and the relative
-    /// ordering between friends (who you met first, who you saw most
-    /// recently) exactly preserved, instead of every friend reading "0
-    /// ago" until the new session's uptime catches up.
+    /// know it), but it keeps every "ago" value sane instead of every friend
+    /// reading "0 ago" until the new session's uptime catches up. The
+    /// relative ordering between friends (who you met first, who you saw
+    /// most recently) survives only for ticks within `now` of the maximum:
+    /// older ticks saturate at 0 and tie. Right after boot `now` is small,
+    /// so most of the older ticks tie at 0.
     fn rebase_after_reboot(&mut self, now: u32) {
         let max_stored = self.friends[..self.count as usize]
             .iter()
