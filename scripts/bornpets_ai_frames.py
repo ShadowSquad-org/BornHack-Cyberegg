@@ -1321,7 +1321,7 @@ STATE_BRIEFS: dict[str, str] = {
     "throwing_up": "Throwing up after sport on a full belly. The {pet} bends over with dizzy eyes and a cartoon splash of sick drawn in WHITE with a thick BLACK outline in front of it, a few wobbly lines. No red anywhere in the sick. Nothing else in the frame.",
     "needs_rehab": "Needs rehab. The {pet} can barely stay upright: knees buckling, shaking, holding on with both arms to something solid (a post, a railing or a walking frame) to keep itself standing, heavy eyes, a few wobble lines. Clearly worse than its idle pose. Nothing else in the frame.",
     "starving": "Starving. The {pet} looks starved: visibly thinner and droopier than its idle pose, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly. Clearly different from its idle pose. Nothing else in the frame.",
-    "washing": "Washing. The {pet} sits in a small round wash tub and scrubs itself with a little brush, a few round soap bubbles around it and one on its head, looking content. Keep the tub small and simple. Nothing else in the frame: no shells, plants, towels or other props. Clearly different from its idle pose.",
+    "washing": "Washing. The {pet} sits in a small round wash tub and scrubs itself with a little brush, a few round soap bubbles around it and one on its head, looking content. Keep the tub small and simple, with no shells, plants, towels or other props. Clearly different from its idle pose. Nothing else in the frame.",
 }
 
 # Every state prompt carries this, after style() and before any owner note (amendment 1):

@@ -171,7 +171,7 @@ class StateFlow(Base):
         self.assertEqual(len(ac.STATES), 13)
         for s in ac.STATES:
             self.assertIn(s, afm.STATE_BRIEFS)
-            self.assertTrue(afm.STATE_BRIEFS[s].count("Nothing else in the frame") == 1, s)
+            self.assertTrue(afm.STATE_BRIEFS[s].endswith("Nothing else in the frame."), s)
             self.assertGreaterEqual(len(afm.STATE_REFS[s]), 2)
             self.assertLessEqual(len(afm.STATE_REFS[s]), 4)
             for prefix, *_ in ac.ART_PETS.values():
