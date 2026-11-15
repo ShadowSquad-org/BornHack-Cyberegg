@@ -571,6 +571,7 @@ fn friend(
         fought_tick: 0,
         wins: wl[0],
         losses: wl[1],
+        heard_this_boot: false,
     }
 }
 

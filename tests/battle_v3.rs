@@ -1588,6 +1588,7 @@ mod protocol {
             fought_tick: 0,
             wins: 0,
             losses: 0,
+            heard_this_boot: true,
         }
     }
 
@@ -1893,6 +1894,32 @@ mod protocol {
         assert_eq!(a.mood, base.mood);
         assert_eq!(a.cooldown_battle, 180);
         assert_eq!(a.battle_record(), (1, 0));
+    }
+
+    /// After a reboot every stored beacon looks recent (the ticks are rebased
+    /// onto the new uptime), so only a beacon heard this boot is fresh.
+    #[test]
+    fn fallback_after_reboot_needs_a_beacon_heard_this_boot() {
+        let base = adult(11, true);
+        for nonce in 1..500u16 {
+            let mut a = base.clone();
+            let mut sa = Session::new();
+            let mut fb = friend_of(&adult(12, false), [2, 0], 5);
+            fb.heard_this_boot = false; // loaded from the save, not heard since
+            let m = me([1, 0], "Ant", MS, TICK, nonce);
+            sa.challenge(&m, &mut a, &fb).expect("challenge");
+            let late = me([1, 0], "Ant", MS + ANSWER_WINDOW_MS, TICK, nonce);
+            let outs = sa.on_deadline(&late, &mut a, Some(&fb));
+            let f = fought(&outs).unwrap();
+            if f.won {
+                assert_eq!(f.prize, 0);
+                assert_eq!(a.money, 50);
+                assert_eq!(a.energy, base.energy);
+                assert_eq!(a.battle_record(), (1, 0));
+                return;
+            }
+        }
+        panic!("no winning nonce");
     }
 
     #[test]

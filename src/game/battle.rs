@@ -816,9 +816,12 @@ impl Session {
         };
         let (a, b) = (p.pre.mine, f.estimate_snapshot());
         let o = combat::fight(combat::seed(p.nonce_a, 0, me.id, peer), &a, &b);
-        // An older beacon gives a record only: no costs, no prize.
-        let fresh =
-            me.now_tick.saturating_sub(f.last_seen_tick) <= t::BATTLE_PRIZE_BEACON_MIN() as u32 * 6;
+        // An older beacon gives a record only: no costs, no prize. After a
+        // reboot the stored ticks are rebased and look recent, so the beacon
+        // must also have been heard this boot.
+        let fresh = f.heard_this_boot
+            && me.now_tick.saturating_sub(f.last_seen_tick)
+                <= t::BATTLE_PRIZE_BEACON_MIN() as u32 * 6;
         let prize = s.fight_over(Fought {
             won: o.a_won,
             hp_left_pct: o.a_hp_pct,

@@ -172,6 +172,11 @@ pub struct FriendRecord {
     /// so the tally reads the same from either side.
     pub wins: u16,
     pub losses: u16,
+    /// RAM only, never saved: a beacon from this friend arrived since this
+    /// boot. After a reboot `rebase_after_reboot` makes every stored
+    /// `last_seen_tick` look recent, so a fallback fight (battle `fresh`)
+    /// needs this too.
+    pub heard_this_boot: bool,
 }
 
 impl FriendRecord {
@@ -207,6 +212,7 @@ impl FriendRecord {
         fought_tick: 0,
         wins: 0,
         losses: 0,
+        heard_this_boot: false,
     };
 
     /// A beacon with numbers has arrived (an unfought friend added from an
@@ -258,6 +264,7 @@ impl FriendRecord {
         self.demo = beacon.demo;
         self.v3 = beacon.v3;
         self.last_seen_tick = now;
+        self.heard_this_boot = true;
     }
 
     fn to_bytes(self, buf: &mut [u8]) {
@@ -304,6 +311,7 @@ impl FriendRecord {
             fought_tick: 0,
             wins: u16::from_le_bytes([buf[32], buf[33]]),
             losses: u16::from_le_bytes([buf[34], buf[35]]),
+            heard_this_boot: false,
         }
     }
 
@@ -816,6 +824,7 @@ pub async fn on_pet_beacon(data: &[u8]) {
                 fought_tick: 0,
                 wins: 0,
                 losses: 0,
+                heard_this_boot: true,
             });
             Some(true)
         }
@@ -875,6 +884,7 @@ mod tests {
             fought_tick: 0,
             wins: 0,
             losses: 0,
+            heard_this_boot: false,
         }
     }
 
@@ -1000,6 +1010,16 @@ mod tests {
     }
 
     #[test]
+    fn heard_this_boot_is_ram_only() {
+        let mut rec = friend_record([3, 3], 1, 1);
+        rec.heard_this_boot = true;
+        let mut list = FriendsList::new();
+        list.push(rec);
+        let restored = FriendsList::from_bytes(&list.to_bytes());
+        assert!(!restored.friends[0].heard_this_boot);
+    }
+
+    #[test]
     fn friends_list_round_trips_through_bytes() {
         let mut list = FriendsList::new();
         list.push(FriendRecord {
@@ -1021,6 +1041,7 @@ mod tests {
             fought_tick: 0,
             wins: 7,
             losses: 3,
+            heard_this_boot: false,
         });
         let bytes = list.to_bytes();
         let restored = FriendsList::from_bytes(&bytes);
