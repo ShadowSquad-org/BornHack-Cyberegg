@@ -441,5 +441,13 @@
       frame_width: 152,
       frame_height: 75,
     },
+    {
+      type: "sequence",
+      name: "panda_washing",
+      comment: "v3 state art: wash (plan 9)",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
   ],
 }
