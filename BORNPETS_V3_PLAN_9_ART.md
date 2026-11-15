@@ -935,3 +935,436 @@ One question, conditional. Ask it only if A4 step 5 cannot reach 55 clusters aft
 - They are shipped art that nothing shows after this plan.
 
 Everything else, including the 3-round gallery cap, is already decided.
+
+
+---
+
+# Amendment 1 (2026-11-15)
+
+**Why.** A4 stopped on space: 50 frames cost 72 clusters, the limit was 55, and 22 frames were over 2048 B. The budget tool measured 505 clusters used against an assumed 429. The owner has since decided the following (verbatim where quoted):
+
+1. **Space: "Free + simplify".**
+   - Remove the 18 Drained files (anim rows `06` and `0A` of prefixes 00, 01, 05, 06, 07) from the badge volume. Do not touch the Slug's `020600` / `020A00`.
+   - Redraw frames over 2048 B with flatter fills until the art fits. Keep every state.
+   - The Drained cells stay in the sheets and remain usable as references.
+2. **Relax frame 3.** "Relax has 3 frame animations now, that can be 2." Remove `050E02`, `060E02`, `070E02` the same way. Do not touch any Slug file.
+3. **The Slug is in scope.** "The artist gave permission to create the extra art for the slug as well." Its existing files and sheet rows stay byte-identical.
+4. **Full set at once.** "Starving" and "needs rehab" are new states for all six pets. The target is 6 × 12 = 72 frames, budgeted once. The flat-fill style is decided up front and applied to every generation.
+5. **Bartholomeus notes** (owner, verbatim):
+   - hung over: "Make it tilt it's head forwards because it has a headache."
+   - injured: "No cast or band aid?"
+   - needs rehab: "More dramatic, holding on to something to keep itself standing, not just the same image nothing changed."
+   - starving: "Can you make it look starved? it's a bit like it's always."
+6. **Keep the A4 work.** The 50 A4 frames are kept. Only frames over 2048 B are regenerated, plus the two noted Bartholomeus redraws.
+7. **Merge first.** Merge local `main` `a718cc0` (plan 7 merged, Jellyfish gone) into the branch before anything else.
+
+The design doc gets these as a new §1.10, verbatim (Task A4b step 9). They supersede:
+- design §1.2 "The Slug (02) gets no new art";
+- design §3.2 "Drained `06`/`0A` stay … their files stay on the badge";
+- the plan's "Needs the owner" question (answered: yes);
+- Global Constraints "Space: … at most 55 clusters".
+
+## Global constraints delta
+
+These replace or extend the Global Constraints above. Every amended task's brief carries them.
+
+- **States and ids.**
+  - `STATES` gains `"needs_rehab"` (`0x33`) and `"starving"` (`0x34`), appended, so `STATES[i]` still has id `0x29 + i`.
+  - That gives 12 states, ids `0x29`–`0x34`, for all six pets.
+  - Part B maps them for every pet with the files. A pet without a file falls back to today's stand-in through `shown_anim` (B2 rule unchanged).
+- **The Slug (02)** joins `ART_PETS` as `"slug": ("02", "bornpets-sponsors-slug.json5", "bornpets-sprites-slug.png", "slug")`.
+  - Every existing `02xxxx` file (anim id < `0x29`) and every existing Slug sheet row stays byte-identical in export.
+  - New Slug rows are `0x1F` (reserved), `0x20`–`0x28` (blank hand-added placeholders, as A3 did for Bartholomeus and Cat) and `0x29`–`0x34`.
+  - `021500`–`021700` stay litter references only.
+- **New files.** `new_files()` returns 72 names: `PP29xx`–`PP34xx` for PP 00, 01, 02, 05, 06, 07.
+- **Retired files** (`RETIRED`, 21 names). These leave `assets/to-badge` through plan 7's `remove` lines, in Task A4b:
+  - `000600`, `000A00`, `010600`, `010601`, `010A00`, `010A01`, `050600`, `050601`, `050A00`, `050A01`, `060600`, `060601`, `060A00`, `060A01`, `070600`, `070601`, `070A00`, `070A01`;
+  - `050E02`, `060E02`, `070E02`.
+
+  No `02` name, no hand-added row and no `0406xx`/`0407xx` is ever retired. The sheets keep the cells.
+- **Space limit.** `NEW_PCX_BUDGET = 55` and `ASSUMED_USED` go (R15). The limit is computed from the real tree:
+
+  `volume_limit() = 502 − 16 − (used(to-badge) − clusters(RETIRED still present)) − cfg_growth − manifest_growth`
+
+  Expected value: 80 (budget table below). The 16-cluster guard is unchanged and is never loosened by a task.
+- **Flat-fill style.** A fixed `FLAT_FILL` paragraph goes into every `state_prompt` from A4c on, before any note:
+
+  "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no texture, no stippling, no speckles or scattered dots; few small details; every outline a continuous unbroken line. Solid white stays solid white."
+
+  Frames that already fit are not regenerated.
+- **Paid calls.**
+  - Only through `--key-file <scratchpad>/openai.key`, where `<scratchpad>` is the controller's scratchpad path. The key is never printed, logged, put in an env var or argv, or copied into the repo.
+  - Each task states its cap. The amendment total is **at most 82**: M0 0, M1 0, A4b 0, A4c 52, A4d 25, A5 5 for floor items. The owner's gallery rounds after that keep the plan's 3-round cap; each round's calls are only the frames the owner flags.
+  - A task that reaches its cap stops and reports.
+- **Processes.**
+  - Every Python run is `nice -n 19 python3 -I …`.
+  - asset-gen runs as `taskset -c 2,3 nice -n 19 $A …` with `A=../asset-gen/target/release/asset-gen`. It is never built, because it has `migrate`.
+  - Any cargo command (Part B) is `CARGO_BUILD_JOBS=1 taskset -c 2,3 cargo … -j 1`. This replaces the plan's `taskset -c 0,1 … -j 2`.
+- **Unchanged rules:**
+  - never `git stash`;
+  - never touch hand-added rows `0x20`–`0x28` of 00/01/02 or `0406xx`/`0407xx`;
+  - never overwrite `000000.PCX`, `010000.PCX`, `PETS.CFG`;
+  - `../asset-gen` is read-only;
+  - each task runs only its focused tests;
+  - TDD for every script change;
+  - commit footer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Gallery.**
+  - The A4 round-1 files were never shown to the owner, so the amended gallery (A5) is **round 1** and the 3-round cap counts from there.
+  - `wip(...)` commits of unapproved sheets are allowed for safekeeping. The gate still holds: nothing reaches `assets/to-badge` as new art, and no commit is labelled final, until approval.
+- **Export configs** after the merge: eight, in the README order without `bornpets-sponsors-jellyfish.json5`.
+
+## Budget (expected; A4b measures it, and the measured value wins)
+
+| Item | Clusters | Root entries |
+|---|---|---|
+| `main` `a718cc0` after plan 7, measured with `git ls-tree -l` | 429 used | 372 |
+| Retire 18 Drained files (00: 2, 01: 4, 05: 4, 06: 4, 07: 6) | −20 | −18 |
+| Retire 3 Relaxing third frames (`050E02` 1, `060E02` 2, `070E02` 2) | −5 | −3 |
+| **Base** | **404** | **351** |
+| `BPETS_V3.CFG` 11 483 B → plan 5's 13 176 B + 6 `THROWUP_*` keys (about 228 B) ≈ 13 404 B | +1 (6 → 7) | 0 |
+| `MANIFEST.TXT` 9 316 − 663 (Drained lines) − 90 (Relax lines) + 2 040 (72 new lines) ≈ 10 603 B | +1 (5 → 6) | 0 |
+| Plan 7 guard | 16 kept free | |
+| **Limit for the 72 new PCX** | **502 − 16 − 406 = 80** | **+72 → 423 of 511** |
+
+What the limit means:
+- 72 frames at 1 cluster each is 72, so at most **8 of the 72 may be over 2048 B**, and none over 4096 B.
+- Today, A4's 50 frames cost 72 clusters with 22 over. The Slug's shipped frames average 1.17 clusters each (5 of its 29 first frames are over).
+- So the flat-fill style is not optional.
+
+If the 72 frames still do not fit after A4d: **stop and report.** Give the per-pet table (bytes per frame, the over list, the total) and the measured limit. Then list these owner options, none of which is an action:
+
+| Option | Frees | Note |
+|---|---|---|
+| Retire the unused reserved-range files `001500`–`001E00` (Bartholomeus, 10) and `011F00` (Cat placeholder) | 11 clusters, 11 entries | Nothing reads 0x15–0x1F (design §2.4). `001500`–`001700` are litter references in Part A; they fall back to the sheet as the Drained refs do. The Slug's `021500`–`021C00` are excluded. |
+| Trim other rows of 3 or more frames to 2, as Relax was (the owner picks the rows) | 1–2 clusters per Badger/Starfish frame | A4d's report lists the candidate rows with their clusters. |
+| Fewer states for some pets (those words keep their stand-in) | 1–2 per frame | Owner's call per pet and state. |
+| Lower plan 7's 16-cluster guard | as decided | Owner only. Plan 7's test pins 16. |
+| Remove the Lights Out mini-game | **0 clusters** | It has no file on the FAT12 volume (`src/game/lightsout.rs` draws in code). It frees flash only, which B7 step 3 already allows. |
+
+---
+
+### Task M0: merge `main`, keep the A4 frames
+
+**Files:**
+- Commit as WIP: the five `assets/bornpets-sprites-{bartholomeus,cat,panda,badger,seastar}.png` and `assets/bornpets-litter.png`.
+- Merge: `BORNPETS_V3_ROADMAP.md`, `scripts/bornpets_ai_frames.py` (conflicts).
+- Follow-up: `scripts/README.md`, `scripts/test_bornpets_ai_frames.py` (comment), `scripts/bornpets_art_check.py` (comments only).
+
+**Paid calls:** 0.
+
+- [ ] **Step 1: precondition.** `git status --short` shows exactly the five ` M` sheets and `?? assets/bornpets-litter.png`. If it shows anything else, stop and report.
+- [ ] **Step 2: back up outside git.**
+  - Copy the six PNGs to `target/v3art/a4-wip/`.
+  - `sha256sum` them into `target/v3art/a4-wip/SHA256SUMS`.
+  - `target/<pet>-gen/{raw,frames}` are gitignored and survive the merge; leave them as they are.
+- [ ] **Step 3: WIP commit.** Commit the six PNGs: `wip(assets): A4 state frames and litter, not owner-approved (gallery gate open)`. No stash.
+- [ ] **Step 4: merge.** `git merge --no-ff main` (`a718cc0`). Expect conflicts in exactly `BORNPETS_V3_ROADMAP.md` and `scripts/bornpets_ai_frames.py`.
+  - **Roadmap:** keep main's row 8 text and the branch's row 9. Row 9 is reworded in A4b step 9.
+  - **`bornpets_ai_frames.py`:**
+    - take main's deletions (the `JELLYFISH_*` blocks and the `"jellyfish"` `PROFILES` entry);
+    - keep every art-branch addition (key guards, `NEW_PROFILES`, `**NEW_PROFILES`, the state, simplify and needs_call code).
+
+  Commit as `merge: main (plan 7) into plan 9 art`.
+- [ ] **Step 5: follow-up commit** `chore(assets): art tools after the plan 7 merge`:
+  - drop `bornpets-sponsors-jellyfish.json5` from the `scripts/README.md` export list;
+  - reword the Jellyfish comment in `test_frame_index_has_the_states`;
+  - fix the "429 / Jellyfish" comments in `bornpets_art_check.py`. No logic change: A4b replaces that code.
+- [ ] **Step 6: verify.**
+  - `sha256sum -c target/v3art/a4-wip/SHA256SUMS` from the repo root: all six `OK`. The working tree equals the WIP commit.
+  - `git diff HEAD --stat -- assets/*.png`: empty.
+  - `grep -ci jelly scripts/bornpets_ai_frames.py` prints `0`.
+  - `ls assets/to-badge | grep -c '^08'` prints `0`.
+  - The four suites each run on their own:
+    - `nice -n 19 python3 -I -m unittest discover -s scripts -p 'test_bornpets_art_check.py'`: OK, 28 tests;
+    - the same for `test_bornpets_ai_frames.py`: OK, 35;
+    - `test_bornpets_litter.py`: OK, 25;
+    - `test_copy_assets.py`: OK, 28.
+- [ ] **Step 7: measure.**
+  - `nice -n 19 python3 -I scripts/bornpets_art_check.py budget target/v3art/export-r1` prints `measured_used 429`.
+  - `ls assets/to-badge | wc -l` prints 372.
+  - Report: "real used 429 / 372 entries; with today's formula the limit for 50 frames would be 55 (unchanged), and A4b's retirements raise it to the computed 80 for 72."
+- [ ] **Step 8: V.** `git status --short` is empty, except an untracked `target/`, which is ignored.
+
+### Task M1: state inventory (free, no paid calls)
+
+**Files:**
+- Modify: `scripts/bornpets_art_check.py` (`SHOWN`, `inventory`, CLI `inventory`), `scripts/test_bornpets_art_check.py`.
+
+**Interfaces:**
+```python
+SHOWN: dict[str, dict]   # status word or action -> {"stand_in": [anim ids today, warning/critical],
+                         #   "art": anim id of its own frame or None, "decided": "owner 2026-11-14 ..." | None}
+def inventory(to_badge_dir=TO_BADGE) -> list[dict]
+    # one row per word/action: {"word", "stand_in", "art", "pets": {"bartholomeus": "real"|"stand-in"|"new", ...}}
+CANDIDATES: tuple[str, ...]   # words still on a stand-in after the 12 states
+```
+
+How `SHOWN` is filled:
+- It is written from `display_anim` (`src/game/engine/to_display.rs` groups 2 to 6) and from `status.rs` `graded` and `status_line`.
+- **Real art:** idle, happy, hungry and peckish (hungry rows `09`/`05`), sleepy and exhausted (tired `08`/`04`), poorly (sick `07`/`03`), bored (miserable `0B`), every action row, sleep, leaving, gone, hibernating, hatching.
+- **New** (the 12 states): tipsy, sloppy → wasted, wasted, hung over, sore, injured, groggy, stuffed, thirsty, parched → thirsty, wired, throwing up, needs rehab, starving.
+- **Candidates**, each still on a stand-in and listed for owner confirmation at the gallery, not generated:
+  - waterlogged, grubby, filthy, overweight, underweight and unfit, all on miserable `0B`; the owner kept these on stand-ins on 2026-11-14, so the gallery asks whether that still holds;
+  - exhausted (owner kept it on tired art);
+  - wash (shows Playing `0F`);
+  - no insulin (a prompt word under the normal art).
+- Relaxing `0E`: real for all six pets, with frame counts Bartholomeus 1, Cat 2, Slug 2, Panda, Badger and Starfish 3, falling to 2 after A4b.
+
+- [ ] **Step 1: failing tests:**
+```python
+def test_inventory_covers_every_status_word(self): ...  # parse `pub const ALL: [Word; N]` names from
+    # src/game/engine/status.rs (CamelCase -> snake): set(SHOWN) >= that set; N == 29
+def test_inventory_covers_every_display_anim(self): ... # parse DisplayAnim variants from to_display.rs:
+    # every variant's anim id is in some SHOWN row's stand_in or art
+def test_every_pet_has_the_shipped_rows(self): ...       # inventory(): for PP 00,01,02,05,06,07 every "real"
+    # id 0x01-0x14 except the retired 06/0A of 00,01,05,06,07, and 0x20-0x28, has frame 00 in assets/to-badge
+def test_candidates_are_the_stand_ins_left(self): ...    # CANDIDATES == words whose art is None and whose
+    # stand_in is not their own art; contains "waterlogged", "wash", "no_insulin"; no word of STATES
+```
+- [ ] **Step 2:** run `nice -n 19 python3 -I -m unittest discover -s scripts -p 'test_bornpets_art_check.py'`: FAIL.
+- [ ] **Step 3: implement.**
+- [ ] **Step 4:** the same command passes. Then `… bornpets_art_check.py inventory` prints a word × pet table and writes `target/v3art/inventory.json`. Hand the table to the controller.
+- [ ] **Step 5: commit** `feat(assets): state inventory per pet`.
+- [ ] **Step 6: V.**
+
+### Task A4b: tooling for six pets, 12 states, retirements and the computed limit
+
+**Files:**
+- Modify: `scripts/bornpets_art_check.py`, `scripts/test_bornpets_art_check.py`, `scripts/bornpets_ai_frames.py`, `scripts/test_bornpets_ai_frames.py`, `scripts/test_copy_assets.py`, `scripts/README.md`.
+- Modify: the six json5 files and six sheet PNGs (layout only, via `migrate`).
+- Modify (retirement commit): `assets/to-badge` (delete the 21 `RETIRED`), `assets/to-badge/MANIFEST.TXT` (drop their 21 lines by hand), `assets/asset-changes.txt` (21 `remove` lines; append main's MANIFEST sha256 to the `replace MANIFEST.TXT` line).
+- Docs: `BORNPETS_V3_ART_DESIGN.md` §1.10 and §3.6, `BORNPETS_V3_ROADMAP.md` row 9.
+
+**Paid calls:** 0.
+
+**Interfaces (`bornpets_art_check.py`):**
+```python
+STATES = (..., "throwing_up", "needs_rehab", "starving")          # 12; 0x29 + i
+ART_PETS = {... "slug": ("02", "bornpets-sponsors-slug.json5", "bornpets-sprites-slug.png", "slug"), ...}  # 6
+PROTECTED = {"existing": (("02",), range(0x00, 0x29)),           # every Slug file below the new rows
+             "hand_added": (("00", "01", "02"), range(0x20, 0x29)),
+             "icons": ("0406", "0407")}
+RETIRED: tuple[str, ...]          # the 21 names above, sorted
+GUARD_CLUSTERS = 16
+CFG_PROJECTED_BYTES = 13176 + 6 * 38   # plan 5's measured CFG plus the six THROWUP_* rows
+def manifest_lines() -> list[str]      # "<NAME> <SEQ>_<STATE>_F1\n", upper case, for new_files()
+def volume_limit(to_badge_dir=TO_BADGE) -> dict
+    # {"used", "retired_present", "base", "cfg_growth", "manifest_growth", "limit"}
+def pcx_bytes(rows) -> int        # 128 + RLE lines (fix_badge_pcx.rle_encode_line), no file written
+def fit_notes(budget_res, owner_notes: dict | None = None) -> dict   # {fid: note} for "over" frames only
+FIT_NOTE = ("This frame's file is {bytes} bytes and must be at most 2048: fewer, larger flat areas of one "
+            "colour, no dither, no texture, no hatching, no small specks, continuous outline.")
+```
+- `budget()` returns `"limit"` (from `volume_limit`) and `"fits": total <= limit and not missing`.
+- `diff_exports` gains `"protected_changed"`: protected names in both dirs with different bytes, plus protected names in old but not in new. The CLI `diff` exits 1 when that list is not empty.
+- CLI `fit-notes EXPORT [--owner-notes F] -o OUT`. An owner note is put first: `f"{owner} {FIT_NOTE}"`.
+
+**Interfaces (`bornpets_ai_frames.py`):**
+- **`ref_rows(prefix, aa)`** decodes `assets/to-badge/{prefix}{aa:02X}00.PCX` when it exists. Otherwise it crops frame 0 of row `aa` from the pet's sheet (`frame_index` rect) and maps it through `classify` to indices 0–3. `ref_png` uses it.
+- **`STATE_REFS`** gains:
+  - `needs_rehab: (0x27, 0x04, 0x0B)` (rehab, critical tired, miserable);
+  - `starving: (0x05, 0x09, 0x0C)` (critical hungry, warning hungry, feeding).
+- **`STATE_BRIEFS`** gains (exact copy):
+  - needs_rehab: "Needs rehab. The {pet} can barely stay upright: knees buckling, shaking, holding on with both arms to something solid (a post, a railing or a walking frame) to keep itself standing, heavy eyes, a few wobble lines. Clearly worse than its idle pose. Nothing else in the frame."
+  - starving: "Starving. The {pet} looks starved: visibly thinner and droopier than its idle pose, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly. Clearly different from its idle pose. Nothing else in the frame."
+- **`FLAT_FILL`** (text in the constraints delta) goes into every `state_prompt` after `style()`, before the owner note.
+- **Profile `"slug"`:**
+  - `noun "slug"`;
+  - `identity`: 4 to 6 sentences describing `020100`, written from the decoded frame and shown in the gallery;
+  - `freedom`; `poses {}`; `strips {}`;
+  - `min_blob`: the smallest component in the Slug's shipped art;
+  - `cfg` and `sheet` from `ART_PETS`.
+
+- [ ] **Step 1: failing tests.** In `test_bornpets_art_check.py` (rename or replace the 50-based tests):
+```python
+def test_states_are_twelve_with_ids(self): ...          # len 12; STATES[10] == "needs_rehab", STATES[11] == "starving"
+def test_new_files_are_seventy_two(self): ...           # len 72; "022900.PCX", "023400.PCX", "003300.PCX", "073400.PCX" in;
+                                                        # every int(name[2:4], 16) in 0x29..=0x34
+def test_existing_slug_files_stay_protected(self): ...  # is_protected: "020100.PCX", "021500.PCX", "022800.PCX" True;
+                                                        # "022900.PCX", "023400.PCX" False; "002000.PCX", "040600.PCX" True
+def test_diff_fails_on_a_changed_protected_file(self): ...  # old/new with 020100 differing -> protected_changed == ["020100.PCX"],
+                                                        # CLI exit 1; identical 020100 + added 022900 -> exit 0
+def test_retired_are_drained_and_third_relax_frames(self): ...  # RETIRED == the 21 names exactly; none starts "02";
+                                                        # none is_protected; none in new_files()
+def test_limit_from_the_measured_volume(self): ...      # tmp to-badge: 404 clusters of PCX, BPETS_V3.CFG 11483 B,
+                                                        # MANIFEST.TXT 8563 B -> limit == 80, cfg_growth 1, manifest_growth 1;
+                                                        # the same tree plus the 21 RETIRED files present -> limit still 80
+def test_manifest_lines_for_the_new_files(self): ...    # 72 lines; "022900.PCX SLUG_TIPSY_F1\n" and
+                                                        # "003300.PCX BARTHO_NEEDS_REHAB_F1\n" in; sum of lengths == 2040
+def test_budget_uses_the_computed_limit(self): ...      # 71 x 1000 B + 1 x 2049 B -> total 73, over == [that name],
+                                                        # limit == volume_limit()["limit"], fits iff total <= limit
+def test_pcx_bytes_matches_exported_files(self): ...    # every PCX in assets/to-badge of prefix 00..07:
+                                                        # pcx_bytes(decode_pcx(f)[2]) == f.stat().st_size
+def test_fit_notes_only_for_over_frames(self): ...      # over ["063200.PCX"] at 2300 B -> {"badger_throwing_up_0":
+                                                        # FIT_NOTE.format(bytes=2300)}; owner note for it -> starts with it
+```
+  In `test_bornpets_ai_frames.py`:
+```python
+def test_every_state_has_a_brief_and_two_to_four_refs(self): ...  # amended: 12 states; every ref resolves through
+                                                        # ref_rows for all six prefixes (to-badge or sheet)
+def test_ref_falls_back_to_the_sheet(self): ...         # TO_BADGE patched to a tmp dir without 050600 ->
+                                                        # ref_rows("05", 0x06) is 75 rows x 152 of indices 0..3;
+                                                        # ref_rows("05", 0x07) from the sheet == decode_pcx of 050700
+def test_every_prompt_asks_for_flat_fills(self): ...    # FLAT_FILL in state_prompt(s) for every s; with a note,
+                                                        # prompt.index(FLAT_FILL) < prompt.index(note)
+def test_new_state_briefs_follow_the_owner(self): ...   # "holding on" in needs_rehab brief; "starved" in starving brief
+def test_frame_index_has_the_states(self): ...          # amended: all six pets incl. slug: load_sequences has 53 rows;
+                                                        # rows 0x29..0x34 are "<seq>_<state>" 152x75 x1; frame_index()
+                                                        # holds the 12 state ids
+```
+  In `test_copy_assets.py` (`RepoAssetsTest`):
+```python
+def test_retired_art_is_gone_with_remove_lines(self): ...  # no RETIRED name in ASSETS_DIR; each has exactly one "remove"
+                                                        # line; when `git cat-file -e main:assets/to-badge/<name>` works,
+                                                        # that blob's sha256 is on its line
+def test_no_slug_or_hand_added_file_is_retired(self): ... # no remove line for 02xxxx or the 61 hand-added names
+def test_manifest_has_no_retired_lines(self): ...       # no MANIFEST.TXT line starts with a RETIRED name
+def test_relaxing_frames_stay_contiguous(self): ...     # 0E frames present per PP: 00 {00}, 01 {00,01}, 02 {00,01},
+                                                        # 05/06/07 {00,01}: always 00..n-1, no gap
+```
+- [ ] **Step 2: run and see them fail.** Run each of `test_bornpets_art_check.py`, `test_bornpets_ai_frames.py` and `test_copy_assets.py` on its own with `nice -n 19 python3 -I -m unittest discover -s scripts -p '<file>'`: FAIL on the new tests.
+- [ ] **Step 3: implement the tooling.**
+  - Remove `NEW_PCX_BUDGET`, `ASSUMED_USED` and their test (R15).
+  - Do not touch any Rust.
+  - If `test_pcx_bytes_matches_exported_files` fails on asset-gen's encoding, say so. A4c/A4d then measure only through `export` + `budget`, and `pcx_bytes` is removed.
+  - Commit `feat(assets): six pets, twelve states, computed space limit, sheet refs` with the scripts tests green. The `test_copy_assets.py` retirement tests stay red until step 5, so commit them in step 5.
+- [ ] **Step 4: json5 and migrate.**
+  - Copy the six json5 files and the six committed sheets to `target/v3art/old2/`.
+  - Export the eight configs to `target/v3art/export-base`.
+  - Add rows `0x33`/`0x34` to the five pets.
+  - For the Slug, add `0x1F` `reserved_1f`, `0x20`–`0x28` `hand_added_20`…`28` (sizes as for Bartholomeus) and `0x29`–`0x34`.
+  - Then per pet: `taskset -c 2,3 nice -n 19 $A migrate target/v3art/old2/<json5> assets/<json5>`. Expect 2 new frames for each of the five and 22 new for the Slug.
+  - Export to `target/v3art/export-mig2`. Then `bornpets_art_check.py diff target/v3art/export-base target/v3art/export-mig2`:
+    - expect `changed`, `removed`, `added` and `protected_changed` all 0;
+    - the A4 frames and every existing Slug file are byte-identical.
+  - On any difference, stop and report.
+  - The ai_frames tests now pass. Commit `feat(assets): sheet rows for needs rehab, starving and the Slug (layout only)`.
+- [ ] **Step 5: retire the 21 files** (owner decision 1 and 2), in one commit:
+  - write each `remove` line from `sha256sum` of the file at `main`, plus any other version in `git log --all -- assets/to-badge/<name>`;
+  - `git rm` the 21 files;
+  - delete their 21 MANIFEST lines by hand (never regenerate it);
+  - append main's MANIFEST.TXT sha256 to the `replace MANIFEST.TXT` line.
+
+  Then:
+  - `test_copy_assets.py` passes: the four new tests plus plan 7's `test_repo_assets_fit_the_volume`, `test_hand_added_pcx_are_kept` (still 61) and `test_repo_changes_load_and_touch_no_protected_file`;
+  - `nice -n 19 python3 -I scripts/check_badge_pcx.py` exits 0.
+
+  Commit `chore(assets): retire the unmapped Drained art and Relax's third frame`.
+- [ ] **Step 6: measure.** Run `bornpets_art_check.py budget target/v3art/export-mig2`. Expect `used 404`, `limit 80` and `MISSING` for the 22 not-yet-drawn names. Report the measured limit; it wins over the 80.
+- [ ] **Step 7: README.** Add rows for `fit-notes` and `inventory`, the 12-state list, and the sheet-ref fallback. Commit it with step 3, or in its own `docs(assets)` commit.
+- [ ] **Step 8: V.**
+- [ ] **Step 9: docs.**
+  - Design: add §1.10 with the owner decisions of this amendment, verbatim.
+  - Design: add §3.6 for the planner's calls: the ids `0x33`/`0x34`, the briefs and refs, `FLAT_FILL`, the limit formula, `ref_rows` falling back to the sheet, and the amended gallery as round 1.
+  - Roadmap row 9: six pets, 12 states, 72 PCX within the computed limit, 21 files retired.
+  - Commit `docs(plan9): amendment 1 decisions`.
+
+### Task A4c: style calibration, new frames, regenerate the over ones, Bartholomeus notes
+
+**Files:** the six sheet PNGs (working tree, then a `wip(assets)` commit at the end).
+
+**Paid-call cap: 52.** That is 3 calibration calls, 3 for a second calibration if needed, 22 new frames, 22 regenerations of over frames and 2 owner-note redraws (as listed, 52). Retries of failed calls count against the cap. At the cap, stop and report.
+
+- [ ] **Step 1: calibrate `FLAT_FILL` (3 calls).**
+  - Run `state --force --states tipsy` for `seastar` (2153 B today), `state --force --states throwing_up` for `badger`, and `state --states tipsy` for `slug`.
+  - Quality `medium`, `--key-file <scratchpad>/openai.key`.
+  - Check `pcx_bytes(cut frame)`: expect each ≤ 2048, and the drift flags no worse than the A4 frame's (`outline`, `size`, `position`, `cut_off`).
+  - If any is over, adjust the `FLAT_FILL` wording once (TDD: the step-1 test of A4b still passes) and recalibrate (3 more calls).
+  - If it is still over after that, stop and report the bytes.
+- [ ] **Step 2: new frames (22 calls).**
+  - `BORNPETS_PET=slug … state` makes the 12 Slug states. The calibrated tipsy is cached, so this is 11 calls.
+  - For each of bartholomeus, cat, panda, badger and seastar: `state --states needs_rehab,starving`.
+  - That totals 21; the 22nd is Slug tipsy from step 1.
+- [ ] **Step 3: regenerate the A4 frames over 2048 B** (at most 22 calls, fewer for those calibrated in step 1).
+  - `bornpets_art_check.py fit-notes target/v3art/export-r1 -o target/v3art/notes/fit-1.json`.
+  - Then per pet: `state --note-file target/v3art/notes/fit-1.json`.
+  - Only the listed frames are called. A re-run with the same file costs nothing (`needs_call`).
+- [ ] **Step 4: Bartholomeus owner notes (2 calls).**
+  - Write `target/v3art/notes/owner-2026-11-15.json`. The owner's words come first, verbatim:
+    - `"bartho_hung_over_0": "Make it tilt it's head forwards because it has a headache. (Head tilted forward, one hand pressed to the forehead, the ice pack on top.)"`
+    - `"bartho_injured_0": "No cast or band aid? (A clearly visible white cast on one leg and a band-aid on the head.)"`
+  - Run `BORNPETS_PET=bartholomeus … state --note-file target/v3art/notes/owner-2026-11-15.json`.
+  - If either frame is also over 2048 B in step 3, it is done here only, with `fit_notes(..., owner_notes)` merging the two notes into one call.
+- [ ] **Step 5: assemble, export and diff.**
+  - Per pet: `assemble --only $(… list --states)`.
+  - Export the eight configs to `target/v3art/export-r2`.
+  - `diff target/v3art/export-old target/v3art/export-r2`: `added` == `new_files()`, `changed`/`removed`/`protected_changed` all 0. The Drained names are present in both exports, because the sheets keep them.
+  - `budget target/v3art/export-r2`: report total / limit and the over list.
+- [ ] **Step 6: commit** `wip(assets): v3 state frames for six pets (not owner-approved)`, six sheets only. Then V.
+
+### Task A4d: fit loop
+
+**Paid-call cap: 25**, across two paid passes. The free steps cost nothing.
+
+- [ ] **Step 1: free first.**
+  - Take each frame in `over` that is at most 2252 B (≤ 10 % over), Badger and Starfish first.
+  - Run `simplify --only <fid> --min-island N` for N = 8, 16, 32, checking `pcx_bytes` after each.
+  - Keep the result only when it is ≤ 2048 and the drift flags did not grow. Otherwise restore `frames/<fid>.png` from `raw` by deleting the frame and re-running `state` (cached raw, no call).
+- [ ] **Step 2: paid pass 1.**
+  - If `budget` does not fit: `fit-notes target/v3art/export-r2 -o target/v3art/notes/fit-2.json --owner-notes target/v3art/notes/owner-2026-11-15.json`.
+  - Regenerate only the largest frames, the ones that must fit for `total <= limit`: sort `over` by bytes descending and take `total − limit` of them, at most 15 calls.
+  - Re-assemble, export to `export-r3`, `diff`, `budget`.
+- [ ] **Step 3: paid pass 2.** Same as pass 1 with `fit-3.json` and the frames still over, using the remaining cap (at most 10).
+- [ ] **Step 4: still not fitting → stop.** Report:
+  - the per-pet table (bytes, clusters, flags);
+  - `total`, the measured `limit` and the number of frames over;
+  - the calls used;
+  - the options table from "Budget" (reserved-range files 11 clusters, row trims with measured clusters, fewer states, the guard, and Lights Out at 0 clusters, flash only).
+
+  The controller asks the owner. No further paid call.
+- [ ] **Step 5: fits.**
+  - Run `review target/v3art/export-r<n> --round 1`.
+  - Commit `wip(assets): state frames fit the volume (total T / limit L)`, six sheets only.
+  - V, then hand the review path to the controller.
+
+### Task A5 (amended): the owner gallery
+
+Changes to Task A5 above:
+- **Manifest** (`write_review`):
+  - 72 frames over six pets, the Slug included; with the litter, 77 entries;
+  - `budget: {"total", "limit" (computed), "fits"}`;
+  - `"retired": RETIRED` (shown as a list, no pictures);
+  - `"candidates"`: `CANDIDATES` with each word's stand-in and the 2026-11-14 owner note where one exists, for the owner to confirm or reopen. They are not generated in this plan;
+  - per frame, `"note"`: the owner note used, when one was used (the Bartholomeus hung over, injured, needs rehab and starving frames).
+- **Tests** (amend in `test_bornpets_art_check.py`):
+  - `test_review_writes_manifest_and_files`: a tmp export with the 72 names gives 72 frames; `slug/sheet.png` and `slug/idle.png` exist; `budget.limit == volume_limit()["limit"]`; `retired` has 21 entries; `candidates` is not empty and contains `"wash"`;
+  - `test_review_lists_the_floor_items`: 77 frames with the litter.
+- **Rounds** start at round 1 here (the A4 files were never shown). The 3-round cap counts from this round.
+  - Each round's calls are the owner's flagged frames only, with their notes.
+  - Any frame whose redraw goes over 2048 B gets A4d's free step and then at most one paid fit call, inside that round.
+  - Floor items: at most 5 calls a round.
+- **Finish** (A5 step 3) uses the computed limit. `diff` shows only the 72 added. The commit has the six sheets and the litter strip: `feat(assets): v3 state art for six pets and floor litter (owner-approved, round r)`. Its body gives the total / limit and the date of approval.
+
+### Part B deltas (record now; apply after the rebase)
+
+- **B1.**
+  - Add `NeedsRehab` (`0x33`) and `Starving` (`0x34`).
+  - `presence_slot`: `0x20..=0x34 → 21..=41`; `PRESENCE_SLOTS = 42`, so 9 × 42 × 2 = 756 B (+18 B against today's 738, not −18).
+  - `DisplayAnim::ALL` has 36 entries.
+  - Debug names "NEEDS REHAB" and "STARVING".
+  - The tests' upper bound moves to `0x34 -> Some(41)`, `0x35 -> None`.
+  - Whether `PP_MAX` can drop to 8 now that the Jellyfish is gone is a Part B call, to be checked at the rebase.
+- **B2.**
+  - `art_for_word`: `Starving → Starving`, `NeedsRehab → NeedsRehab`. Every pet without the files keeps today's stand-in through `shown_anim`.
+  - `art_follows_the_first_word` covers the two new rows.
+- **B4.**
+  - Ship the 72 files (`new_files()`) and 72 MANIFEST lines by hand.
+  - `test_only_new_art_was_added`: 72 `A`, 21 `D` (the `RETIRED` from A4b), `M` only for `MANIFEST.TXT` and `BPETS_V3.CFG`.
+  - `five_pets_have_every_state_frame` becomes `six_pets_have_every_state_frame` (PP 0, 1, 2, 5, 6, 7: `frame_count == 1` for the 12 variants).
+  - `the_slug_keeps_its_stand_ins` becomes `a_pet_without_files_shows_its_stand_in` (`shown_anim(|_| false) == display_anim()` for a tipsy and a stuffed-session state).
+  - New `relaxing_has_two_frames_and_loops` in `tests/state_art.rs` `mod files`:
+    - `frame_count(PetKind(5|6|7), Relaxing) == 2`, Cat and Slug 2, Bartholomeus 1;
+    - `anim_filename(PetKind(5), Relaxing, 2) == pcx_name(5, 0x0E, 0)` and frame index 3 gives frame 1;
+    - a relaxing Panda through `lifecycle::display_anim` shows `Relaxing`, not `Playing`.
+
+    This pins that the count comes from the files present (`count_anim_frames`: `trailing_ones` on the badge, a probe until the first missing file in the sim), so the loop has no gap and no stand-in.
+  - The guard test and `budget` use the computed limit. If the guard fails, the work goes back to A4d. Do not loosen the guard.
+- **Review Focus 1**: "The Slug changes look" now means "an existing Slug frame changes". It is pinned by A4b's `protected_changed` diff and B4's `test_only_new_art_was_added`.
+- **Self-review numbers:** RAM +18 B; root entries 423 of 511; FAT12 per the budget table above.
+
+### Critical Files for Implementation
+- /home/paul/work/badge/bornhack/cyberegg/embedded_graphics/BornHack-Cyberegg-v3art/scripts/bornpets_art_check.py
+- /home/paul/work/badge/bornhack/cyberegg/embedded_graphics/BornHack-Cyberegg-v3art/scripts/bornpets_ai_frames.py
+- /home/paul/work/badge/bornhack/cyberegg/embedded_graphics/BornHack-Cyberegg-v3art/scripts/test_copy_assets.py (after the merge, from plan 7)
+- /home/paul/work/badge/bornhack/cyberegg/embedded_graphics/BornHack-Cyberegg-v3art/assets/asset-changes.txt and assets/to-badge/MANIFEST.TXT (after the merge)
+- /home/paul/work/badge/bornhack/cyberegg/embedded_graphics/BornHack-Cyberegg-v3art/assets/bornpets-sponsors-slug.json5
