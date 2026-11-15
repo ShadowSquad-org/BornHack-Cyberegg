@@ -168,6 +168,7 @@ class StateFlow(Base):
             self.assertIn("size=1536x1024", cmd)
 
     def test_every_state_has_a_brief_and_two_to_four_refs(self):
+        self.assertEqual(len(ac.STATES), 12)
         for s in ac.STATES:
             self.assertIn(s, afm.STATE_BRIEFS)
             self.assertTrue(afm.STATE_BRIEFS[s].endswith("Nothing else in the frame."), s)
@@ -175,10 +176,41 @@ class StateFlow(Base):
             self.assertLessEqual(len(afm.STATE_REFS[s]), 4)
             for prefix, *_ in ac.ART_PETS.values():
                 for aa in (0x01,) + tuple(afm.STATE_REFS[s]):
-                    self.assertTrue((ac.TO_BADGE / f"{prefix}{aa:02X}00.PCX").is_file(),
-                                    f"{prefix}{aa:02X}00.PCX")
+                    rows = afm.ref_rows(prefix, aa)       # to-badge, else the pet's sheet
+                    self.assertEqual((len(rows), len(rows[0])), (75, 152), f"{prefix}{aa:02X}")
         self.assertEqual(set(afm.STATE_REFS), set(ac.STATES))
         self.assertEqual(set(afm.STATE_BRIEFS), set(ac.STATES))
+
+    def test_ref_falls_back_to_the_sheet(self):
+        with tempfile.TemporaryDirectory() as t:
+            with mock.patch.object(afm, "TO_BADGE", Path(t)):
+                rows = afm.ref_rows("05", 0x06)
+                self.assertEqual((len(rows), len(rows[0])), (75, 152))
+                self.assertTrue({v for r in rows for v in r} <= {0, 1, 2, 3})
+                self.assertGreater(sum(v != 3 for r in rows for v in r), 100)
+                self.assertEqual(afm.ref_rows("05", 0x07),
+                                 ac.decode_pcx(ac.TO_BADGE / "050700.PCX")[2])
+                p = Path(t) / "r.png"
+                afm.ref_png("05", 0x06, p)
+                self.assertEqual(Image.open(p).size, afm.CANVAS)
+        # with the file present the file wins
+        self.assertEqual(afm.ref_rows("05", 0x01), ac.decode_pcx(ac.TO_BADGE / "050100.PCX")[2])
+
+    def test_every_prompt_asks_for_flat_fills(self):
+        self.assertIn("FLAT FILLS, SMALL FILE", afm.FLAT_FILL)
+        self.assertTrue(afm.FLAT_FILL.endswith("Solid white stays solid white."))
+        for s in ac.STATES:
+            self.assertIn(afm.FLAT_FILL, afm.state_prompt(s), s)
+            note = "Owner words here."
+            p = afm.state_prompt(s, note)
+            self.assertLess(p.index(afm.FLAT_FILL), p.index(note), s)
+            self.assertGreater(p.index(afm.FLAT_FILL), p.index(afm.style()), s)
+
+    def test_new_state_briefs_follow_the_owner(self):
+        self.assertIn("holding on", afm.STATE_BRIEFS["needs_rehab"])
+        self.assertIn("starved", afm.STATE_BRIEFS["starving"])
+        self.assertEqual(afm.STATE_REFS["needs_rehab"], (0x27, 0x04, 0x0B))
+        self.assertEqual(afm.STATE_REFS["starving"], (0x05, 0x09, 0x0C))
 
     def test_prompt_shape(self):
         p = afm.state_prompt("wired", "bigger can")
@@ -433,22 +465,22 @@ class StateCommand(Base):
             self.assertEqual(out.getpixel((20, 20)), afm.WHITE)
             self.assertFalse((Path(t) / "overrides").exists())
 
-    def test_list_states_prints_ten_ids(self):
+    def test_list_states_prints_twelve_ids(self):
         buf = io.StringIO()
         with mock.patch.object(sys, "argv", ["x", "list", "--states"]), \
                 contextlib.redirect_stdout(buf):
             afm.main()
         ids = buf.getvalue().strip().split(",")
-        self.assertEqual(len(ids), 10)
+        self.assertEqual(len(ids), 12)
         self.assertEqual(ids[0], "panda_tipsy_0")
-        self.assertEqual(ids[-1], "panda_throwing_up_0")
+        self.assertEqual(ids[-1], "panda_starving_0")
 
 
 class V3StateRows(unittest.TestCase):
     def test_frame_index_has_the_states(self):
         for pet, (_prefix, cfg, _sheet, seq) in ac.ART_PETS.items():
             seqs = afm.load_sequences(ac.REPO / "assets" / cfg)
-            self.assertEqual(len(seqs), 51, pet)
+            self.assertEqual(len(seqs), 53, pet)
             for i, state in enumerate(ac.STATES):
                 s = seqs[0x29 + i]
                 self.assertEqual(
@@ -473,8 +505,8 @@ class Profiles(unittest.TestCase):
             "assert any(k.startswith(ac.ART_PETS[pet][3] + '_') for k in idx) if pet in ac.ART_PETS else True\n"
             % str(SCRIPTS)
         )
-        # the Jellyfish is gone (plan 7); the five art pets are loaded here.
-        for pet in ("bartholomeus", "cat", "panda", "badger", "seastar"):
+        # the Jellyfish is gone (plan 7); the six art pets (the Slug since A4b) are loaded here.
+        for pet in ("bartholomeus", "cat", "slug", "panda", "badger", "seastar"):
             env = {k: v for k, v in os.environ.items() if k != "BORNPETS_PET"}
             env["BORNPETS_PET"] = pet
             res = REAL_RUN([sys.executable, "-I", "-c", code, pet],

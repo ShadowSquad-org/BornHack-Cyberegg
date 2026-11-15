@@ -61,13 +61,127 @@ class Checker(unittest.TestCase):
     def test_clusters_at_the_boundary(self):
         self.assertEqual([ac.clusters(n) for n in (0, 1, 2048, 2049)], [0, 1, 1, 2])
 
-    def test_new_files_are_the_fifty(self):
+    def test_states_are_twelve_with_ids(self):
+        self.assertEqual(len(ac.STATES), 12)
+        self.assertEqual(ac.STATES[10], "needs_rehab")
+        self.assertEqual(ac.STATES[11], "starving")
+        self.assertEqual(ac.FIRST_STATE_ANIM + 10, 0x33)
+        self.assertEqual(len(ac.ART_PETS), 6)
+        self.assertEqual(ac.ART_PETS["slug"],
+                         ("02", "bornpets-sponsors-slug.json5", "bornpets-sprites-slug.png", "slug"))
+        self.assertEqual(set(ac.INVENTORY_PETS), set(ac.ART_PETS))
+
+    def test_new_files_are_seventy_two(self):
         names = ac.new_files()
-        self.assertEqual(len(names), 50)
+        self.assertEqual(len(names), 72)
         self.assertEqual(names, sorted(names))
-        self.assertIn("002900.PCX", names)
-        self.assertIn("073200.PCX", names)
-        self.assertFalse([n for n in names if n.startswith("02")])
+        for n in ("022900.PCX", "023400.PCX", "003300.PCX", "073400.PCX"):
+            self.assertIn(n, names)
+        for n in names:
+            self.assertIn(int(n[2:4], 16), range(0x29, 0x35))
+
+    def test_existing_slug_files_stay_protected(self):
+        for n in ("020100.PCX", "021500.PCX", "022800.PCX", "002000.PCX", "040600.PCX"):
+            self.assertTrue(ac.is_protected(n), n)
+        for n in ("022900.PCX", "023400.PCX"):
+            self.assertFalse(ac.is_protected(n), n)
+
+    def test_diff_fails_on_a_changed_protected_file(self):
+        with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
+            Path(o, "020100.PCX").write_bytes(b"old")
+            Path(n, "020100.PCX").write_bytes(b"new")
+            res = ac.diff_exports(o, n)
+            self.assertEqual(res["protected_changed"], ["020100.PCX"])
+            self.assertEqual(ac.main(["diff", o, n]), 1)
+        with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
+            Path(o, "020100.PCX").write_bytes(b"same")
+            Path(n, "020100.PCX").write_bytes(b"same")
+            Path(n, "022900.PCX").write_bytes(b"new")
+            res = ac.diff_exports(o, n)
+            self.assertEqual(res["protected_changed"], [])
+            self.assertEqual(res["added"], ["022900.PCX"])
+            self.assertEqual(ac.main(["diff", o, n]), 0)
+        with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
+            Path(o, "021500.PCX").write_bytes(b"gone")      # in old, not in new
+            self.assertEqual(ac.diff_exports(o, n)["protected_changed"], ["021500.PCX"])
+
+    def test_retired_are_drained_and_third_relax_frames(self):
+        want = ["000600.PCX", "000A00.PCX", "010600.PCX", "010601.PCX", "010A00.PCX", "010A01.PCX",
+                "050600.PCX", "050601.PCX", "050A00.PCX", "050A01.PCX", "060600.PCX", "060601.PCX",
+                "060A00.PCX", "060A01.PCX", "070600.PCX", "070601.PCX", "070A00.PCX", "070A01.PCX",
+                "050E02.PCX", "060E02.PCX", "070E02.PCX"]
+        self.assertEqual(list(ac.RETIRED), sorted(want))
+        self.assertEqual(len(ac.RETIRED), 21)
+        for n in ac.RETIRED:
+            self.assertFalse(n.startswith("02"), n)
+            self.assertFalse(ac.is_protected(n), n)
+            self.assertNotIn(n, ac.new_files())
+
+    def _volume(self, t, pcx_clusters=393, with_retired=False):
+        """404 clusters in all: PCX + BPETS_V3.CFG (6) + MANIFEST.TXT (5)."""
+        for i in range(pcx_clusters):
+            pad_file(Path(t, f"09{i // 256:02X}{i % 256:02X}.PCX"), 100)
+        pad_file(Path(t, "BPETS_V3.CFG"), 11483)
+        pad_file(Path(t, "MANIFEST.TXT"), 8563)
+        if with_retired:
+            for n in ac.RETIRED:
+                pad_file(Path(t, n), 100)
+
+    def test_limit_from_the_measured_volume(self):
+        with tempfile.TemporaryDirectory() as t:
+            self._volume(t)
+            res = ac.volume_limit(t)
+            self.assertEqual(res["limit"], 80)
+            self.assertEqual((res["used"], res["retired_present"], res["base"]), (404, 0, 404))
+            self.assertEqual((res["cfg_growth"], res["manifest_growth"]), (1, 1))
+        with tempfile.TemporaryDirectory() as t:
+            self._volume(t, with_retired=True)
+            res = ac.volume_limit(t)
+            self.assertEqual(res["limit"], 80)
+            self.assertEqual((res["used"], res["retired_present"], res["base"]), (425, 21, 404))
+
+    def test_limit_counts_the_retired_manifest_lines(self):
+        with tempfile.TemporaryDirectory() as t:
+            self._volume(t, with_retired=True)
+            lines = "".join(f"{n} X\n" for n in ac.RETIRED)
+            Path(t, "MANIFEST.TXT").write_text(lines + "x" * (8563 - len(lines)))
+            self.assertEqual(ac.volume_limit(t)["manifest_growth"], 1)
+
+    def test_manifest_lines_for_the_new_files(self):
+        lines = ac.manifest_lines()
+        self.assertEqual(len(lines), 72)
+        self.assertIn("022900.PCX SLUG_TIPSY_F1\n", lines)
+        self.assertIn("003300.PCX BARTHO_NEEDS_REHAB_F1\n", lines)
+        self.assertEqual(sum(len(l) for l in lines), 2040)
+        self.assertEqual([l.split()[0] for l in lines], ac.new_files())
+
+    def test_pcx_bytes_matches_exported_files(self):
+        # Not written by asset-gen: the two start screens and the menu icons 0406xx / 0407xx.
+        hand_made = ("000000", "010000", "0406", "0407")
+        n = 0
+        for f in sorted(ac.TO_BADGE.glob("0[0-7]????.PCX")):
+            if f.name.startswith(hand_made):
+                continue
+            _, _, rows = ac.decode_pcx(f)
+            self.assertEqual(ac.pcx_bytes(rows), f.stat().st_size, f.name)
+            n += 1
+        self.assertGreater(n, 350)
+
+    def test_fit_notes_only_for_over_frames(self):
+        with tempfile.TemporaryDirectory() as t:
+            for name in ac.new_files():
+                pad_file(Path(t, name), 1000)
+            pad_file(Path(t, "063200.PCX"), 2300)
+            res = ac.budget(t)
+            self.assertEqual(res["over"], ["063200.PCX"])
+            self.assertEqual(ac.fit_notes(res), {"badger_throwing_up_0": ac.FIT_NOTE.format(bytes=2300)})
+            out = ac.fit_notes(res, {"badger_throwing_up_0": "Owner words.", "cat_tipsy_0": "unused"})
+            self.assertEqual(out, {"badger_throwing_up_0": "Owner words. " + ac.FIT_NOTE.format(bytes=2300)})
+            dest = Path(t, "sub", "notes.json")
+            owner = Path(t, "owner.json")
+            owner.write_text(json.dumps({"badger_throwing_up_0": "Owner words."}))
+            self.assertEqual(ac.main(["fit-notes", t, "--owner-notes", str(owner), "-o", str(dest)]), 0)
+            self.assertEqual(json.loads(dest.read_text()), out)
 
     def test_diff_flags_changed_removed_and_foreign_added(self):
         with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
@@ -78,7 +192,8 @@ class Checker(unittest.TestCase):
             Path(n, "060E05.PCX").write_bytes(b"x")     # added, not a shipped name
             res = ac.diff_exports(o, n)
             self.assertEqual(res, {"changed": ["000100.PCX"], "removed": ["000200.PCX"],
-                                   "added": ["060E05.PCX"], "protected": []})
+                                   "added": ["060E05.PCX"], "protected": [],
+                                   "protected_changed": []})
             self.assertEqual(ac.main(["diff", o, n]), 1)
 
     def test_diff_ok_when_only_shipped_names_are_added(self):
@@ -93,14 +208,15 @@ class Checker(unittest.TestCase):
             Path(o, "030000.PCX").write_bytes(b"a")
             Path(n, "030000.PCX").write_bytes(b"b")
             self.assertEqual(ac.diff_exports(o, n),
-                             {"changed": [], "removed": [], "added": [], "protected": []})
+                             {"changed": [], "removed": [], "added": [], "protected": [],
+                              "protected_changed": []})
 
     def test_diff_reports_slug_hand_added_and_icons_as_protected(self):
         names = ["021500.PCX", "002000.PCX", "012800.PCX", "022400.PCX", "040600.PCX", "040700.PCX"]
         with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
             for name in names:
                 Path(o, name).write_bytes(b"old")
-                Path(n, name).write_bytes(b"new")
+                Path(n, name).write_bytes(b"old")
             Path(o, "002900.PCX").write_bytes(b"a")    # a new-state name is not protected
             Path(n, "002900.PCX").write_bytes(b"a")
             Path(o, "000900.PCX").write_bytes(b"a")
@@ -111,8 +227,11 @@ class Checker(unittest.TestCase):
             self.assertEqual(res["added"], [])
             self.assertEqual(res["protected"], sorted(names))
             self.assertEqual(ac.main(["diff", o, n]), 0)
-            os.remove(Path(n, "002000.PCX"))      # even a vanished hand-added file is not flagged
-            self.assertEqual(ac.diff_exports(o, n)["removed"], [])
+            os.remove(Path(n, "002000.PCX"))      # a vanished hand-added file is not "removed" ...
+            res = ac.diff_exports(o, n)
+            self.assertEqual(res["removed"], [])
+            self.assertEqual(res["protected_changed"], ["002000.PCX"])   # ... but it is protected_changed
+            self.assertEqual(ac.main(["diff", o, n]), 1)
 
     def test_is_protected_edges(self):
         for name in ("020000.PCX", "0020FF.PCX", "002000.PCX", "002800.PCX", "012100.PCX",
@@ -128,7 +247,7 @@ class Checker(unittest.TestCase):
             pad_file(Path(t, "021500.PCX"), 3000)    # 2 clusters
             pad_file(Path(t, "002000.PCX"), 100)     # 1 cluster
             res = ac.budget(t)
-            self.assertEqual(res["total"], 50)
+            self.assertEqual(res["total"], 72)
             self.assertEqual(res["protected_clusters"], 3)
 
     def test_used_clusters_counts_files_and_budget_reports_drift(self):
@@ -138,7 +257,8 @@ class Checker(unittest.TestCase):
             Path(t, "sub").mkdir()
             self.assertEqual(ac.used_clusters(t), 3)
             res = ac.budget(e, t)
-            self.assertEqual((res["assumed_used"], res["measured_used"]), (429, 3))
+            self.assertEqual(res["measured_used"], 3)
+            self.assertEqual(res["limit"], ac.volume_limit(t)["limit"])
             self.assertEqual(ac.budget(e)["measured_used"], ac.used_clusters(ac.TO_BADGE))
 
     def test_budget_on_a_missing_export_dir_is_a_clear_error(self):
@@ -148,24 +268,27 @@ class Checker(unittest.TestCase):
                 ac.budget(gone)
             self.assertIn(str(gone), str(cm.exception))
 
-    def test_budget_counts_and_lists_files_over_2048(self):
+    def test_budget_uses_the_computed_limit(self):
         with tempfile.TemporaryDirectory() as t:
             names = ac.new_files()
-            for name in names[:49]:
+            for name in names[:71]:
                 pad_file(Path(t, name), 1000)
-            pad_file(Path(t, names[49]), 2049)
+            pad_file(Path(t, names[71]), 2049)
             res = ac.budget(t)
-            self.assertEqual(res["total"], 51)
-            self.assertEqual(res["over"], [names[49]])
-            self.assertTrue(res["fits"])
-            self.assertEqual(ac.main(["budget", t]), 0)
+            self.assertEqual(res["total"], 73)
+            self.assertEqual(res["over"], [names[71]])
+            self.assertEqual(res["limit"], ac.volume_limit()["limit"])
+            self.assertEqual(res["fits"], res["total"] <= res["limit"])
+            self.assertNotIn("assumed_used", res)
+            self.assertFalse(hasattr(ac, "NEW_PCX_BUDGET"))
+            self.assertFalse(hasattr(ac, "ASSUMED_USED"))
 
     def test_budget_over_the_limit_does_not_fit(self):
         with tempfile.TemporaryDirectory() as t:
             for name in ac.new_files():
                 pad_file(Path(t, name), 2500)
             res = ac.budget(t)
-            self.assertEqual(res["total"], 100)
+            self.assertEqual(res["total"], 144)
             self.assertFalse(res["fits"])
             self.assertEqual(ac.main(["budget", t]), 1)
 
@@ -229,9 +352,11 @@ class Checker(unittest.TestCase):
             self.assertEqual(mpath, Path(o) / "manifest.json")
             m = json.loads(mpath.read_text())
             self.assertEqual(m["round"], 1)
-            self.assertEqual(m["budget"]["limit"], 55)
-            self.assertEqual(m["budget"]["total"], 50)
-            self.assertEqual(len(m["frames"]), 50)
+            self.assertEqual(m["budget"]["limit"], ac.volume_limit()["limit"])
+            self.assertEqual(m["budget"]["total"], 72)
+            self.assertEqual(len(m["frames"]), 72)
+            self.assertTrue(Path(o, "slug/sheet.png").is_file())
+            self.assertTrue(Path(o, "slug/idle.png").is_file())
             self.assertTrue(m["budget"]["fits"])
             self.assertTrue(old.exists())
             f0 = m["frames"][0]
@@ -277,9 +402,9 @@ class Checker(unittest.TestCase):
             self._export(e)
             os.remove(Path(e, "063200.PCX"))
             m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 50)
+            self.assertEqual(len(m["frames"]), 72)
             self.assertFalse(m["budget"]["fits"])
-            self.assertEqual(m["budget"]["total"], 49)
+            self.assertEqual(m["budget"]["total"], 71)
             gone = [f for f in m["frames"] if f["missing"]]
             self.assertEqual([f["pcx"] for f in gone], ["063200.PCX"])
             self.assertIsNone(gone[0]["file"])
@@ -353,7 +478,7 @@ class Checker(unittest.TestCase):
                 tempfile.TemporaryDirectory() as lit:
             self._export(e)
             m = json.loads(ac.write_review(e, 2, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 50)
+            self.assertEqual(len(m["frames"]), 72)
             self.assertFalse(Path(o, "floor").exists())
 
     def test_review_lists_the_floor_items(self):
@@ -376,8 +501,8 @@ class Checker(unittest.TestCase):
             Image.new("RGBA", (152, 10), (0, 0, 0, 0)).save(lit / "strip.png")
             (lit / "metrics.json").write_text(json.dumps(metrics))
             m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 55)
-            self.assertEqual(m["budget"]["total"], 50)
+            self.assertEqual(len(m["frames"]), 77)
+            self.assertEqual(m["budget"]["total"], 72)
             floor = [f for f in m["frames"] if f["pet"] == "floor"]
             self.assertEqual([f["state"] for f in floor], list(ac.FLOOR_ITEMS))
             for f in floor:

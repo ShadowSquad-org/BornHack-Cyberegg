@@ -15,7 +15,7 @@ deps beyond stdlib.
 | `png_to_badge_pcx.py` | dev (assets)       | PNG → badge PCX (152×152, 2bpp, black/red/white), scale-to-fit    |
 | `fix_badge_pcx.py`    | dev (assets)       | Re-packs a wrong-depth PCX (4bpp/8bpp, incl. ones Pillow can't open) to badge 2bpp, **preserving dimensions** |
 | `check_badge_pcx.py`  | dev (assets)       | Validates a directory of `PPAAFF.PCX` against the badge decoder rules |
-| `bornpets_art_check.py` | dev (assets)     | BornPets v3 new-state art: `diff` two exports, `budget` (FAT12 clusters), `review` files for the owner gallery |
+| `bornpets_art_check.py` | dev (assets)     | BornPets v3 new-state art: `diff` two exports (fails on a changed protected file), `budget` (FAT12 clusters against the computed limit), `fit-notes` (notes for frames over 2048 B), `inventory`, `review` files for the owner gallery |
 | `bornpets_litter.py`  | dev (assets)       | BornPets floor litter in the pets' style via the OpenAI images API: `generate` (5 items, `--note-file` feedback), `assemble` the strip, `rust` (only from a committed strip) / `check` the firmware source |
 
 ### BornPets sheet export order (`asset-gen export`)
@@ -31,7 +31,7 @@ bornpets-sponsors-badger.json5 bornpets-sponsors-seastar.json5
 
 Not `bornpets-sponsors.json5`, `-v2` or `-v3`. Never export into `assets/to-badge`
 directly; export to `target/` and compare with `bornpets_art_check.py diff`. The
-five art pets (`ART_PETS`) have rows `0x29`-`0x32` for the v3 states; add or
+six art pets (`ART_PETS`, the Slug included) have rows `0x29`-`0x34` for the 12 v3 states; add or
 re-layout rows with `asset-gen migrate <old json5> <new json5>` so existing frames keep their places.
 
 ---
@@ -340,7 +340,7 @@ apply afterwards (via USB hub for asset copy).
 
 ## BornPets v3 state-frame art (`bornpets_ai_frames.py`, `bornpets_art_check.py`)
 
-The ten new state frames of each art pet (tipsy ... throwing up) are drawn from the
+The twelve new state frames of each art pet (tipsy, wasted, hung over, sore, injured, groggy, stuffed, thirsty, wired, throwing up, needs rehab, starving; anim ids `0x29`-`0x34`) are drawn from the
 pet's own shipped frames, so the character stays consistent: idle plus two or three
 frames from the design table go to `/v1/images/edits` as `image[]`, every one at x6
 in the same rectangle of a 1536x1024 magenta canvas. The result is cut back to the
@@ -353,7 +353,7 @@ API key rules (the key never touches argv, only curl's stdin via `-K -`):
 - A key file is refused when it is inside the repo or has any group/other permission
   bits (use `chmod 600`). The error names the path, never the content.
 
-Commands (one pet per process; `BORNPETS_PET=bartholomeus|cat|panda|badger|seastar`):
+Commands (one pet per process; `BORNPETS_PET=bartholomeus|cat|slug|panda|badger|seastar`):
 
 ```
 BORNPETS_PET=panda scripts/bornpets_ai_frames.py --key-file ~/.config/openai/api-key \
@@ -364,7 +364,17 @@ BORNPETS_PET=panda scripts/bornpets_ai_frames.py simplify --only panda_tipsy_0 -
                        # merge enclosed specks of frames/<id>.png in place
 BORNPETS_PET=panda scripts/bornpets_ai_frames.py list --states
 scripts/bornpets_art_check.py diff|budget|review ...     # export diff, FAT12 budget, review files
+scripts/bornpets_art_check.py fit-notes EXPORT [--owner-notes F] -o OUT
+                       # {frame_id: note} for the frames over 2048 B (owner words first)
+scripts/bornpets_art_check.py inventory   # word x pet table -> target/v3art/inventory.json
 ```
+
+Space: `budget` compares the 72 new files with `volume_limit()`, which is computed from the
+real `assets/to-badge` (502 clusters, minus the 16-cluster guard, minus what the tree uses
+without the `RETIRED` files, minus the growth of `BPETS_V3.CFG` and `MANIFEST.TXT`). Every
+state prompt carries `FLAT_FILL` (flat colours, no dither or texture) so frames stay under
+2048 B. A reference frame (`ref_rows`) is the shipped PCX, or, when that file was retired
+(the Drained rows `06`/`0A`), the same cell cropped from the pet's sheet.
 
 Working files live in `--work` (default `target/<pet>-gen`): `ref/` the reference
 canvases, `raw/` API results, `frames/` the cut frames. The owner gallery written by

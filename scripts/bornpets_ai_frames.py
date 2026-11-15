@@ -599,6 +599,23 @@ PANDA_FREEDOM = (
     "is a virtual-pet game and the scene should read instantly at a glance."
 )
 
+SLUG_IDENTITY = (
+    "The character is this game's slug: a soft white garden slug seen from the side, "
+    "with a rounded head hump on the left and a long low body that trails away to the "
+    "right and ends in a flat-bottomed tail, all drawn with one thin continuous black "
+    "outline and a plain white fill. Two long thin eyestalks rise from the head, each "
+    "ending in a round eye with a black pupil dot and a tuft of little eyelash strokes. "
+    "On the head hump are two small curved black marks and a gentle curved smile. Red is "
+    "used only for small accents such as cheeks, hearts and props. Anyone must recognise "
+    "it as the same slug in every frame."
+)
+SLUG_FREEDOM = (
+    "Compose this frame yourself: choose the slug's posture, expression and the props "
+    "that best tell the viewer what is happening, keeping its thin, even line weight. "
+    "Be playful - this is a virtual-pet game and the scene should read instantly at a "
+    "glance. Props are small and drawn with the same thin outlines."
+)
+
 NEW_PROFILES: dict[str, dict] = {
     "bartholomeus": {
         "noun": "Bartholomeus",
@@ -621,6 +638,17 @@ NEW_PROFILES: dict[str, dict] = {
         "min_blob": 8,
         "cfg": ART_PETS["cat"][1],
         "sheet": ART_PETS["cat"][2],
+    },
+    "slug": {
+        "noun": "slug",
+        "markings": "its eyestalks, eyes with their eyelashes, the marks on its head and its outline",
+        "identity": SLUG_IDENTITY,
+        "freedom": SLUG_FREEDOM,
+        "poses": {},
+        "strips": {},
+        "min_blob": 1,
+        "cfg": ART_PETS["slug"][1],
+        "sheet": ART_PETS["slug"][2],
     },
     "panda": {
         "noun": "panda",
@@ -1283,6 +1311,8 @@ STATE_REFS: dict[str, tuple[int, ...]] = {
     "thirsty": (0x09, 0x25),
     "wired": (0x0F, 0x02, 0x23),
     "throwing_up": (0x03, 0x0C, 0x23),
+    "needs_rehab": (0x27, 0x04, 0x0B),   # rehab, critical tired, miserable
+    "starving": (0x05, 0x09, 0x0C),      # critical hungry, warning hungry, feeding
 }
 
 STATE_BRIEFS: dict[str, str] = {
@@ -1296,7 +1326,17 @@ STATE_BRIEFS: dict[str, str] = {
     "thirsty": "Thirsty. The {pet} pants with its tongue out beside an empty glass, one sweat drop on its brow. Nothing else in the frame.",
     "wired": "Wired. Overexcited: wide eyes, fur on end, jittery motion lines, a red energy-drink can in its paw. Nothing else in the frame.",
     "throwing_up": "Throwing up after sport on a full belly. The {pet} bends over with dizzy eyes and a cartoon splash of sick drawn in WHITE with a thick BLACK outline in front of it, a few wobbly lines. No red anywhere in the sick. Nothing else in the frame.",
+    "needs_rehab": "Needs rehab. The {pet} can barely stay upright: knees buckling, shaking, holding on with both arms to something solid (a post, a railing or a walking frame) to keep itself standing, heavy eyes, a few wobble lines. Clearly worse than its idle pose. Nothing else in the frame.",
+    "starving": "Starving. The {pet} looks starved: visibly thinner and droopier than its idle pose, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly. Clearly different from its idle pose. Nothing else in the frame.",
 }
+
+# Every state prompt carries this, after style() and before any owner note (amendment 1):
+# the 72 frames have to fit the volume, and a frame over 2048 B costs a second cluster.
+FLAT_FILL = (
+    "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no "
+    "texture, no stippling, no speckles or scattered dots; few small details; every outline a "
+    "continuous unbroken line. Solid white stays solid white."
+)
 
 
 def pet_prefix() -> str:
@@ -1321,10 +1361,30 @@ def key_canvas(rows_w: int, rows_h: int, rows: list[list[int]], scale: int,
     return canvas
 
 
+_INDEX = {BLACK: 0, RED: 1, WHITE: 2, TRANSPARENT: 3}
+
+
+def ref_rows(prefix: str, aa: int) -> list[list[int]]:
+    """Frame 0 of anim row `aa` as badge indices (0 black, 1 red, 2 white, 3 transparent).
+
+    The shipped PCX when assets/to-badge has it; otherwise the same cell cropped from the
+    pet's sheet (the retired Drained rows keep their cells there) and mapped through classify.
+    """
+    pcx = TO_BADGE / f"{prefix}{aa:02X}00.PCX"
+    if pcx.is_file():
+        return decode_pcx(pcx)[2]
+    _pet, (_pp, cfg, sheet, _seq) = next((k, v) for k, v in ART_PETS.items() if v[0] == prefix)
+    seq = load_sequences(REPO / "assets" / cfg)[aa]
+    x, y, w, h = seq.frame_rect(0)
+    cell = Image.open(REPO / "assets" / sheet).convert("RGBA").crop((x, y, x + w, y + h))
+    px = cell.load()
+    return [[_INDEX[classify(px[cx, cy])] for cx in range(w)] for cy in range(h)]
+
+
 def ref_png(prefix: str, aa: int, path: Path) -> None:
     """A shipped frame at a fixed scale in a fixed rectangle of the API canvas."""
-    w, h, rows = decode_pcx(TO_BADGE / f"{prefix}{aa:02X}00.PCX")
-    key_canvas(w, h, rows, REF_SCALE, REF_ORIGIN).save(path)
+    rows = ref_rows(prefix, aa)
+    key_canvas(len(rows[0]), len(rows), rows, REF_SCALE, REF_ORIGIN).save(path)
 
 
 def state_refs(prefix: str, state: str, work: Path) -> list[Path]:
@@ -1350,7 +1410,8 @@ def state_prompt(state: str, note: str | None = None) -> str:
         "their line weight and style, not their poses.\n\n"
         f"{STATE_BRIEFS[state].format(pet=pet)}\n\n"
         f"{FREEDOM}\n\n"
-        f"{style()}"
+        f"{style()}\n\n"
+        f"{FLAT_FILL}"
     )
     if note:
         text += f"\n\nOwner feedback on the previous attempt: {note}"

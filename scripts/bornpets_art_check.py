@@ -2,11 +2,15 @@
 """BornPets v3 art checker: export diff, FAT12 space budget, drift metrics, review files.
 
 Subcommands:
-  diff OLD NEW             list changed / removed / added PCX of the five art pets;
-                           exit 1 on any changed or removed file, or an added file
-                           that is not one of the 50 shipped new-state names.
-  budget EXPORT            FAT12 cost (2 KiB clusters) of the 50 new PCX; exit 1
-                           unless it fits NEW_PCX_BUDGET (or a file is missing).
+  diff OLD NEW             list changed / removed / added PCX of the six art pets;
+                           exit 1 on any changed or removed file, a protected file that
+                           changed or vanished, or an added file that is not one of the
+                           72 shipped new-state names.
+  budget EXPORT            FAT12 cost (2 KiB clusters) of the 72 new PCX; exit 1
+                           unless it fits volume_limit() (or a file is missing).
+  fit-notes EXPORT [--owner-notes F] -o OUT
+                           write {frame id: note} for the frames over 2048 B, for
+                           bornpets_ai_frames.py state --note-file.
   inventory                word x pet table of the art each status word / action shows;
                            writes target/v3art/inventory.json (Task M1).
   review EXPORT --round N  write the owner-gallery files under target/v3art/review
@@ -32,10 +36,12 @@ metrics.json entry, still gets an entry: "missing": true, or the flag "no_metric
 Completeness: write_review never drops a frame silently. A missing export PCX or floor item
 gets a manifest entry with "missing": true and the flag "missing"; budget.fits is false then.
 
-Protected files (PROTECTED / is_protected): the Slug (02xxxx), hand-added rows 0x20-0x28 of
-prefixes 00, 01 and 02, and the menu icons 0406xx / 0407xx. diff_exports never reports them as
-changed, removed or added (they come back under "protected"); budget reports the clusters they
-use under "protected_clusters" so they still count as existing volume usage.
+Protected files (PROTECTED / is_protected): every Slug file below the new rows (02xxxx with
+anim id < 0x29), hand-added rows 0x20-0x28 of prefixes 00, 01 and 02, and the menu icons
+0406xx / 0407xx. diff_exports never reports them as changed, removed or added (they come back
+under "protected"); a protected name in both dirs with different bytes, or in old but not in new,
+is "protected_changed" and fails the CLI. budget reports the clusters they use under
+"protected_clusters" so they still count as existing volume usage.
 """
 from __future__ import annotations
 
@@ -57,23 +63,26 @@ REPO = Path(__file__).resolve().parent.parent
 TO_BADGE = REPO / "assets/to-badge"
 
 STATES = ("tipsy", "wasted", "hung_over", "sore", "injured",
-          "groggy", "stuffed", "thirsty", "wired", "throwing_up")   # STATES[i] has anim id 0x29 + i
+          "groggy", "stuffed", "thirsty", "wired", "throwing_up",
+          "needs_rehab", "starving")   # STATES[i] has anim id 0x29 + i (needs_rehab 0x33, starving 0x34)
 ART_PETS = {  # pet -> (prefix, json5, sheet, sequence prefix)
     "bartholomeus": ("00", "bornpets-bartholomeus.json5", "bornpets-sprites-bartholomeus.png", "bartho"),
     "cat":          ("01", "bornpets-sponsors-cat.json5", "bornpets-sprites-cat.png", "cat"),
+    "slug":         ("02", "bornpets-sponsors-slug.json5", "bornpets-sprites-slug.png", "slug"),
     "panda":        ("05", "bornpets-sponsors-panda.json5", "bornpets-sprites-panda.png", "panda"),
     "badger":       ("06", "bornpets-sponsors-badger.json5", "bornpets-sprites-badger.png", "badger"),
     "seastar":      ("07", "bornpets-sponsors-seastar.json5", "bornpets-sprites-seastar.png", "seastar"),
 }
 FRAME = (152, 75)
 CLUSTER_BYTES = 2048
-# FAT12 volume: 502 usable 2 KiB clusters, minus 429 used (main after plan 7, which
-# removed the Jellyfish), minus 2 for the files that grow (BPETS_V3.CFG, plans 5 and 7), minus
-# a 16-cluster guard = 55 for the 50 new PCX. The 429 is an assumption about the
-# volume: used_clusters() recomputes it from the real tree and budget reports drift.
+# FAT12 volume: 502 usable 2 KiB clusters. The limit for the 72 new PCX is computed from the
+# real tree by volume_limit(): 502, minus the 16-cluster guard, minus what the tree uses once
+# the RETIRED files are gone, minus the growth of BPETS_V3.CFG and MANIFEST.TXT.
 USABLE_CLUSTERS = 502
-ASSUMED_USED = 429
-NEW_PCX_BUDGET = 55
+GUARD_CLUSTERS = 16
+CFG_NAME = "BPETS_V3.CFG"
+MANIFEST_NAME = "MANIFEST.TXT"
+CFG_PROJECTED_BYTES = 13176 + 6 * 38   # plan 5's measured CFG plus the six THROWUP_* rows
 REVIEW_DIR = REPO / "target/v3art/review"
 LITTER_DIR = REPO / "target/v3art/litter"   # written by bornpets_litter.py (Task A2b)
 FIRST_STATE_ANIM = 0x29
@@ -82,25 +91,39 @@ FLOOR_STRIP = (152, 10)
 SCALE = 4
 WHITE_RGB = (255, 255, 255)
 
-# Files this tool must never flag: Slug art, hand-added rows, menu icons.
+# Files this tool must never flag: shipped Slug art, hand-added rows, menu icons.
 PROTECTED = {
-    "prefixes": ("02",),                          # every 02xxxx (the Slug)
+    "existing": (("02",), range(0x00, 0x29)),     # every Slug file below the new rows
     "hand_added": (("00", "01", "02"), range(0x20, 0x29)),   # prefix, anim id
     "icons": ("0406", "0407"),                    # name starts with
 }
+
+# Retired from assets/to-badge in A4b (owner decisions 1 and 2, amendment 1): the Drained
+# art (anim rows 06 and 0A of 00, 01, 05, 06, 07) and the third Relaxing frame of 05, 06, 07.
+RETIRED: tuple[str, ...] = tuple(sorted(
+    [f"{pp}{aa}{f:02X}.PCX"
+     for pp, aa, frames in (("00", "06", 1), ("00", "0A", 1), ("01", "06", 2), ("01", "0A", 2),
+                            ("05", "06", 2), ("05", "0A", 2), ("06", "06", 2), ("06", "0A", 2),
+                            ("07", "06", 2), ("07", "0A", 2))
+     for f in range(frames)]
+    + ["050E02.PCX", "060E02.PCX", "070E02.PCX"]))
 
 
 def is_protected(name: str) -> bool:
     n = name.upper()
     if not n.endswith(".PCX") or len(n) != 10:
         return False
-    if n.startswith(PROTECTED["prefixes"]) or n.startswith(PROTECTED["icons"]):
+    if n.startswith(PROTECTED["icons"]):
         return True
-    prefixes, anims = PROTECTED["hand_added"]
     try:
-        return n[:2] in prefixes and int(n[2:4], 16) in anims
+        anim = int(n[2:4], 16)
     except ValueError:
         return False
+    for key in ("existing", "hand_added"):
+        prefixes, anims = PROTECTED[key]
+        if n[:2] in prefixes and anim in anims:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- PCX
@@ -131,27 +154,103 @@ def clusters(nbytes: int) -> int:
 
 
 def new_files() -> list[str]:
-    """The 50 shipped new-state names, sorted."""
+    """The 72 shipped new-state names (6 pets x 12 states), sorted."""
     return sorted(f"{prefix}{FIRST_STATE_ANIM + i:02X}00.PCX"
                   for prefix, *_ in ART_PETS.values() for i in range(len(STATES)))
+
+
+def manifest_lines() -> list[str]:
+    """MANIFEST.TXT lines "<NAME> <SEQ>_<STATE>_F1\n" for new_files(), upper case."""
+    seq = {prefix: s for prefix, _c, _sh, s in ART_PETS.values()}
+    return [f"{n} {seq[n[:2]].upper()}_{STATES[int(n[2:4], 16) - FIRST_STATE_ANIM].upper()}_F1\n"
+            for n in new_files()]
+
+
+def pcx_bytes(rows: list[list[int]]) -> int:
+    """Size of the badge PCX asset-gen writes for `rows` (128-byte header + RLE lines),
+    without writing it."""
+    w = len(rows[0])
+    bpl = (w * 2 + 7) // 8
+    bpl += bpl & 1
+    total = 128
+    for row in rows:
+        line = bytearray()
+        for x in range(0, bpl * 4, 4):
+            b = 0
+            for k in range(4):
+                v = row[x + k] if x + k < w else 0
+                b |= (v & 3) << (6 - 2 * k)
+            line.append(b)
+        total += _rle_len(line)
+    return total
+
+
+def _rle_len(line) -> int:
+    """Encoded length of one scanline the way asset-gen writes it: runs of up to 63 equal
+    bytes as (0xC0 | n, byte); a single byte below 0x40 stays raw, any other single byte
+    is escaped as (0xC1, byte)."""
+    n, i = 0, 0
+    while i < len(line):
+        j = i + 1
+        while j < len(line) and line[j] == line[i] and j - i < 63:
+            j += 1
+        n += 2 if j - i > 1 or line[i] >= 0x40 else 1
+        i = j
+    return n
 
 
 def diff_exports(old_dir, new_dir, prefixes=tuple(p for p, *_ in ART_PETS.values())) -> dict:
     def names(d):
         return {p.name for p in Path(d).iterdir() if p.is_file()}
-    both = names(old_dir) | names(new_dir)
+    old_all, new_all = names(old_dir), names(new_dir)
+    both = old_all | new_all
     protected = sorted(n for n in both if is_protected(n))
-    old = {n for n in names(old_dir) if n.startswith(tuple(prefixes)) and not is_protected(n)}
-    new = {n for n in names(new_dir) if n.startswith(tuple(prefixes)) and not is_protected(n)}
+    protected_changed = sorted(
+        n for n in protected
+        if n in old_all and (n not in new_all
+                             or (Path(old_dir) / n).read_bytes() != (Path(new_dir) / n).read_bytes()))
+    old = {n for n in old_all if n.startswith(tuple(prefixes)) and not is_protected(n)}
+    new = {n for n in new_all if n.startswith(tuple(prefixes)) and not is_protected(n)}
     changed = sorted(n for n in old & new
                      if (Path(old_dir) / n).read_bytes() != (Path(new_dir) / n).read_bytes())
     return {"changed": changed, "removed": sorted(old - new), "added": sorted(new - old),
-            "protected": protected}
+            "protected": protected, "protected_changed": protected_changed}
 
 
 def used_clusters(to_badge_dir=TO_BADGE) -> int:
-    """Clusters the files of a to-badge tree occupy (what the 429 assumption counts)."""
+    """Clusters the files of a to-badge tree occupy."""
     return sum(clusters(p.stat().st_size) for p in Path(to_badge_dir).iterdir() if p.is_file())
+
+
+def volume_limit(to_badge_dir=TO_BADGE) -> dict:
+    """The space the 72 new PCX may use, computed from the real tree.
+
+    limit = 502 - 16 - (used - retired_present) - cfg_growth - manifest_growth, where
+    retired_present is what the RETIRED files still in the tree occupy, cfg_growth the
+    clusters BPETS_V3.CFG gains up to CFG_PROJECTED_BYTES, and manifest_growth the clusters
+    MANIFEST.TXT gains when the RETIRED lines go and the new lines come.
+    """
+    d = Path(to_badge_dir)
+    used = used_clusters(d)
+    retired_present = sum(clusters((d / n).stat().st_size) for n in RETIRED if (d / n).is_file())
+    cfg = d / CFG_NAME
+    cfg_now = cfg.stat().st_size if cfg.is_file() else 0
+    cfg_growth = max(0, clusters(CFG_PROJECTED_BYTES) - clusters(cfg_now))
+    man = d / MANIFEST_NAME
+    man_now, drop, have = 0, 0, set()
+    if man.is_file():
+        man_now = man.stat().st_size
+        for line in man.read_bytes().decode("latin-1").splitlines(keepends=True):
+            name = line.split(" ")[0].upper()
+            if name in RETIRED:
+                drop += len(line)
+            have.add(name)
+    add = sum(len(l) for l in manifest_lines() if l.split(" ")[0] not in have)
+    manifest_growth = max(0, clusters(man_now - drop + add) - clusters(man_now))
+    base = used - retired_present
+    return {"used": used, "retired_present": retired_present, "base": base,
+            "cfg_growth": cfg_growth, "manifest_growth": manifest_growth,
+            "limit": USABLE_CLUSTERS - GUARD_CLUSTERS - base - cfg_growth - manifest_growth}
 
 
 def budget(export_dir, to_badge_dir=TO_BADGE) -> dict:
@@ -166,13 +265,36 @@ def budget(export_dir, to_badge_dir=TO_BADGE) -> dict:
         else:
             missing.append(name)
     total = sum(c for _, _, c in files)
+    limit = volume_limit(to_badge_dir)["limit"]
     prot = sum(clusters(p.stat().st_size) for p in Path(export_dir).iterdir()
                if p.is_file() and is_protected(p.name))
     return {"files": files, "total": total,
             "over": [n for n, b, _ in files if b > CLUSTER_BYTES],
             "missing": missing, "protected_clusters": prot,
-            "assumed_used": ASSUMED_USED, "measured_used": used_clusters(to_badge_dir),
-            "fits": total <= NEW_PCX_BUDGET and not missing}
+            "measured_used": used_clusters(to_badge_dir), "limit": limit,
+            "fits": total <= limit and not missing}
+
+
+FIT_NOTE = ("This frame's file is {bytes} bytes and must be at most 2048: fewer, larger flat areas of one "
+            "colour, no dither, no texture, no hatching, no small specks, continuous outline.")
+
+
+def frame_id(name: str) -> str:
+    """"063200.PCX" -> "badger_throwing_up_0"."""
+    seq = {prefix: s for prefix, _c, _sh, s in ART_PETS.values()}
+    return f"{seq[name[:2]]}_{STATES[int(name[2:4], 16) - FIRST_STATE_ANIM]}_0"
+
+
+def fit_notes(budget_res: dict, owner_notes: dict | None = None) -> dict:
+    """{frame id: note} for the frames over 2048 B only; an owner note goes first."""
+    sizes = {n: b for n, b, _c in budget_res["files"]}
+    out = {}
+    for name in budget_res["over"]:
+        fid = frame_id(name)
+        note = FIT_NOTE.format(bytes=sizes[name])
+        owner = (owner_notes or {}).get(fid)
+        out[fid] = f"{owner} {note}" if owner else note
+    return out
 
 
 # ---------------------------------------------------------------- drift
@@ -387,7 +509,7 @@ def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR, litter_dir=LITTE
     frames += floor
     incomplete = bool(bud["missing"]) or any(f["missing"] for f in floor)
     manifest = {"round": round_no,
-                "budget": {"total": bud["total"], "limit": NEW_PCX_BUDGET,
+                "budget": {"total": bud["total"], "limit": bud["limit"],
                            "fits": bud["fits"] and not incomplete},
                 "frames": frames}
     mpath = out_dir / "manifest.json"
@@ -397,9 +519,7 @@ def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR, litter_dir=LITTE
 
 # ---------------------------------------------------------------- state inventory (Task M1)
 
-# The Slug is not in ART_PETS until A4b; the inventory already covers it.
-INVENTORY_PETS = {"bartholomeus": "00", "cat": "01", "slug": "02",
-                  "panda": "05", "badger": "06", "seastar": "07"}
+INVENTORY_PETS = {pet: v[0] for pet, v in ART_PETS.items()}   # the same six pets
 _O = "owner 2026-11-14: "
 
 
@@ -409,7 +529,6 @@ def _row(stand_in, art, decided=None):
 
 _IDLE, _TIRED, _HUNGRY, _SICK, _MISER = (0x01, 0x02), (0x08, 0x04), (0x09, 0x05), (0x07, 0x03), (0x0B,)
 _NEW = {st: 0x29 + i for i, st in enumerate(STATES)}
-_NEW.update({"needs_rehab": 0x33, "starving": 0x34})   # A4b appends these to STATES
 
 # Status word or action -> what it shows today (src/game/engine/to_display.rs display_anim,
 # groups 2 to 6, and status.rs graded / status_line) and the anim id of its own art.
@@ -505,8 +624,24 @@ def main(argv=None) -> int:
     r.add_argument("export")
     r.add_argument("--round", type=int, required=True, dest="round_no")
     sub.add_parser("inventory")
+    f = sub.add_parser("fit-notes")
+    f.add_argument("export")
+    f.add_argument("--owner-notes", dest="owner_notes")
+    f.add_argument("-o", "--output", required=True)
     a = ap.parse_args(argv)
 
+    if a.cmd == "fit-notes":
+        try:
+            owner = json.loads(Path(a.owner_notes).read_text(encoding="utf-8")) if a.owner_notes else None
+            notes = fit_notes(budget(a.export), owner)
+        except (ValueError, OSError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        out = Path(a.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(notes, indent=1) + "\n", encoding="utf-8")
+        print(f"{len(notes)} frame(s) over 2048 B -> {out}")
+        return 0
     if a.cmd == "inventory":
         rows = inventory()
         print(_inventory_table(rows))
@@ -516,14 +651,14 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "diff":
         res = diff_exports(a.old, a.new)
-        for k in ("changed", "removed", "added", "protected"):
+        for k in ("changed", "removed", "added", "protected", "protected_changed"):
             print(f"{k}: {len(res[k])}")
             for n in res[k]:
                 print(f"  {n}")
         foreign = [n for n in res["added"] if n not in new_files()]
         if foreign:
             print(f"not a shipped new-state name: {', '.join(foreign)}")
-        return 1 if res["changed"] or res["removed"] or foreign else 0
+        return 1 if res["changed"] or res["removed"] or res["protected_changed"] or foreign else 0
     if a.cmd == "budget":
         try:
             res = budget(a.export)
@@ -534,10 +669,11 @@ def main(argv=None) -> int:
             print(f"{name}  {n:6d} B  {c} cl{'  OVER 2048' if n > CLUSTER_BYTES else ''}")
         for name in res["missing"]:
             print(f"{name}  MISSING")
-        if res["measured_used"] != res["assumed_used"]:
-            print(f"note: assumed_used {res['assumed_used']}, measured_used {res['measured_used']} "
-                  "(main after plan 7 measures 429; re-derive the budget if this stays off)")
-        print(f"total {res['total']} / {NEW_PCX_BUDGET} clusters: "
+        vl = volume_limit()
+        print(f"measured_used {vl['used']} retired_present {vl['retired_present']} base {vl['base']} "
+              f"cfg_growth {vl['cfg_growth']} manifest_growth {vl['manifest_growth']} "
+              f"guard {GUARD_CLUSTERS}")
+        print(f"total {res['total']} / {res['limit']} clusters: "
               f"{'fits' if res['fits'] else 'DOES NOT FIT'}")
         return 0 if res["fits"] and not res["missing"] else 1
     print(write_review(a.export, a.round_no))
