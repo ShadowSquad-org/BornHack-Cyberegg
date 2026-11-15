@@ -52,7 +52,8 @@ const PP_MAX: usize = 9;
 /// lifecycle anims), plus 0x23-0x28 (Exercising/Medicating/Drinking/
 /// Ozempic/Rehab/OnlyPets — picked starting at 0x20 to land clear of
 /// 0x15-0x1F, which `assets/to-badge/MANIFEST.TXT` reserves for other,
-/// currently-unbuilt features).  41 entries covers up to 0x28 inclusive.
+/// currently-unbuilt features), and the v3 state art 0x29-0x35 (Tipsy ..
+/// Washing, plus Relaxing at 0x0E).  54 entries cover up to 0x35 inclusive.
 /// This bound is checked on both the write side (`init`, scanning the
 /// FAT12 catalog at boot) and the read side (`count_anim_frames`) — an
 /// anim id at or past this value is silently never catalogued, which is
@@ -61,13 +62,16 @@ const PP_MAX: usize = 9;
 /// notice them, so the game falls back to the no-artwork debug-text
 /// path.  Keep this at least one past the highest `anim_id`.
 #[cfg(feature = "embassy-core")]
-const AA_MAX: usize = 41;
+const AA_MAX: usize = 54;
+// The v3 art goes up to row 0x35 (Washing); a smaller cap hides it.
+#[cfg(feature = "embassy-core")]
+const _: () = assert!(AA_MAX > 0x35);
 /// Maximum frame index per animation (bit position in the u16 presence cell).
 /// No animation exceeds a handful of frames; 16 is ample.
 #[cfg(feature = "embassy-core")]
 const FF_MAX: u8 = 16;
 
-// AtomicU16 (not U32): 9×41×2 B keeps the table small so the RAM-tight
+// AtomicU16 (not U32): 9×54×2 B keeps the table small so the RAM-tight
 // debug build doesn't overflow the stack into adjacent statics.
 #[cfg(feature = "embassy-core")]
 static ANIM_PRESENCE: [[core::sync::atomic::AtomicU16; AA_MAX]; PP_MAX] =
