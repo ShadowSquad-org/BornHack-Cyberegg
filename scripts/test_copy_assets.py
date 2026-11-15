@@ -150,7 +150,7 @@ class CopyAssetsTest(unittest.TestCase):
 
     def test_changes_refuse_protected_names(self):
         h = "a" * 64
-        for name in ["PETS.CFG", "000000.PCX", "010000.PCX", "BPETS_V3.CFG", "bornpets.cfg"]:
+        for name in ["PETS.CFG", "000000.PCX", "BPETS_V3.CFG", "bornpets.cfg"]:
             for op in ("remove", "replace"):
                 f = self.assets.parent / "c.txt"
                 f.write_text(f"{op} {name} {h}\n")
@@ -357,7 +357,7 @@ class RepoAssetsTest(unittest.TestCase):
             if op == "remove":
                 removes.setdefault(name.upper(), []).append(hashes)
         retired = self._retired()
-        self.assertEqual(len(retired), 21)
+        self.assertEqual(len(retired), 23)
         for name in retired:
             self.assertFalse((copy_assets.ASSETS_DIR / name).exists(), name)
             self.assertEqual(len(removes.get(name, [])), 1, name)
@@ -371,7 +371,7 @@ class RepoAssetsTest(unittest.TestCase):
         pat = re.compile(r"^(0[012]2[0-8][0-9A-F]{2}|040[67][0-9A-F]{2})\.PCX$")
         for op, name, _ in copy_assets.load_changes(copy_assets.CHANGES_FILE):
             if op == "remove":
-                self.assertFalse(name.upper().startswith("02"), name)
+                self.assertTrue(name.upper() in ("020000.PCX",) or not name.upper().startswith("02"), name)
                 self.assertFalse(pat.match(name.upper()), name)
 
     def test_manifest_has_no_retired_lines(self):

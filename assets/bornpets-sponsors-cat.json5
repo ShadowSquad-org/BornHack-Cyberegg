@@ -26,11 +26,11 @@
     // ─────────────────────────────────────────────────────────────────
     {
       type: "sequence",
-      name: "start_screen",
-      comment: "Full 152x152 pixel start screen graphic.",
+      name: "reserved_00",
+      comment: "Row 0x00 — no artwork on this pet; keeps row numbering aligned.",
       frames: 1,
       frame_width: 152,
-      frame_height: 152,
+      frame_height: 75,
     },
 
     {

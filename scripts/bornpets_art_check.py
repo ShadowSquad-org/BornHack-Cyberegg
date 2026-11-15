@@ -37,7 +37,7 @@ Completeness: write_review never drops a frame silently. A missing export PCX or
 gets a manifest entry with "missing": true and the flag "missing"; budget.fits is false then.
 
 Protected files (PROTECTED / is_protected): every Slug file below the new rows (02xxxx with
-anim id < 0x29), hand-added rows 0x20-0x28 of prefixes 00, 01 and 02, and the menu icons
+anim id < 0x29, except the retired 020000.PCX), hand-added rows 0x20-0x28 of prefixes 00, 01 and 02, and the menu icons
 0406xx / 0407xx. diff_exports never reports them as changed, removed or added (they come back
 under "protected"); a protected name in both dirs with different bytes, or in old but not in new,
 is "protected_changed" and fails the CLI. budget reports the clusters they use under
@@ -99,19 +99,25 @@ PROTECTED = {
 }
 
 # Retired from assets/to-badge in A4b (owner decisions 1 and 2, amendment 1): the Drained
-# art (anim rows 06 and 0A of 00, 01, 05, 06, 07) and the third Relaxing frame of 05, 06, 07.
+# art (anim rows 06 and 0A of 00, 01, 05, 06, 07), the third Relaxing frame of 05, 06, 07 and
+# the unused Cat / Slug start screens 010000 / 020000 (000000.PCX stays, the firmware loads it).
 RETIRED: tuple[str, ...] = tuple(sorted(
     [f"{pp}{aa}{f:02X}.PCX"
      for pp, aa, frames in (("00", "06", 1), ("00", "0A", 1), ("01", "06", 2), ("01", "0A", 2),
                             ("05", "06", 2), ("05", "0A", 2), ("06", "06", 2), ("06", "0A", 2),
                             ("07", "06", 2), ("07", "0A", 2))
      for f in range(frames)]
-    + ["050E02.PCX", "060E02.PCX", "070E02.PCX"]))
+    + ["050E02.PCX", "060E02.PCX", "070E02.PCX"]
+    # Cat and Slug start screens: the firmware loads only 000000.PCX, and every pet has
+    # its own start screen now, so the unused START_SCREEN_F1 files go.
+    + ["010000.PCX", "020000.PCX"]))
 
 
 def is_protected(name: str) -> bool:
     n = name.upper()
     if not n.endswith(".PCX") or len(n) != 10:
+        return False
+    if n in RETIRED:      # retired wins over "every Slug file below the new rows"
         return False
     if n.startswith(PROTECTED["icons"]):
         return True

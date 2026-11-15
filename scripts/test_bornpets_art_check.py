@@ -105,15 +105,29 @@ class Checker(unittest.TestCase):
             Path(o, "021500.PCX").write_bytes(b"gone")      # in old, not in new
             self.assertEqual(ac.diff_exports(o, n)["protected_changed"], ["021500.PCX"])
 
+    def test_start_screens_010000_and_020000_are_retired_000000_is_not(self):
+        for n in ("010000.PCX", "020000.PCX"):
+            self.assertIn(n, ac.RETIRED)
+            self.assertFalse(ac.is_protected(n), n)
+        self.assertNotIn("000000.PCX", ac.RETIRED)
+        self.assertTrue(ac.is_protected("020100.PCX"))
+        # a retired file that vanishes is "removed", not protected_changed
+        with tempfile.TemporaryDirectory() as o, tempfile.TemporaryDirectory() as n:
+            for name in ("010000.PCX", "020000.PCX"):
+                Path(o, name).write_bytes(b"old")
+            res = ac.diff_exports(o, n)
+            self.assertEqual(res["removed"], ["010000.PCX", "020000.PCX"])
+            self.assertEqual(res["protected_changed"], [])
+
     def test_retired_are_drained_and_third_relax_frames(self):
         want = ["000600.PCX", "000A00.PCX", "010600.PCX", "010601.PCX", "010A00.PCX", "010A01.PCX",
                 "050600.PCX", "050601.PCX", "050A00.PCX", "050A01.PCX", "060600.PCX", "060601.PCX",
                 "060A00.PCX", "060A01.PCX", "070600.PCX", "070601.PCX", "070A00.PCX", "070A01.PCX",
-                "050E02.PCX", "060E02.PCX", "070E02.PCX"]
+                "050E02.PCX", "060E02.PCX", "070E02.PCX", "010000.PCX", "020000.PCX"]
         self.assertEqual(list(ac.RETIRED), sorted(want))
-        self.assertEqual(len(ac.RETIRED), 21)
+        self.assertEqual(len(ac.RETIRED), 23)
         for n in ac.RETIRED:
-            self.assertFalse(n.startswith("02"), n)
+            self.assertTrue(n == "020000.PCX" or not n.startswith("02"), n)
             self.assertFalse(ac.is_protected(n), n)
             self.assertNotIn(n, ac.new_files())
 
@@ -138,7 +152,7 @@ class Checker(unittest.TestCase):
             self._volume(t, with_retired=True)
             res = ac.volume_limit(t)
             self.assertEqual(res["limit"], 80)
-            self.assertEqual((res["used"], res["retired_present"], res["base"]), (425, 21, 404))
+            self.assertEqual((res["used"], res["retired_present"], res["base"]), (427, 23, 404))
 
     def test_limit_counts_the_retired_manifest_lines(self):
         with tempfile.TemporaryDirectory() as t:
@@ -234,10 +248,11 @@ class Checker(unittest.TestCase):
             self.assertEqual(ac.main(["diff", o, n]), 1)
 
     def test_is_protected_edges(self):
-        for name in ("020000.PCX", "0020FF.PCX", "002000.PCX", "002800.PCX", "012100.PCX",
+        for name in ("020100.PCX", "0020FF.PCX", "002000.PCX", "002800.PCX", "012100.PCX",
                      "040601.PCX", "040799.PCX"):
             self.assertTrue(ac.is_protected(name), name)
-        for name in ("001F00.PCX", "002900.PCX", "052000.PCX", "000000.PCX", "040500.PCX"):
+        for name in ("001F00.PCX", "002900.PCX", "052000.PCX", "000000.PCX", "040500.PCX",
+                     "010000.PCX", "020000.PCX"):
             self.assertFalse(ac.is_protected(name), name)
 
     def test_budget_keeps_counting_protected_files(self):
