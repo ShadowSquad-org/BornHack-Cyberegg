@@ -2579,6 +2579,8 @@ mod protocol {
         assert_eq!((r.a.energy, r.b.energy), (ea, eb));
         assert_eq!(r.a.battle_record(), (0, 0));
         assert_eq!(r.b.battle_record(), (0, 0));
+        // a Busy refusal is not a decline: no decline penalty on either side
+        assert_eq!((r.a.decline_min, r.b.decline_min), (0, 0));
     }
 
     #[test]
