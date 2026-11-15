@@ -2691,6 +2691,51 @@ mod balance {
         assert_eq!(o.prizes_hax, 0, "money is off");
     }
 
+    /// The prototype's fit fighter comes to its 20:00 fight fresh (stamina
+    /// 4 on day 20, spec 18.4); two sessions of sport a day leave it at 1.
+    #[test]
+    fn fit_fighter_comes_fresh_to_its_fight() {
+        use bornhack_aegg::game::engine::Phase;
+        use std::cell::RefCell;
+        let stamina = RefCell::new(Vec::new());
+        let r = |d: u32, m: u32, s: &GameState| {
+            let p = sim::fighter(d, m, s);
+            // the routine is also asked with probe eggs; only the pet counts
+            if p.contains(&sim::Act::Battle) && s.phase != Phase::Hatching {
+                stamina.borrow_mut().push(s.snapshot().stamina);
+            }
+            p
+        };
+        let o = sim::run_with(&r, 10, Driver::Delta, 1, CLOCK).outcome;
+        let st = stamina.into_inner();
+        eprintln!("fighter stamina at 20:00: {st:?}");
+        assert!(o.alive);
+        assert_eq!(st.len(), 10);
+        // day 0 starts at 08:00, after the 07:30 breakfast (as in the prototype)
+        assert!(st[1..].iter().all(|&k| k >= 3), "{st:?}");
+    }
+
+    /// The prototype's brawler holds about 78 % weight on rich food and two
+    /// beers (spec 18.4); it is not the party routine with more beer.
+    #[test]
+    fn brawler_holds_its_weight() {
+        let o = run(sim::brawler, 10, Driver::Delta, 1, CLOCK);
+        eprintln!("brawler 10 days: {o:?}");
+        assert!(o.alive);
+        assert!(o.max_weight_pct <= 82, "max weight {}", o.max_weight_pct);
+        assert!(!o.diabetic);
+    }
+
+    /// The prototype's sumo holds about 73 % weight (spec 18.4).
+    #[test]
+    fn sumo_holds_its_weight() {
+        let o = run(sim::sumo, 10, Driver::Delta, 1, CLOCK);
+        eprintln!("sumo 10 days: {o:?}");
+        assert!(o.alive);
+        assert!(o.max_weight_pct <= 80, "max weight {}", o.max_weight_pct);
+        assert!(!o.diabetic);
+    }
+
     #[test]
     #[ignore]
     fn fit_fighter_one_a_day() {

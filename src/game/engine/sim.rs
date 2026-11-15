@@ -1028,9 +1028,14 @@ pub fn helper(_d: u32, m: u32, _s: &GameState) -> Plan {
 // Battle lifestyles (plan 5, spec 18.4)
 // ---------------------------------------------------------------------------
 
-/// `p` with a fight first (so it comes before the step that goes with it).
-fn fight_first(mut p: Plan) -> Plan {
-    let _ = p.insert(0, Act::Battle);
+/// `p` with a fight last: as in the prototype, the fight comes after the
+/// steps of its minute (a 20:30 wash, a 22:30 bedtime). A full plan drops
+/// its last step for it.
+fn then_fight(mut p: Plan) -> Plan {
+    if p.is_full() {
+        p.pop();
+    }
+    let _ = p.push(Act::Battle);
     p
 }
 
@@ -1039,51 +1044,152 @@ fn six_times(m: u32) -> bool {
     (20 * 60..=22 * 60 + 30).contains(&m) && m % 30 == 0
 }
 
-/// Sporty, and one fight a day at 20:00.
-pub fn fighter(d: u32, m: u32, s: &GameState) -> Plan {
-    let p = sporty(d, m, s);
-    if at(m, 20, 0) { fight_first(p) } else { p }
-}
-
-/// Sporty, and a fight every half hour from 20:00 to 22:30.
-pub fn fighter_six(d: u32, m: u32, s: &GameState) -> Plan {
-    let p = sporty(d, m, s);
-    if six_times(m) { fight_first(p) } else { p }
-}
-
-/// Party, two beers at 19:30 and a fight at 20:00.
-pub fn brawler(d: u32, m: u32, s: &GameState) -> Plan {
-    let beer = Act::Drink(DrinkKind::Beer);
-    if at(m, 19, 30) {
-        habits(plan(&[beer, beer]), s, false)
-    } else if at(m, 20, 0) {
-        fight_first(party(d, m, s))
-    } else {
-        party(d, m, s)
-    }
-}
-
-/// Party, two beers at 19:30 and six fights from 20:00.
-pub fn brawler_six(d: u32, m: u32, s: &GameState) -> Plan {
-    let p = brawler(d, m, s);
-    if six_times(m) && !at(m, 20, 0) {
-        fight_first(p)
-    } else {
-        p
-    }
-}
-
-/// Sporty, with rich food while the weight is under 72 %, and a fight at
-/// 20:00. The weight habit that would slim it down is off.
-pub fn sumo(_d: u32, m: u32, s: &GameState) -> Plan {
-    let mut p = sporty_plan(m, s);
-    if s.weight < pct_lvl(72) {
-        for a in p.iter_mut() {
-            if matches!(a, Act::Eat(FoodKind::Apple | FoodKind::Salad)) {
-                *a = Act::Eat(FoodKind::Pizza);
-            }
+/// The prototype's fit fighter: one session of sport, clean food by
+/// appetite, a game in the afternoon, a wash after the fight. It has the
+/// weight habit.
+fn fighter_plan(m: u32, s: &GameState) -> Plan {
+    use Act::*;
+    use FoodKind::*;
+    if at(m, 7, 30) {
+        if s.fullness < pct_lvl(40) {
+            plan(&[Wake, Eat(Apple), Eat(Salad)])
+        } else {
+            plan(&[Wake, Eat(Apple)])
         }
+    } else if at(m, 9, 30) {
+        plan(&[Sport])
+    } else if at(m, 12, 30) {
+        let f = if s.fullness < pct_lvl(45) {
+            Pizza
+        } else {
+            Apple
+        };
+        if s.dirt > pct_lvl(45) {
+            plan(&[Wash, Eat(f)])
+        } else {
+            plan(&[Eat(f)])
+        }
+    } else if at(m, 15, 30) {
+        plan(&[Play])
+    } else if at(m, 18, 30) {
+        if s.fullness < pct_lvl(45) {
+            plan(&[Eat(Apple), Eat(Salad)])
+        } else if s.fullness < pct_lvl(65) {
+            plan(&[Eat(Apple)])
+        } else {
+            plan(&[Play])
+        }
+    } else if at(m, 20, 30) {
+        plan(&[Wash])
+    } else if at(m, 22, 30) {
+        plan(&[Sleep])
+    } else {
+        Plan::new()
     }
+}
+
+/// The fit fighter, and one fight a day at 20:00.
+pub fn fighter(_d: u32, m: u32, s: &GameState) -> Plan {
+    let p = habits(fighter_plan(m, s), s, true);
+    if at(m, 20, 0) { then_fight(p) } else { p }
+}
+
+/// The fit fighter, and a fight every half hour from 20:00 to 22:30.
+pub fn fighter_six(_d: u32, m: u32, s: &GameState) -> Plan {
+    let p = habits(fighter_plan(m, s), s, true);
+    if six_times(m) { then_fight(p) } else { p }
+}
+
+/// The prototype's brawler: no sport, rich food while under 76 % weight,
+/// cake or cola, two beers at 19:30 for the fight. No weight habit.
+fn brawler_plan(d: u32, m: u32, s: &GameState) -> Plan {
+    use Act::*;
+    use FoodKind::*;
+    let rich = if s.weight < pct_lvl(76) { Pizza } else { Apple };
+    let beer = Drink(DrinkKind::Beer);
+    if at(m, 10, 0) {
+        if s.dirt > pct_lvl(50) {
+            plan(&[Wake, Wash, Eat(rich)])
+        } else {
+            plan(&[Wake, Eat(rich)])
+        }
+    } else if at(m, 14, 0) {
+        if d % 2 == 0 && s.weight < pct_lvl(76) {
+            plan(&[Eat(Cake)])
+        } else {
+            plan(&[Drink(DrinkKind::Cola)])
+        }
+    } else if at(m, 17, 0) {
+        plan(&[Play])
+    } else if at(m, 18, 30) {
+        plan(&[Eat(if s.fullness < pct_lvl(40) {
+            rich
+        } else {
+            Apple
+        })])
+    } else if at(m, 19, 30) {
+        plan(&[beer, beer])
+    } else if at(m, 22, 0) {
+        plan(&[Drink(DrinkKind::Water), Mini(1)])
+    } else if at(m, 1, 0) {
+        if s.fullness < pct_lvl(45) {
+            plan(&[Eat(Apple), Sleep])
+        } else {
+            plan(&[Sleep])
+        }
+    } else {
+        Plan::new()
+    }
+}
+
+/// The brawler, and a fight at 20:00.
+pub fn brawler(d: u32, m: u32, s: &GameState) -> Plan {
+    let p = habits(brawler_plan(d, m, s), s, false);
+    if at(m, 20, 0) { then_fight(p) } else { p }
+}
+
+/// The brawler, and a fight every half hour from 20:00 to 22:30.
+pub fn brawler_six(d: u32, m: u32, s: &GameState) -> Plan {
+    let p = habits(brawler_plan(d, m, s), s, false);
+    if six_times(m) { then_fight(p) } else { p }
+}
+
+/// The prototype's sumo: sport every morning, rich food and cake while
+/// under 74 % weight, and a fight at 20:00. No weight habit.
+pub fn sumo(_d: u32, m: u32, s: &GameState) -> Plan {
+    use Act::*;
+    use FoodKind::*;
+    let light = s.weight < pct_lvl(74);
+    let rich = if light { Pizza } else { Apple };
+    let p = if at(m, 7, 30) {
+        plan(&[Wake, Eat(rich)])
+    } else if at(m, 9, 30) {
+        plan(&[Sport])
+    } else if at(m, 12, 30) {
+        if s.dirt > pct_lvl(45) {
+            plan(&[Wash, Eat(rich)])
+        } else {
+            plan(&[Eat(rich)])
+        }
+    } else if at(m, 15, 30) {
+        if light {
+            plan(&[Eat(Cake), Play])
+        } else {
+            plan(&[Play])
+        }
+    } else if at(m, 18, 30) {
+        if s.fullness < pct_lvl(60) {
+            plan(&[Eat(rich)])
+        } else {
+            Plan::new()
+        }
+    } else if at(m, 20, 30) {
+        plan(&[Wash])
+    } else if at(m, 22, 30) {
+        plan(&[Sleep])
+    } else {
+        Plan::new()
+    };
     let p = habits(p, s, false);
-    if at(m, 20, 0) { fight_first(p) } else { p }
+    if at(m, 20, 0) { then_fight(p) } else { p }
 }
