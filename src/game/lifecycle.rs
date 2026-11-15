@@ -787,8 +787,10 @@ static SLEEP_ANIM_UNTIL_TICK: AtomicU32 = AtomicU32::new(0);
 /// Get the current display animation (cheap, no update).
 pub fn display_anim() -> DisplayAnim {
     let state = unsafe { (*GAME.get()).as_ref() };
+    // A v3 anim is shown only when this pet has its sprite row; else the
+    // anim the pet showed before the v3 art (see `display_anim_with`).
     let raw = match state {
-        Some(s) => s.display_anim(),
+        Some(s) => s.display_anim_with(|a| super::engine::anim_files::frame_count(s.pet_kind, a) > 0),
         None => return DisplayAnim::Gone,
     };
     // Display-layer floor for the sleep animation — see
@@ -802,6 +804,17 @@ pub fn display_anim() -> DisplayAnim {
             | DisplayAnim::WarningSick
             | DisplayAnim::WarningHungry
             | DisplayAnim::WarningMiserable
+            // The v3 states that replaced the ones above.
+            | DisplayAnim::Tipsy
+            | DisplayAnim::Sore
+            | DisplayAnim::NeedsRehab
+            | DisplayAnim::Wasted
+            | DisplayAnim::Thirsty
+            | DisplayAnim::HungOver
+            | DisplayAnim::Groggy
+            | DisplayAnim::Injured
+            | DisplayAnim::Wired
+            | DisplayAnim::Stuffed
     ) && now_tick() < SLEEP_ANIM_UNTIL_TICK.load(Ordering::Relaxed)
     {
         return DisplayAnim::Sleeping;
