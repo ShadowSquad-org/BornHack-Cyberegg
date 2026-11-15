@@ -2669,20 +2669,20 @@ mod status_wake {
         s.fullness = pct(30);
         assert_eq!(s.display_anim(), DisplayAnim::WarningHungry);
         s.fullness = pct(10);
-        assert_eq!(s.display_anim(), DisplayAnim::CriticalHungry);
+        assert_eq!(s.display_anim(), DisplayAnim::Starving);
         let mut s = pet();
         s.hydration = pct(20);
-        assert_eq!(s.display_anim(), DisplayAnim::WarningHungry);
+        assert_eq!(s.display_anim(), DisplayAnim::Thirsty);
 
         let mut s = pet();
         s.energy = pct(15);
         assert_eq!(s.display_anim(), DisplayAnim::WarningTired);
         s.hangover_min = 30;
         s.energy = pct(90);
-        assert_eq!(s.display_anim(), DisplayAnim::WarningTired);
+        assert_eq!(s.display_anim(), DisplayAnim::HungOver);
         s.hangover_min = 0;
         s.groggy_min = 30;
-        assert_eq!(s.display_anim(), DisplayAnim::WarningTired);
+        assert_eq!(s.display_anim(), DisplayAnim::Groggy);
 
         let mut s = pet();
         s.health = pct(45);
@@ -2691,14 +2691,11 @@ mod status_wake {
         assert_eq!(s.display_anim(), DisplayAnim::CriticalSick);
         let mut s = pet();
         s.injured_min = 30;
-        assert_eq!(s.display_anim(), DisplayAnim::WarningSick);
+        assert_eq!(s.display_anim(), DisplayAnim::Injured);
 
         for set in [
             (|s: &mut GameState| s.fun = pct(5)) as fn(&mut GameState),
-            |s| s.fun = pct(100),
-            |s| s.booze = pct(50),
             |s| s.dirt = pct(70),
-            |s| s.fullness = pct(97),
             |s| s.hydration = pct(99),
             |s| s.weight = pct(95),
             |s| s.weight = pct(5),
@@ -2712,6 +2709,17 @@ mod status_wake {
                 "{:?}",
                 status(&s)
             );
+        }
+
+        // These words have their own v3 art now.
+        for (set, want) in [
+            ((|s: &mut GameState| s.fun = pct(100)) as fn(&mut GameState), DisplayAnim::Wired),
+            (|s| s.fullness = pct(97), DisplayAnim::Stuffed),
+            (|s| s.booze = pct(50), DisplayAnim::Wasted),
+        ] {
+            let mut s = pet();
+            set(&mut s);
+            assert_eq!(s.display_anim(), want, "{:?}", status(&s));
         }
 
         // Actions and sleep still outrank any status.

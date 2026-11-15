@@ -116,6 +116,8 @@ pub enum Toast {
     /// Why something went badly: two lines (what, why) from `Cause`, read
     /// from `CAUSE_CODE` (see `show_cause`).
     Cause = 30,
+    /// Finished and lost a mini-game — still pays (see `GameState::award_inspiration`).
+    MinigameTry = 31,
 }
 
 impl Toast {
@@ -151,6 +153,7 @@ impl Toast {
             28 => Self::Wash,
             29 => Self::DebugInfo,
             30 => Self::Cause,
+            31 => Self::MinigameTry,
             _ => Self::None,
         }
     }
@@ -186,6 +189,7 @@ impl Toast {
             Toast::Refreshed => "refreshed!",
             Toast::OnlyPets => "Only pets!",
             Toast::MinigameWin => "nice game!",
+            Toast::MinigameTry => "good try!",
             // Dynamic — handled in the renderer.
             Toast::Reason => "",
             // Dynamic — handled in the renderer.
@@ -1225,6 +1229,20 @@ where
             DisplayAnim::Ozempic => "OZEMPIC",
             DisplayAnim::Rehab => "REHAB",
             DisplayAnim::OnlyPets => "ONLYPETS",
+            DisplayAnim::Relaxing => "RELAXING",
+            DisplayAnim::Washing => "WASHING",
+            DisplayAnim::Tipsy => "TIPSY",
+            DisplayAnim::Wasted => "WASTED",
+            DisplayAnim::ThrowingUp => "THROWUP",
+            DisplayAnim::HungOver => "HUNGOVER",
+            DisplayAnim::Sore => "SORE",
+            DisplayAnim::Injured => "INJURED",
+            DisplayAnim::Groggy => "GROGGY",
+            DisplayAnim::Stuffed => "STUFFED",
+            DisplayAnim::Thirsty => "THIRSTY",
+            DisplayAnim::Wired => "WIRED",
+            DisplayAnim::NeedsRehab => "NEEDSREHAB",
+            DisplayAnim::Starving => "STARVING",
             DisplayAnim::Leaving { .. } => "LEAVING",
             DisplayAnim::CriticalSick => "CRIT:SICK",
             DisplayAnim::CriticalTired => "CRIT:TIRED",
@@ -1301,6 +1319,31 @@ mod battle_anim_tests {
 /// statics so the next test starts clean.
 #[cfg(test)]
 pub(crate) struct TestState(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+/// Mini-game payout tests: a live pet with money mode on, installed as the
+/// game state. Hold the guard for the whole test.
+#[cfg(test)]
+pub(crate) fn minigame_pay_setup() -> TestState {
+    let guard = lock_test_state();
+    let mut s = engine::GameState::new_egg(30, engine::PetKind::DEFAULT);
+    s.update(engine::thresholds::HATCHING_TICKS() as u32);
+    s.money = 0;
+    s.money_enabled = true;
+    lifecycle::set_state_for_test(Some(s));
+    TOAST.clear();
+    guard
+}
+
+/// HAX the test pet holds, and whether `game`'s cooldown runs.
+#[cfg(test)]
+pub(crate) fn minigame_pay_read(game: engine::MiniGame) -> (u32, bool) {
+    let mut out = (0, false);
+    lifecycle::with_state(|s| {
+        out = (s.money, s.game_cooldown(game) > 0);
+        false
+    });
+    out
+}
 
 #[cfg(test)]
 static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

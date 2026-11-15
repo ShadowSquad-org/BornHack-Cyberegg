@@ -122,12 +122,18 @@ pub const STATION_BOOZE_CAP_PCT: i32 = 20;
 /// HAX earned by the "Only pets" hobby (non-broke) branch.
 pub const ONLYPETS_HOBBY_REWARD: u32 = 20;
 /// Mini-game grades (0..=2) handed to `award_inspiration`: an interface of the
-/// games, not a tunable. A loss gives no call at all. Games without a draw
-/// pass `GRADE_WIN`.
+/// games, not a tunable. Every finished game gets a call: a loss too, since
+/// the player put in the work. Games without a draw pass `GRADE_WIN` or
+/// `GRADE_LOSS`.
+pub const GRADE_LOSS: u8 = 0;
 pub const GRADE_DRAW: u8 = 1;
 pub const GRADE_WIN: u8 = 2;
 /// HAX earned for winning a mini-game.
 pub const MINIGAME_HAX_REWARD: u32 = 15;
+/// HAX earned for a drawn mini-game.
+pub const MINIGAME_HAX_DRAW: u32 = 10;
+/// HAX earned for a lost mini-game.
+pub const MINIGAME_HAX_LOSS: u32 = 5;
 /// HAX cost of the basic Play action.
 pub const PLAY_HAX_COST: u32 = 10;
 /// HAX cost of a drug dose (Ozempic / Medicate / Rehab).
@@ -1144,9 +1150,9 @@ impl GameState {
         true
     }
 
-    /// Award the mini-game win (or draw) reward, `grade` being `GRADE_WIN` or
-    /// `GRADE_DRAW`: HAX (when `money_enabled`) plus the
-    /// per-game cooldown.  Starts only that game's cooldown so other
+    /// Award a finished mini-game, `grade` being `GRADE_WIN`, `GRADE_DRAW` or
+    /// `GRADE_LOSS`: HAX for that result (when `money_enabled`) plus the
+    /// per-game cooldown, also after a loss.  Starts only that game's cooldown so other
     /// mini-games stay available — encourages variety.  Also gives the
     /// mini-game's fun dose (and costs a little energy).
     pub fn award_inspiration(&mut self, game: MiniGame, grade: u8) {
@@ -1163,7 +1169,11 @@ impl GameState {
             MiniGame::BornJeweled => self.cooldown_bornjeweled = MINIGAME_COOLDOWN(),
         }
         if self.money_live() {
-            self.add_money(MINIGAME_HAX_REWARD);
+            self.add_money(match grade {
+                GRADE_LOSS => MINIGAME_HAX_LOSS,
+                GRADE_DRAW => MINIGAME_HAX_DRAW,
+                _ => MINIGAME_HAX_REWARD,
+            });
         }
     }
 
@@ -2865,6 +2875,44 @@ mod overweight_diabetes_tests {
         state.cooldown_nim = 0;
         state.award_inspiration(MiniGame::Nim, GRADE_WIN);
         assert_eq!(state.money, 0, "money off should grant no HAX");
+    }
+
+    /// Every finished mini-game pays by result and starts its cooldown;
+    /// money off or demo on pays nothing.
+    #[test]
+    fn minigame_pays_by_result() {
+        for (grade, hax) in [
+            (GRADE_LOSS, MINIGAME_HAX_LOSS),
+            (GRADE_DRAW, MINIGAME_HAX_DRAW),
+            (GRADE_WIN, MINIGAME_HAX_REWARD),
+        ] {
+            let mut state = GameState::new_egg(30, PetKind::DEFAULT);
+            state.update(HATCHING_TICKS() as u32);
+            state.money = 0;
+            state.money_enabled = true;
+            state.cooldown_tictactoe = 0;
+            state.award_inspiration(MiniGame::TicTacToe, grade);
+            assert_eq!(state.money, hax);
+            assert!(state.cooldown_tictactoe > 0, "grade {grade} starts the cooldown");
+        }
+        assert_eq!(
+            (MINIGAME_HAX_LOSS, MINIGAME_HAX_DRAW, MINIGAME_HAX_REWARD),
+            (5, 10, 15)
+        );
+
+        let mut state = GameState::new_egg(30, PetKind::DEFAULT);
+        state.update(HATCHING_TICKS() as u32);
+        state.money = 0;
+        state.money_enabled = false;
+        state.award_inspiration(MiniGame::Nim, GRADE_LOSS);
+        assert_eq!(state.money, 0, "money off pays nothing");
+        assert!(state.cooldown_nim > 0);
+
+        state.money_enabled = true;
+        state.demo.on = true;
+        state.cooldown_nim = 0;
+        state.award_inspiration(MiniGame::Nim, GRADE_LOSS);
+        assert_eq!(state.money, 0, "demo pays nothing");
     }
 
     /// A paid mesh Battle win credits HAX; a loss grants nothing. With

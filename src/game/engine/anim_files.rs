@@ -36,6 +36,7 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::WarningMiserable => 0x0B,
         DisplayAnim::Feeding => 0x0C,
         DisplayAnim::Healing => 0x0D,
+        DisplayAnim::Relaxing => 0x0E,
         DisplayAnim::Playing => 0x0F,
         DisplayAnim::Sleeping => 0x10,
         DisplayAnim::Leaving { .. } => 0x11,
@@ -54,6 +55,19 @@ fn anim_id(anim: DisplayAnim) -> u8 {
         DisplayAnim::Ozempic => 0x26,
         DisplayAnim::Rehab => 0x27,
         DisplayAnim::OnlyPets => 0x28,
+        DisplayAnim::Tipsy => 0x29,
+        DisplayAnim::Wasted => 0x2A,
+        DisplayAnim::HungOver => 0x2B,
+        DisplayAnim::Sore => 0x2C,
+        DisplayAnim::Injured => 0x2D,
+        DisplayAnim::Groggy => 0x2E,
+        DisplayAnim::Stuffed => 0x2F,
+        DisplayAnim::Thirsty => 0x30,
+        DisplayAnim::Wired => 0x31,
+        DisplayAnim::ThrowingUp => 0x32,
+        DisplayAnim::NeedsRehab => 0x33,
+        DisplayAnim::Starving => 0x34,
+        DisplayAnim::Washing => 0x35,
     }
 }
 
@@ -195,6 +209,30 @@ mod pcx_name_tests {
         assert_eq!(pcx_name(0x05, 0x1A, 0x0F), *b"051A0F  PCX");
         assert_eq!(pcx_name(0, 0, 0), *b"000000  PCX");
         assert_eq!(start_screen_filename(), pcx_name(0, 0, 0));
+    }
+
+    #[test]
+    fn v3_anim_ids_match_the_art_table() {
+        use DisplayAnim::*;
+        for (a, id) in [
+            (Relaxing, 0x0E),
+            (Tipsy, 0x29),
+            (Wasted, 0x2A),
+            (HungOver, 0x2B),
+            (Sore, 0x2C),
+            (Injured, 0x2D),
+            (Groggy, 0x2E),
+            (Stuffed, 0x2F),
+            (Thirsty, 0x30),
+            (Wired, 0x31),
+            (ThrowingUp, 0x32),
+            (NeedsRehab, 0x33),
+            (Starving, 0x34),
+            (Washing, 0x35),
+        ] {
+            assert_eq!(anim_id(a), id, "{a:?}");
+        }
+        assert_eq!(build_filename(PetKind(1), Washing, 0), *b"013500  PCX");
     }
 
     #[test]

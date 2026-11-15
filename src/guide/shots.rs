@@ -8,7 +8,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use crate::game::engine::doses::{Reason, Refusal};
 use crate::game::engine::sim;
@@ -39,8 +39,66 @@ const REALM_SHOT: &str = "to-the-realm";
 /// The pet kind the Jellyfish had, before its sprites were removed.
 const JELLYFISH: PetKind = PetKind(8);
 
-/// The pet's name in every shot (the hero is `PetKind::roster()[0]`).
+/// The pet's name in every shot, whatever kind it is. The guide's mascot (the
+/// hero, `PetKind::roster()[0]`) is called the same.
 pub const HERO_NAME: &str = "Bob";
+
+/// Shots that show the same pet as an earlier shot, as `(shot, leader)`: the
+/// book puts them side by side (day and night, starving and wasted ...) or in
+/// one story (the egg, its naming, the hatched pet), and a pair of pictures of
+/// two different pets would read as two different pets.
+const WITH: &[(&str, &str)] = &[
+    ("naming", "egg"),
+    ("hatched", "egg"),
+    ("night", "day"),
+    // No pet on the pick screens; pairing keeps the rotation of the rest.
+    ("select-hard", "select-mode"),
+    ("wasted", "starving"),
+    ("stats-body", "stats-needs"),
+    ("refusal-water", "menu-drink"),
+    ("diary", "cause-toast"),
+    ("demo-help", "demo-note"),
+    ("gone", "leaving"),
+    ("asleep", "menu-rest"),
+];
+
+/// Shots that must show one given pet, as `(shot, pet prefix)`. None needs it
+/// now: every shot's expectation holds for every roster pet.
+const PET_OF: &[(&str, u8)] = &[];
+
+/// The pet a shot shows, taken from the roster in rotation: every shot or
+/// pair of shots in `SHOTS` order moves one pet on, so neighbours differ and
+/// each pet comes back often. Fixed by the shot's place alone, so the PDF is
+/// the same at every build.
+pub fn pet_for(name: &str, roster: &[PetKind]) -> PetKind {
+    assert!(!roster.is_empty(), "the roster is empty");
+    if let Some(&(_, id)) = PET_OF.iter().find(|(n, _)| *n == name) {
+        return roster
+            .iter()
+            .copied()
+            .find(|k| k.0 == id)
+            .unwrap_or_else(|| panic!("shot {name}: pet {id} is not in the roster"));
+    }
+    let lead = WITH.iter().find(|(n, _)| *n == name).map_or(name, |&(_, l)| l);
+    let slot = SHOTS
+        .iter()
+        .filter(|s| !WITH.iter().any(|(n, _)| *n == s.name))
+        .position(|s| s.name == lead)
+        .unwrap_or_else(|| panic!("no shot named {name}"));
+    roster[slot % roster.len()]
+}
+
+/// The kind `Start` begins with: set by `run` from `pet_for`; `NO_PET` before
+/// (the first roster pet).
+static SHOT_PET: AtomicU8 = AtomicU8::new(NO_PET);
+const NO_PET: u8 = u8::MAX;
+
+fn shot_pet() -> PetKind {
+    match SHOT_PET.load(Ordering::Relaxed) {
+        NO_PET => PetKind::roster()[0],
+        id => PetKind(id),
+    }
+}
 
 /// One game tick on the fake clock, in milliseconds.
 const TICK_MS: u64 = 10_000;
@@ -93,7 +151,7 @@ fn play(steps: &[Step]) {
         match *step {
             Press(b) => dispatch_press(b),
             Start { money, hard } => {
-                lifecycle::start_new_game(PetKind::roster()[0], money, hard);
+                lifecycle::start_new_game(shot_pet(), money, hard);
                 lifecycle::set_pet_name(HERO_NAME.as_bytes());
             }
             Poke(p) => lifecycle::debug_poke(p)
@@ -217,6 +275,13 @@ static RISK_ROWS: AtomicUsize = AtomicUsize::new(0);
 fn count_risk_rows() {
     let stats = lifecycle::cycle().expect("a game is running");
     RISK_ROWS.store(modal::risk_row_count(&stats), Ordering::Relaxed);
+}
+
+fn drink_water() {
+    assert!(
+        lifecycle::drink(crate::game::engine::DrinkKind::Water),
+        "the pet would not drink"
+    );
 }
 
 fn sleep() {
@@ -398,14 +463,31 @@ pub static SHOTS: &[Shot] = &[
     shot!("select-mode", [Press(Fire), Press(Fire)], || {
         pet_select::is_active() && pet_select::phase() == pet_select::Phase::Money
     }),
-    // The badge asks for the name once the egg has hatched (the firmware's
-    // render loop does it; there is none here), so the shot plays that too.
+    // The money question with the cursor on its third row, Hard mode (US).
     shot!(
-        "naming",
+        "select-hard",
         [
             Press(Fire),
             Press(Fire),
-            Press(Fire),
+            Press(ButtonId::Down),
+            Press(ButtonId::Down)
+        ],
+        || {
+            pet_select::is_active()
+                && pet_select::phase() == pet_select::Phase::Money
+                && pet_select::selection() == 2
+        }
+    ),
+    // The badge asks for the name once the egg has hatched (the firmware's
+    // render loop does it; there is none here), so the shot plays that too.
+    // It starts the game itself: the pick screens would choose the first pet.
+    shot!(
+        "naming",
+        [
+            Start {
+                money: true,
+                hard: false
+            },
             Do(hatch),
             Do(name_prompt)
         ],
@@ -547,10 +629,10 @@ pub static SHOTS: &[Shot] = &[
         [
             Do(content),
             Open(ModalKind::Drink),
-            Press(Fire),
+            // The pet drinks while the menu is open: the cursor cannot reach
+            // a shut row, so the row under it goes shut and Fire says why.
+            Do(drink_water),
             Step::Ticks(3),
-            Open(ModalKind::Drink),
-            Press(ButtonId::Up),
             Press(Fire)
         ],
         || reason_toast() == Some(Reason::Refused(Refusal::NotThirsty))
@@ -619,6 +701,7 @@ pub fn run(name: &str, out_dir: &Path) -> Result<Summary, String> {
     } else {
         sim_support::install_pets_from_repo_cfg();
     }
+    SHOT_PET.store(pet_for(name, PetKind::roster()).0, Ordering::Relaxed);
 
     catch_unwind(AssertUnwindSafe(|| play(shot.steps))).map_err(|e| {
         let why = e
@@ -661,5 +744,40 @@ mod tests {
         set_fake_unix(Some(SHOT_NIGHT_UNIX));
         assert_eq!(lifecycle::local_minute(), Some(23 * 60));
         set_fake_unix(Some(GUIDE_NOON_UNIX));
+    }
+
+    fn cfg_roster() -> Vec<PetKind> {
+        include_str!("../../assets/to-badge/PETS.CFG")
+            .lines()
+            .filter_map(|l| l.split_once('=')?.0.trim().parse().ok().map(PetKind))
+            .collect()
+    }
+
+    #[test]
+    fn shots_show_a_variety_of_pets_and_pairs_agree() {
+        let roster = cfg_roster();
+        assert!(roster.len() >= 4);
+        let pets: Vec<PetKind> =
+            SHOTS.iter().map(|s| pet_for(s.name, &roster)).collect();
+        assert_eq!(
+            pets,
+            SHOTS.iter().map(|s| pet_for(s.name, &roster)).collect::<Vec<_>>()
+        );
+        let mut seen: Vec<u8> = pets.iter().map(|k| k.0).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert!(seen.len() >= 4, "only {} different pets", seen.len());
+        assert!(pets.iter().all(|k| roster.contains(k) && k.0 != JELLYFISH.0));
+        for (name, lead) in WITH {
+            assert!(SHOTS.iter().any(|s| s.name == *name), "{name}");
+            assert_eq!(pet_for(name, &roster), pet_for(lead, &roster), "{name}");
+        }
+        // Shots listed one after the other differ, unless one is in a pair.
+        let in_pair = |n: &str| WITH.iter().any(|(a, b)| *a == n || *b == n);
+        for w in SHOTS.windows(2) {
+            if !in_pair(w[0].name) && !in_pair(w[1].name) {
+                assert_ne!(pet_for(w[0].name, &roster), pet_for(w[1].name, &roster), "{}", w[1].name);
+            }
+        }
     }
 }

@@ -211,7 +211,7 @@ other way round and shows #w("won a battle!") or #w("lost a battle"). That pet
 did not fight, so there is no prize, no cost and no rest. The record is all
 it changes. The result does not travel across repeaters.
 
-*Who cannot fight.* The Battle row is grey, with its reason, when the pet is
+*Who cannot fight.* The Battle row is grey, and the cursor skips it, when the pet is
 #w("asleep"), #w("busy"), #w("hibernating"), #w("still an egg") or
 #w("pet is gone"). A pet that is #w("injured"), #w("too weak") or
 #w("too drunk") cannot fight either. #w("wait <time>") says the rest has not
