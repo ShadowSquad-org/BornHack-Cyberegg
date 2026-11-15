@@ -51,6 +51,8 @@ const WITH: &[(&str, &str)] = &[
     ("naming", "egg"),
     ("hatched", "egg"),
     ("night", "day"),
+    // No pet on the pick screens; pairing keeps the rotation of the rest.
+    ("select-hard", "select-mode"),
     ("wasted", "starving"),
     ("stats-body", "stats-needs"),
     ("refusal-water", "menu-drink"),
@@ -456,6 +458,21 @@ pub static SHOTS: &[Shot] = &[
     shot!("select-mode", [Press(Fire), Press(Fire)], || {
         pet_select::is_active() && pet_select::phase() == pet_select::Phase::Money
     }),
+    // The money question with the cursor on its third row, Hard mode (US).
+    shot!(
+        "select-hard",
+        [
+            Press(Fire),
+            Press(Fire),
+            Press(ButtonId::Down),
+            Press(ButtonId::Down)
+        ],
+        || {
+            pet_select::is_active()
+                && pet_select::phase() == pet_select::Phase::Money
+                && pet_select::selection() == 2
+        }
+    ),
     // The badge asks for the name once the egg has hatched (the firmware's
     // render loop does it; there is none here), so the shot plays that too.
     // It starts the game itself: the pick screens would choose the first pet.
