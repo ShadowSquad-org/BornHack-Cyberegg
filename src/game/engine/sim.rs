@@ -596,10 +596,37 @@ pub fn run_full(routine: Routine, days: u32, driver: Driver, seed: u64) -> Run {
 
 /// `run_full` with a `Setup`: demo mode, the clock, the care mode.
 pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: Setup) -> Run {
+    run_pet(routine, days, driver, seed, setup, false)
+}
+
+/// A trait at 50 % (`trait_pct`).
+const AVERAGE_TRAIT: u16 = 32768;
+
+/// `run_with` on the prototype's pet: vitality, curiosity and resilience at
+/// 50 %, as its `Cond` has them, so the seed moves only the fights. The
+/// battle lifestyles of spec 18.4 were measured on that pet. The start
+/// health still follows the seed's vitality (`new_egg`).
+pub fn run_average(routine: Routine, days: u32, driver: Driver, seed: u64, setup: Setup) -> Run {
+    run_pet(routine, days, driver, seed, setup, true)
+}
+
+fn run_pet(
+    routine: Routine,
+    days: u32,
+    driver: Driver,
+    seed: u64,
+    setup: Setup,
+    average: bool,
+) -> Run {
     PROBE.with(|p| p.set(PROBE_NEW));
     let care_before = self_care_acts();
     let probes = Probes::new();
     let mut s = GameState::new_egg(seed, PetKind::DEFAULT);
+    if average {
+        s.vitality = AVERAGE_TRAIT;
+        s.curiosity = AVERAGE_TRAIT;
+        s.resilience = AVERAGE_TRAIT;
+    }
     // The routines earn no HAX but battle prizes; with the gate on they would
     // starve, so only a money run keeps it.
     if !setup.money {

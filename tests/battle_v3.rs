@@ -2651,8 +2651,14 @@ mod balance {
 
     type Routine = fn(u32, u32, &GameState) -> Plan;
 
-    fn run(r: Routine, days: u32, driver: Driver, seed: u64, setup: Setup) -> Outcome {
-        sim::run_with(&r, days, driver, seed, setup).outcome
+    fn run(
+        r: impl Fn(u32, u32, &GameState) -> Plan,
+        days: u32,
+        driver: Driver,
+        seed: u64,
+        setup: Setup,
+    ) -> Outcome {
+        sim::run_average(&r, days, driver, seed, setup).outcome
     }
 
     fn runs(name: &str, r: Routine, setup: Setup) -> Vec<Outcome> {
@@ -2691,6 +2697,26 @@ mod balance {
         assert_eq!(o.prizes_hax, 0, "money is off");
     }
 
+    /// The lifestyle rows of spec 18.4 were measured on the prototype's pet,
+    /// whose three traits are all 50 % (`Cond`: vit, cur, res). The balance
+    /// runs use that pet, so a seed moves the fights, not the build (seed 1
+    /// hatches a 37/32/39 pet, seed 3 a 62/48/55 one).
+    #[test]
+    fn balance_runs_use_the_prototype_traits() {
+        use bornhack_aegg::game::engine::{Phase, trait_pct};
+        use std::cell::Cell;
+        let seen = Cell::new(None);
+        let r = |d: u32, m: u32, s: &GameState| {
+            if s.phase == Phase::Active {
+                let t = |v: u16| trait_pct(v);
+                seen.set(Some((t(s.vitality), t(s.curiosity), t(s.resilience))));
+            }
+            sim::fighter(d, m, s)
+        };
+        run(r, 1, Driver::Delta, 1, CLOCK);
+        assert_eq!(seen.get(), Some((50, 50, 50)));
+    }
+
     /// The prototype's fit fighter comes to its 20:00 fight fresh (stamina
     /// 4 on day 20, spec 18.4); two sessions of sport a day leave it at 1.
     #[test]
@@ -2706,7 +2732,7 @@ mod balance {
             }
             p
         };
-        let o = sim::run_with(&r, 10, Driver::Delta, 1, CLOCK).outcome;
+        let o = run(r, 10, Driver::Delta, 1, CLOCK);
         let st = stamina.into_inner();
         eprintln!("fighter stamina at 20:00: {st:?}");
         assert!(o.alive);
