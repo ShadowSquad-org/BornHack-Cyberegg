@@ -61,24 +61,25 @@ class Checker(unittest.TestCase):
     def test_clusters_at_the_boundary(self):
         self.assertEqual([ac.clusters(n) for n in (0, 1, 2048, 2049)], [0, 1, 1, 2])
 
-    def test_states_are_twelve_with_ids(self):
-        self.assertEqual(len(ac.STATES), 12)
+    def test_states_are_thirteen_with_ids(self):
+        self.assertEqual(len(ac.STATES), 13)
         self.assertEqual(ac.STATES[10], "needs_rehab")
         self.assertEqual(ac.STATES[11], "starving")
+        self.assertEqual(ac.STATES[12], "washing")
         self.assertEqual(ac.FIRST_STATE_ANIM + 10, 0x33)
         self.assertEqual(len(ac.ART_PETS), 6)
         self.assertEqual(ac.ART_PETS["slug"],
                          ("02", "bornpets-sponsors-slug.json5", "bornpets-sprites-slug.png", "slug"))
         self.assertEqual(set(ac.INVENTORY_PETS), set(ac.ART_PETS))
 
-    def test_new_files_are_seventy_two(self):
+    def test_new_files_are_seventy_eight(self):
         names = ac.new_files()
-        self.assertEqual(len(names), 72)
+        self.assertEqual(len(names), 78)
         self.assertEqual(names, sorted(names))
-        for n in ("022900.PCX", "023400.PCX", "003300.PCX", "073400.PCX"):
+        for n in ("022900.PCX", "023400.PCX", "003300.PCX", "073400.PCX", "003500.PCX", "073500.PCX"):
             self.assertIn(n, names)
         for n in names:
-            self.assertIn(int(n[2:4], 16), range(0x29, 0x35))
+            self.assertIn(int(n[2:4], 16), range(0x29, 0x36))
 
     def test_existing_slug_files_stay_protected(self):
         for n in ("020100.PCX", "021500.PCX", "022800.PCX", "002000.PCX", "040600.PCX"):
@@ -163,10 +164,10 @@ class Checker(unittest.TestCase):
 
     def test_manifest_lines_for_the_new_files(self):
         lines = ac.manifest_lines()
-        self.assertEqual(len(lines), 72)
+        self.assertEqual(len(lines), 78)
         self.assertIn("022900.PCX SLUG_TIPSY_F1\n", lines)
         self.assertIn("003300.PCX BARTHO_NEEDS_REHAB_F1\n", lines)
-        self.assertEqual(sum(len(l) for l in lines), 2040)
+        self.assertEqual(sum(len(l) for l in lines), 2209)
         self.assertEqual([l.split()[0] for l in lines], ac.new_files())
 
     def test_pcx_bytes_matches_exported_files(self):
@@ -262,7 +263,7 @@ class Checker(unittest.TestCase):
             pad_file(Path(t, "021500.PCX"), 3000)    # 2 clusters
             pad_file(Path(t, "002000.PCX"), 100)     # 1 cluster
             res = ac.budget(t)
-            self.assertEqual(res["total"], 72)
+            self.assertEqual(res["total"], 78)
             self.assertEqual(res["protected_clusters"], 3)
 
     def test_used_clusters_counts_files_and_budget_reports_drift(self):
@@ -286,12 +287,12 @@ class Checker(unittest.TestCase):
     def test_budget_uses_the_computed_limit(self):
         with tempfile.TemporaryDirectory() as t:
             names = ac.new_files()
-            for name in names[:71]:
+            for name in names[:77]:
                 pad_file(Path(t, name), 1000)
-            pad_file(Path(t, names[71]), 2049)
+            pad_file(Path(t, names[77]), 2049)
             res = ac.budget(t)
-            self.assertEqual(res["total"], 73)
-            self.assertEqual(res["over"], [names[71]])
+            self.assertEqual(res["total"], 79)
+            self.assertEqual(res["over"], [names[77]])
             self.assertEqual(res["limit"], ac.volume_limit()["limit"])
             self.assertEqual(res["fits"], res["total"] <= res["limit"])
             self.assertNotIn("assumed_used", res)
@@ -303,7 +304,7 @@ class Checker(unittest.TestCase):
             for name in ac.new_files():
                 pad_file(Path(t, name), 2500)
             res = ac.budget(t)
-            self.assertEqual(res["total"], 144)
+            self.assertEqual(res["total"], 156)
             self.assertFalse(res["fits"])
             self.assertEqual(ac.main(["budget", t]), 1)
 
@@ -368,8 +369,8 @@ class Checker(unittest.TestCase):
             m = json.loads(mpath.read_text())
             self.assertEqual(m["round"], 1)
             self.assertEqual(m["budget"]["limit"], ac.volume_limit()["limit"])
-            self.assertEqual(m["budget"]["total"], 72)
-            self.assertEqual(len(m["frames"]), 72)
+            self.assertEqual(m["budget"]["total"], 78)
+            self.assertEqual(len(m["frames"]), 78)
             self.assertTrue(Path(o, "slug/sheet.png").is_file())
             self.assertTrue(Path(o, "slug/idle.png").is_file())
             self.assertTrue(m["budget"]["fits"])
@@ -417,9 +418,9 @@ class Checker(unittest.TestCase):
             self._export(e)
             os.remove(Path(e, "063200.PCX"))
             m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 72)
+            self.assertEqual(len(m["frames"]), 78)
             self.assertFalse(m["budget"]["fits"])
-            self.assertEqual(m["budget"]["total"], 71)
+            self.assertEqual(m["budget"]["total"], 77)
             gone = [f for f in m["frames"] if f["missing"]]
             self.assertEqual([f["pcx"] for f in gone], ["063200.PCX"])
             self.assertIsNone(gone[0]["file"])
@@ -493,7 +494,7 @@ class Checker(unittest.TestCase):
                 tempfile.TemporaryDirectory() as lit:
             self._export(e)
             m = json.loads(ac.write_review(e, 2, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 72)
+            self.assertEqual(len(m["frames"]), 78)
             self.assertFalse(Path(o, "floor").exists())
 
     def test_review_lists_the_floor_items(self):
@@ -516,8 +517,8 @@ class Checker(unittest.TestCase):
             Image.new("RGBA", (152, 10), (0, 0, 0, 0)).save(lit / "strip.png")
             (lit / "metrics.json").write_text(json.dumps(metrics))
             m = json.loads(ac.write_review(e, 1, out_dir=o, litter_dir=lit).read_text())
-            self.assertEqual(len(m["frames"]), 77)
-            self.assertEqual(m["budget"]["total"], 72)
+            self.assertEqual(len(m["frames"]), 83)
+            self.assertEqual(m["budget"]["total"], 78)
             floor = [f for f in m["frames"] if f["pet"] == "floor"]
             self.assertEqual([f["state"] for f in floor], list(ac.FLOOR_ITEMS))
             for f in floor:

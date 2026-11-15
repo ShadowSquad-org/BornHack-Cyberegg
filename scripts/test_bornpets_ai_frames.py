@@ -168,10 +168,10 @@ class StateFlow(Base):
             self.assertIn("size=1536x1024", cmd)
 
     def test_every_state_has_a_brief_and_two_to_four_refs(self):
-        self.assertEqual(len(ac.STATES), 12)
+        self.assertEqual(len(ac.STATES), 13)
         for s in ac.STATES:
             self.assertIn(s, afm.STATE_BRIEFS)
-            self.assertTrue(afm.STATE_BRIEFS[s].endswith("Nothing else in the frame."), s)
+            self.assertTrue(afm.STATE_BRIEFS[s].count("Nothing else in the frame") == 1, s)
             self.assertGreaterEqual(len(afm.STATE_REFS[s]), 2)
             self.assertLessEqual(len(afm.STATE_REFS[s]), 4)
             for prefix, *_ in ac.ART_PETS.values():
@@ -211,6 +211,8 @@ class StateFlow(Base):
         self.assertIn("starved", afm.STATE_BRIEFS["starving"])
         self.assertEqual(afm.STATE_REFS["needs_rehab"], (0x27, 0x04, 0x0B))
         self.assertEqual(afm.STATE_REFS["starving"], (0x05, 0x09, 0x0C))
+        self.assertEqual(afm.STATE_REFS["washing"], (0x0E, 0x0F))
+        self.assertIn("tub", afm.STATE_BRIEFS["washing"])
 
     def test_prompt_shape(self):
         p = afm.state_prompt("wired", "bigger can")
@@ -635,16 +637,16 @@ class StateCommand(Base):
                 contextlib.redirect_stdout(buf):
             afm.main()
         ids = buf.getvalue().strip().split(",")
-        self.assertEqual(len(ids), 12)
+        self.assertEqual(len(ids), 13)
         self.assertEqual(ids[0], "panda_tipsy_0")
-        self.assertEqual(ids[-1], "panda_starving_0")
+        self.assertEqual(ids[-1], "panda_washing_0")
 
 
 class V3StateRows(unittest.TestCase):
     def test_frame_index_has_the_states(self):
         for pet, (_prefix, cfg, _sheet, seq) in ac.ART_PETS.items():
             seqs = afm.load_sequences(ac.REPO / "assets" / cfg)
-            self.assertEqual(len(seqs), 53, pet)
+            self.assertEqual(len(seqs), 54, pet)
             for i, state in enumerate(ac.STATES):
                 s = seqs[0x29 + i]
                 self.assertEqual(

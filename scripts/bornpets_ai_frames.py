@@ -1305,6 +1305,7 @@ STATE_REFS: dict[str, tuple[int, ...]] = {
     "throwing_up": (0x03, 0x0C, 0x23),
     "needs_rehab": (0x27, 0x04, 0x0B),   # rehab, critical tired, miserable
     "starving": (0x05, 0x09, 0x0C),      # critical hungry, warning hungry, feeding
+    "washing": (0x0E, 0x0F),             # relaxing, playing
 }
 
 STATE_BRIEFS: dict[str, str] = {
@@ -1320,10 +1321,11 @@ STATE_BRIEFS: dict[str, str] = {
     "throwing_up": "Throwing up after sport on a full belly. The {pet} bends over with dizzy eyes and a cartoon splash of sick drawn in WHITE with a thick BLACK outline in front of it, a few wobbly lines. No red anywhere in the sick. Nothing else in the frame.",
     "needs_rehab": "Needs rehab. The {pet} can barely stay upright: knees buckling, shaking, holding on with both arms to something solid (a post, a railing or a walking frame) to keep itself standing, heavy eyes, a few wobble lines. Clearly worse than its idle pose. Nothing else in the frame.",
     "starving": "Starving. The {pet} looks starved: visibly thinner and droopier than its idle pose, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly. Clearly different from its idle pose. Nothing else in the frame.",
+    "washing": "Washing. The {pet} sits in a small round wash tub and scrubs itself with a little brush, a few round soap bubbles around it and one on its head, looking content. Keep the tub small and simple. Nothing else in the frame: no shells, plants, towels or other props. Clearly different from its idle pose.",
 }
 
 # Every state prompt carries this, after style() and before any owner note (amendment 1):
-# the 72 frames have to fit the volume, and a frame over 2048 B costs a second cluster.
+# the 78 frames have to fit the volume, and a frame over 2048 B costs a second cluster.
 FLAT_FILL = (
     "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no "
     "texture, no stippling, no speckles or scattered dots; few small details; fur, stripes and shading are a few big solid shapes, never many small "

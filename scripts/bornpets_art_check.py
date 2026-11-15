@@ -5,8 +5,8 @@ Subcommands:
   diff OLD NEW             list changed / removed / added PCX of the six art pets;
                            exit 1 on any changed or removed file, a protected file that
                            changed or vanished, or an added file that is not one of the
-                           72 shipped new-state names.
-  budget EXPORT            FAT12 cost (2 KiB clusters) of the 72 new PCX; exit 1
+                           78 shipped new-state names.
+  budget EXPORT            FAT12 cost (2 KiB clusters) of the 78 new PCX; exit 1
                            unless it fits volume_limit() (or a file is missing).
   fit-notes EXPORT [--owner-notes F] -o OUT
                            write {frame id: note} for the frames over 2048 B, for
@@ -64,7 +64,7 @@ TO_BADGE = REPO / "assets/to-badge"
 
 STATES = ("tipsy", "wasted", "hung_over", "sore", "injured",
           "groggy", "stuffed", "thirsty", "wired", "throwing_up",
-          "needs_rehab", "starving")   # STATES[i] has anim id 0x29 + i (needs_rehab 0x33, starving 0x34)
+          "needs_rehab", "starving", "washing")   # STATES[i] has anim id 0x29 + i (needs_rehab 0x33, starving 0x34, washing 0x35)
 ART_PETS = {  # pet -> (prefix, json5, sheet, sequence prefix)
     "bartholomeus": ("00", "bornpets-bartholomeus.json5", "bornpets-sprites-bartholomeus.png", "bartho"),
     "cat":          ("01", "bornpets-sponsors-cat.json5", "bornpets-sprites-cat.png", "cat"),
@@ -75,7 +75,7 @@ ART_PETS = {  # pet -> (prefix, json5, sheet, sequence prefix)
 }
 FRAME = (152, 75)
 CLUSTER_BYTES = 2048
-# FAT12 volume: 502 usable 2 KiB clusters. The limit for the 72 new PCX is computed from the
+# FAT12 volume: 502 usable 2 KiB clusters. The limit for the 78 new PCX is computed from the
 # real tree by volume_limit(): 502, minus the 16-cluster guard, minus what the tree uses once
 # the RETIRED files are gone, minus the growth of BPETS_V3.CFG and MANIFEST.TXT.
 USABLE_CLUSTERS = 502
@@ -160,7 +160,7 @@ def clusters(nbytes: int) -> int:
 
 
 def new_files() -> list[str]:
-    """The 72 shipped new-state names (6 pets x 12 states), sorted."""
+    """The 78 shipped new-state names (6 pets x 13 states), sorted."""
     return sorted(f"{prefix}{FIRST_STATE_ANIM + i:02X}00.PCX"
                   for prefix, *_ in ART_PETS.values() for i in range(len(STATES)))
 
@@ -229,11 +229,11 @@ def used_clusters(to_badge_dir=TO_BADGE) -> int:
 
 
 def volume_limit(to_badge_dir=TO_BADGE) -> dict:
-    """The space the 72 new PCX may use, computed from the real tree.
+    """The space the 78 new PCX may use, computed from the real tree.
 
     limit = 502 - 16 - (used - retired_present - new_present) - cfg_growth - manifest_growth, where
     retired_present is what the RETIRED files still in the tree occupy, new_present what the
-    72 new PCX already copied into the tree occupy, cfg_growth the
+    78 new PCX already copied into the tree occupy, cfg_growth the
     clusters BPETS_V3.CFG gains up to CFG_PROJECTED_BYTES, and manifest_growth the clusters
     MANIFEST.TXT gains when the RETIRED lines go and the new lines come.
     """
@@ -550,7 +550,7 @@ SHOWN: dict[str, dict] = {
     "sleepy": _row(_TIRED, 0x08), "poorly": _row(_SICK, 0x07),
     "bored": _row(_MISER, 0x0B), "asleep": _row((0x10,), 0x10),
     "well_rested": _row(_IDLE, 0x01, "shows the normal idle or happy art"),
-    # new: the 12 states (ids 0x29 + STATES index; needs_rehab 0x33, starving 0x34)
+    # new: the 13 states (ids 0x29 + STATES index; needs_rehab 0x33, starving 0x34, washing 0x35)
     "tipsy": _row(_IDLE, _NEW["tipsy"]), "sloppy": _row(_MISER, _NEW["wasted"], "shows the wasted frame"),
     "wasted": _row(_MISER, _NEW["wasted"]), "hung_over": _row(_TIRED, _NEW["hung_over"]),
     "sore": _row(_IDLE, _NEW["sore"]), "injured": _row(_SICK, _NEW["injured"]),
@@ -558,6 +558,7 @@ SHOWN: dict[str, dict] = {
     "thirsty": _row(_HUNGRY, _NEW["thirsty"]), "parched": _row(_HUNGRY, _NEW["thirsty"], "shows the thirsty frame"),
     "wired": _row(_MISER, _NEW["wired"]), "throwing_up": _row((0x23,), _NEW["throwing_up"]),
     "needs_rehab": _row(_IDLE, _NEW["needs_rehab"]), "starving": _row(_HUNGRY, _NEW["starving"]),
+    "washing": _row(_IDLE, _NEW["washing"]),
     # candidates: still on a stand-in
     "waterlogged": _row(_MISER, None, _O + "kept on miserable 0B"),
     "grubby": _row(_MISER, None, _O + "kept on miserable 0B"),
@@ -576,7 +577,7 @@ SHOWN: dict[str, dict] = {
     "only_pets": _row((0x28,), 0x28), "leaving": _row((0x11,), 0x11), "gone": _row((0x12,), 0x12),
     "hibernating": _row((0x13,), 0x13), "hatching": _row((0x14,), 0x14),
 }
-# Words still on a stand-in after the 12 states, for the owner to confirm at the gallery.
+# Words still on a stand-in after the 13 states, for the owner to confirm at the gallery.
 CANDIDATES: tuple[str, ...] = tuple(w for w, r in SHOWN.items() if r["art"] is None)
 
 
