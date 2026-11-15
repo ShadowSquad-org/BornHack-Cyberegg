@@ -98,7 +98,8 @@ impl ModalKind {
                 Item::Friends,
                 Item::Cancel,
             ],
-            Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Cancel],
+            // Demo sits with Hibernate: both put the pet's clock aside.
+            Self::Hibernate => &[Item::Hibernate, Item::WakeUp, Item::Demo, Item::Cancel],
             Self::Feed => &[
                 Item::FeedFood(super::engine::FoodKind::Salad),
                 Item::FeedFood(super::engine::FoodKind::Apple),
@@ -217,6 +218,8 @@ enum Item {
     Song(u8),
     Hibernate,
     WakeUp,
+    /// The demo mode switch (the same switch as the game settings row).
+    Demo,
 }
 
 /// What a debug row does.
@@ -334,6 +337,7 @@ impl Item {
             Self::Song(_) => "?",
             Self::Hibernate => "Hibernate",
             Self::WakeUp => "Defrost",
+            Self::Demo => super::lifecycle::demo_menu_label(),
         }
     }
 
@@ -361,6 +365,11 @@ impl Item {
     /// RolledStats).  The pet must be defrosted before mini-games or
     /// stat actions can run again.
     fn available(self, stats: &super::engine::PetStats) -> bool {
+        // The demo switch asks the engine itself: off always works, on is
+        // refused while hibernating, for a pet in poor shape, or with no pet.
+        if self == Self::Demo {
+            return super::lifecycle::demo_switch_refusal().is_none();
+        }
         // Debug rows are always selectable: a poke the pet cannot take says
         // why when it runs, and the skips work on a hibernating pet too.
         if stats.hibernating && !matches!(self, Self::Debug(_)) {
@@ -415,6 +424,7 @@ impl Item {
                 Self::BornJeweled => stats.can_play_bornjeweled,
                 Self::Hibernate => true,
                 Self::WakeUp => false,
+                Self::Demo => true, // answered at the top, before the hibernation gate
             }
     }
 
@@ -503,6 +513,7 @@ impl Item {
             Self::BornJeweled => lifecycle::game_refusal(Some(MiniGame::BornJeweled)),
             Self::Sleep => lifecycle::sleep_refusal(),
             Self::WakeFromSleep => (!stats.is_sleeping).then_some(Reason::Refused(Refusal::NoNeed)),
+            Self::Demo => lifecycle::demo_switch_refusal(),
             _ => match self.action() {
                 Some((a, d)) => lifecycle::refusal_for(a, d),
                 None => None,
@@ -626,6 +637,11 @@ impl Item {
             Self::WakeUp => {
                 lifecycle::wake_from_hibernation();
                 super::show_toast(super::Toast::Wake);
+                close();
+            }
+            // The main screen's demo mark and help line show the new state.
+            Self::Demo => {
+                let _ = lifecycle::toggle_demo();
                 close();
             }
         }
@@ -1709,6 +1725,60 @@ mod tests {
         // The reason comes before a risk and the menu title.
         let t = super::title_text(ModalKind::Drink, Some(water), Some(&stats), Some(Cause::FoodComa));
         assert_eq!(t.as_str(), "not thirsty");
+        lifecycle::set_state_for_test(None);
+    }
+
+    /// Put the cursor on `item` in the open Hibernate menu and press it.
+    fn press_in_hibernate_menu(item: Item) {
+        super::open(ModalKind::Hibernate);
+        let row = ModalKind::Hibernate
+            .items()
+            .iter()
+            .position(|i| *i == item)
+            .unwrap();
+        super::MODAL_POS.store(row as u8, core::sync::atomic::Ordering::Relaxed);
+        super::activate();
+    }
+
+    #[test]
+    fn the_hibernate_menu_has_the_demo_switch_before_cancel() {
+        let items = ModalKind::Hibernate.items();
+        let demo = items
+            .iter()
+            .position(|i| *i == Item::Demo)
+            .expect("no demo row");
+        assert!(items[demo + 1] == Item::Cancel);
+    }
+
+    #[test]
+    fn the_demo_row_switches_demo_on_and_off() {
+        let _guard = crate::game::lock_test_state();
+        let stats = menu_pet(false, false, |_| {});
+        assert!(Item::Demo.selectable(Some(&stats)));
+        assert_eq!(Item::Demo.label(), lifecycle::demo_menu_label());
+        press_in_hibernate_menu(Item::Demo);
+        assert!(lifecycle::is_demo());
+        let stats = lifecycle::cycle().unwrap();
+        assert!(Item::Demo.selectable(Some(&stats)));
+        assert_eq!(Item::Demo.label(), "Demo mode: on");
+        press_in_hibernate_menu(Item::Demo);
+        assert!(!lifecycle::is_demo());
+        lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn a_refused_demo_row_says_why_and_cannot_be_pressed() {
+        let _guard = crate::game::lock_test_state();
+        let stats = menu_pet(false, false, |s| s.health = pct(5));
+        assert!(!Item::Demo.selectable(Some(&stats)));
+        assert_eq!(Item::Demo.label(), "Demo: fix me first");
+        lifecycle::set_state_for_test(None);
+
+        let _stats = menu_pet(false, false, |_| {});
+        lifecycle::hibernate();
+        let stats = lifecycle::cycle().unwrap();
+        assert!(!Item::Demo.selectable(Some(&stats)));
+        assert_eq!(Item::Demo.label(), "Demo: frozen");
         lifecycle::set_state_for_test(None);
     }
 

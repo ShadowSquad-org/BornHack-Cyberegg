@@ -334,8 +334,9 @@ A hibernating pet keeps every row but #w("Friends"). Any button closes a view.
 == Hibernate
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
-  [The Hibernate menu has two rows: #w("Hibernate") and #w("Defrost"). The
-  first freezes the pet and the second thaws it. While the pet is frozen, only the
+  [The Hibernate menu has #w("Hibernate") and #w("Defrost"). The
+  first freezes the pet and the second thaws it. Below them sits the demo
+  switch, the same one as in the Bornagotchi menu (see Demo mode below). While the pet is frozen, only the
   Stats and Hibernate icons open. The other icons do nothing. Both rows are free and instant.
   Defrost on a pet that is not frozen is shut and says #w("no need"), and
   Hibernate on a frozen pet says #w("hibernating").
@@ -394,8 +395,9 @@ and takes its medicine. You can still step in whenever you like.
   [
     The switches live in the Main screen, #w("Bornagotchi") menu. Two rows
     sit between #w("Mode:") and the separator above #w("Reset Pet"). The
-    first switches demo mode. The second picks how the pet cares. A refused
-    press changes nothing, and the label already says why.
+    first switches demo mode. The second picks how the pet cares. The demo
+    switch is also in the Hibernate menu: both are ways to set the pet's care
+    aside. A refused press changes nothing, and the label already says why.
   ],
   hero-pic("idle"))
 

@@ -580,6 +580,17 @@ fn demo_refusal_label(why: super::engine::doses::Reason) -> &'static str {
     }
 }
 
+/// Why pressing the demo switch now would do nothing, or `None` when it would
+/// switch: off always works, on follows `GameState::demo_refusal`.
+pub fn demo_switch_refusal() -> Option<super::engine::doses::Reason> {
+    let state = unsafe { (*GAME.get()).as_ref() };
+    match state {
+        None => Some(super::engine::doses::Reason::Gone),
+        Some(s) if s.is_demo() => None,
+        Some(s) => s.demo_refusal(),
+    }
+}
+
 /// The demo row of the game settings menu. The refusal is the engine's, so
 /// the label says why the press would do nothing.
 pub fn demo_menu_label() -> &'static str {

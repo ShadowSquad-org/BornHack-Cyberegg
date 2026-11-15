@@ -55,7 +55,8 @@ holiday. That is kind, but it is also not in the rules.]
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
     Hibernation is a pause that you choose. Open the top-row icon next to
-    Stats. The menu has #w("Hibernate") and #w("Defrost"). Both are free and
+    Stats. The menu has #w("Hibernate") and #w("Defrost"), and the demo
+    switch (@ch-care). Both are free and
     instant. Hibernate freezes the pet. Defrost thaws it. It works on an egg
     and on a pet that is leaving, but not on one that has gone.
   ],
