@@ -509,8 +509,8 @@ mod snapshot {
 mod fight {
     use super::snapshot::{build, builds};
     use bornhack_aegg::game::engine::combat::{
-        Body, Decisive, Factor, Form, ROUNDS, Snapshot, chance_seed, decisive, derive, factors,
-        fight, form, seed, win_chance,
+        Body, CHANCE_FIGHTS, Decisive, Factor, Form, ROUNDS, Snapshot, chance_seed, decisive,
+        derive, factors, fight, form, seed, win_chance,
     };
     use bornhack_aegg::game::engine::thresholds as t;
 
@@ -520,8 +520,9 @@ mod fight {
         derive(&build(name))
     }
 
+    /// `w` wins of `CHANCE_FIGHTS` as a percent, rounded to the nearest 5.
     fn round5(w: u32) -> u8 {
-        ((w * 100 + 32) / 64 + 2) as u8 / 5 * 5
+        (((w * 100 + CHANCE_FIGHTS / 2) / CHANCE_FIGHTS + 2) / 5 * 5) as u8
     }
 
     #[test]
@@ -646,7 +647,7 @@ mod fight {
         for (_, a) in bs.iter() {
             for (_, b) in bs.iter() {
                 let (sa, sb) = (derive(a), derive(b));
-                let w = (0..64u32)
+                let w = (0..CHANCE_FIGHTS)
                     .filter(|&k| fight(chance_seed(k), &sa, &sb).a_won)
                     .count() as u32;
                 let c = win_chance(&sa, &sb);
