@@ -96,6 +96,27 @@ The quoted phrase is verbatim; the rest is the controller's relay, kept close to
 - Storage: the controller recommends baking the litter into firmware flash as const bitmaps (two 1-bit planes, about ≤ 100 B each), not as PCX on FAT12.
 - Part B replaces plan 7's hand bitmaps with the baked art. It keeps `scene.rs` and the dirt thresholds unchanged, and updates plan 7's pixel tests and the guide shots/text as needed.
 
+### 1.10 Amendment 1 (owner, 2026-11-15), verbatim
+
+A4 stopped on space: 50 frames cost 72 clusters, the limit was 55 and 22 frames were over 2048 B. The owner decided the following (quotes are verbatim).
+
+1. **Space: "Free + simplify".**
+   - Remove the 18 Drained files (anim rows `06` and `0A` of prefixes 00, 01, 05, 06, 07) from the badge volume. The Slug's `020600` / `020A00` are not touched.
+   - Redraw frames over 2048 B with flatter fills until the art fits. Keep every state.
+   - The Drained cells stay in the sheets and remain usable as references.
+2. **Relax frame 3.** "Relax has 3 frame animations now, that can be 2." Remove `050E02`, `060E02`, `070E02` the same way. No Slug file is touched.
+3. **The Slug is in scope.** "The artist gave permission to create the extra art for the slug as well." Its existing files and sheet rows stay byte-identical.
+4. **Full set at once.** "Starving" and "needs rehab" are new states for all six pets. The target is 6 x 12 = 72 frames, budgeted once. The flat-fill style is decided up front and applied to every generation.
+5. **Bartholomeus notes** (owner):
+   - hung over: "Make it tilt it's head forwards because it has a headache."
+   - injured: "No cast or band aid?"
+   - needs rehab: "More dramatic, holding on to something to keep itself standing, not just the same image nothing changed."
+   - starving: "Can you make it look starved? it's a bit like it's always."
+6. **Keep the A4 work.** The 50 A4 frames are kept. Only frames over 2048 B are regenerated, plus the two noted Bartholomeus redraws.
+7. **Merge first.** Merge local `main` `a718cc0` (plan 7 merged, Jellyfish gone) into the branch before anything else.
+
+These supersede §1.2 "The Slug (02) gets no new art", §3.2 "Drained `06`/`0A` stay ... their files stay on the badge", the plan's "Needs the owner" question (answered: yes) and the Global Constraints "Space: ... at most 55 clusters".
+
 ## 2. Findings at `5e59574`
 
 1. **Live badger sources.** `bornpets-sponsors-badger.json5` with `bornpets-sprites-badger.png` (no suffix). Decoded pixel by pixel, all 51 shipped `06*.PCX` match its sheet. The `-v2` and `-v3` sheets match 0 of 51; they are stale.
@@ -281,3 +302,16 @@ Casual equals Classic. Its later stuffed line (83) already makes it gentler, as 
 - `FLOOR_SLOTS` keeps its name and type; it moves into the generated file and `background.rs` re-exports it.
 - No plan-7 test changes its code. Every one is written over `FLOOR_SLOTS` and its bounds, so they are re-run on the new data. The list is in the plan, Task B4b.
 - The guide keeps plan 7's "floor" shot and ch3 table. The shot is redrawn and looked at; the text changes only if it describes how an item looks.
+
+### 3.6 Amendment 1: tooling for six pets, twelve states and the computed limit *(planner's call)*
+
+- **Ids.** `STATES` gains `needs_rehab` (`0x33`) and `starving` (`0x34`), appended, so `STATES[i]` still has id `0x29 + i`. That is 12 states, ids `0x29`-`0x34`, and 72 new files (`new_files()`, six pets). Part B maps them for every pet with the files; a pet without a file falls back to today's stand-in through `shown_anim`.
+- **The Slug** joins `ART_PETS` (prefix 02, `bornpets-sponsors-slug.json5`, `bornpets-sprites-slug.png`, sequence `slug`). Its sheet gains rows `0x1F` (reserved), `0x20`-`0x28` (blank hand-added boxes, as for Bartholomeus and Cat) and `0x29`-`0x34`, via `asset-gen migrate`. Every existing `02xxxx` file below `0x29` is protected: `diff` fails (`protected_changed`) when one changes or vanishes. `021500`-`021700` stay litter references only.
+- **Briefs and references.**
+  - needs rehab (refs `0x27`, `0x04`, `0x0B`): the pet can barely stay upright, knees buckling, shaking, holding on with both arms to something solid (a post, a railing or a walking frame), heavy eyes, a few wobble lines.
+  - starving (refs `0x05`, `0x09`, `0x0C`): visibly thinner and droopier than idle, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly.
+- **`FLAT_FILL`.** Every state prompt carries, after the style text and before any owner note: "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no texture, no stippling, no speckles or scattered dots; few small details; every outline a continuous unbroken line. Solid white stays solid white." Frames that already fit are not regenerated.
+- **Retirement.** `RETIRED` lists 21 names: the 18 Drained files and `050E02`, `060E02`, `070E02`. They leave `assets/to-badge` through `remove` lines in `asset-changes.txt` (every known version hash), and their `MANIFEST.TXT` lines are deleted by hand. The sheets keep the cells.
+- **The limit is computed, not assumed.** `volume_limit() = 502 - 16 - (used(to-badge) - clusters(RETIRED still present)) - cfg_growth - manifest_growth`, with `cfg_growth` the clusters `BPETS_V3.CFG` gains up to 13 404 B (plan 5's 13 176 B plus six `THROWUP_*` rows) and `manifest_growth` the clusters `MANIFEST.TXT` gains when the retired lines go and the 72 new lines (2 040 B) come. The 16-cluster guard is unchanged. `NEW_PCX_BUDGET` and `ASSUMED_USED` are gone.
+- **Sheet references.** `ref_rows(prefix, aa)` decodes the shipped PCX when it exists; otherwise it crops frame 0 of row `aa` from the pet's sheet and maps it through `classify` to indices 0-3, so retired Drained rows still work as references (hung over uses `0x06`/`0x07`, groggy `0x0A`).
+- **Gallery.** The A4 files were never shown to the owner, so the amended gallery (A5) is round 1 and the 3-round cap counts from there.
