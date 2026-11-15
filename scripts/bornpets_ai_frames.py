@@ -1487,6 +1487,58 @@ def dekey_halo(img: Image.Image) -> Image.Image:
     return out
 
 
+INK_SOLID = 0.55     # a badge pixel more than this share black is black outright
+INK_RIDGE_MIN = 0.2  # a thinner line still claims the darkest pixel across it
+INK_EDGE_MIN = 0.05  # any outline at all in a silhouette pixel makes it black
+
+
+def ink_resize(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Shrink art onto the badge palette without losing thin black lines.
+
+    A filter resize averages a thin black line with the white beside it into
+    grey, which `classify` reads as white: the outline breaks up. Instead,
+    classify the full-size pixels first, then take the exact area share of each
+    ink per badge pixel (BOX resize of each ink mask). A pixel is black when
+    black covers more than INK_SOLID of it, or when it is the darkest pixel
+    across a line (a ridge in the black share, ties going to the right/lower
+    pixel so a line stays one pixel wide) with at least INK_RIDGE_MIN black.
+    The rest is transparent when under half covered, else red or white by
+    majority. Finally a silhouette pixel (next to transparency) with any
+    outline in it (INK_EDGE_MIN) is black, so the outer outline stays closed.
+    """
+    import numpy as np
+
+    a = np.asarray(img.convert("RGBA"), dtype=np.int32)
+    r, g, b, al = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    opaque = al >= 128
+    red = opaque & (r > 140) & (g < 110) & (b < 110)
+    white = opaque & ~red & ((r * 299 + g * 587 + b * 114) // 1000 >= 128)
+    black = opaque & ~red & ~white
+
+    def share(mask):
+        m = Image.fromarray(mask.astype(np.float32), "F").resize(size, Image.BOX)
+        return np.asarray(m, dtype=np.float32)
+
+    cb, cr, cw = share(black), share(red), share(white)
+    p = np.pad(cb, 1, mode="edge")
+    left, right, up, down = p[1:-1, :-2], p[1:-1, 2:], p[:-2, 1:-1], p[2:, 1:-1]
+    e = 1e-4   # BOX shares carry float noise; equal must compare equal
+    ridge = ((cb >= left - e) & (cb > right + e)) | ((cb >= up - e) & (cb > down + e))
+    is_black = (cb > INK_SOLID) | ((cb >= INK_RIDGE_MIN) & ridge)
+    clear = ~is_black & (cb + cr + cw < 0.5)
+    t = np.pad(clear, 1, constant_values=True)
+    edge = ~clear & (t[1:-1, :-2] | t[1:-1, 2:] | t[:-2, 1:-1] | t[2:, 1:-1])
+    is_black |= edge & (cb >= INK_EDGE_MIN)
+    is_red = ~is_black & ~clear & (cr > cw)
+
+    out = np.empty((size[1], size[0], 4), dtype=np.uint8)
+    out[...] = WHITE
+    out[is_red] = RED
+    out[is_black] = BLACK
+    out[clear] = TRANSPARENT
+    return Image.fromarray(out, "RGBA")
+
+
 def cut_pet(raw: Image.Image, idle: tuple[int, int, int, int], margin: int = 4) -> Image.Image:
     """Cut a whole-pet raw to a FRAME that is framed like the pet's idle frame.
 
@@ -1503,14 +1555,9 @@ def cut_pet(raw: Image.Image, idle: tuple[int, int, int, int], margin: int = 4) 
         return out
     art = raw.crop(bbox)
     scale = min((FRAME[0] - 2 * margin) / art.width, (idle[3] - idle[1]) / art.height)
-    art = art.resize((max(1, round(art.width * scale)), max(1, round(art.height * scale))),
-                     Image.LANCZOS)
+    art = ink_resize(art, (max(1, round(art.width * scale)), max(1, round(art.height * scale))))
     x = min(max((idle[0] + idle[2] - art.width) // 2, margin), FRAME[0] - margin - art.width)
     out.paste(art, (x, idle[3] - art.height))
-    px = out.load()
-    for y in range(FRAME[1]):
-        for x in range(FRAME[0]):
-            px[x, y] = classify(px[x, y])
     return despeckle(out, MIN_BLOB)
 
 

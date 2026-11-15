@@ -296,6 +296,96 @@ class StateFlow(Base):
         out = afm.cut_pet(Image.new("RGBA", afm.CANVAS, afm.KEY), (32, 1, 117, 74))
         self.assertEqual(set(out.getdata()), {afm.TRANSPARENT})
 
+    # --- ink_resize: thin black lines must survive a ~10x shrink ---------------
+
+    @staticmethod
+    def blacks_per_row(img, rows, cols=None):
+        px = img.load()
+        cols = cols if cols is not None else range(img.width)
+        return [[x for x in cols if px[x, y] == afm.BLACK] for y in rows]
+
+    def test_ink_resize_keeps_a_thin_line_split_over_two_pixels(self):
+        # 5 px line at 1/10 scale = half a badge pixel, split 0.3 / 0.2 over columns 49 and 50.
+        src = Image.new("RGBA", (1000, 1000), (255, 255, 255, 255))
+        src.paste((0, 0, 0, 255), (497, 0, 502, 1000))
+        out = afm.ink_resize(src, (100, 100))
+        # Rows 0 and 99 border the outside of the image, which counts as transparent
+        # (silhouette), so only the inner rows show the plain line rule.
+        for xs in self.blacks_per_row(out, range(1, 99)):
+            self.assertEqual(len(xs), 1)
+            self.assertIn(xs[0], (49, 50))
+
+    def test_ink_resize_line_split_evenly_is_one_pixel_wide_not_two(self):
+        src = Image.new("RGBA", (1000, 1000), (255, 255, 255, 255))
+        src.paste((0, 0, 0, 255), (495, 0, 505, 1000))     # 1 badge px wide, 0.5 / 0.5
+        out = afm.ink_resize(src, (100, 100))
+        self.assertTrue(all(len(xs) == 1 for xs in self.blacks_per_row(out, range(1, 99))))
+        src = src.transpose(Image.Transpose.ROTATE_90)       # same for a horizontal line
+        out = afm.ink_resize(src, (100, 100)).transpose(Image.Transpose.ROTATE_270)
+        self.assertTrue(all(len(xs) == 1 for xs in self.blacks_per_row(out, range(1, 99))))
+
+    def test_ink_resize_keeps_a_thin_diagonal_line_connected(self):
+        src = Image.new("RGBA", (1000, 1000), (255, 255, 255, 255))
+        px = src.load()
+        for y in range(1000):
+            for x in range(max(0, y - 3), min(1000, y + 4)):   # ~7 px wide diagonal
+                px[x, y] = (0, 0, 0, 255)
+        out = afm.ink_resize(src, (100, 100))
+        prev = None
+        for y, xs in enumerate(self.blacks_per_row(out, range(2, 98))):
+            self.assertTrue(xs, f"row {y + 2} lost the line")
+            if prev is not None:
+                self.assertLessEqual(min(abs(a - b) for a in xs for b in prev), 1)
+            prev = xs
+
+    def test_ink_resize_keeps_a_thin_outline_on_the_silhouette_closed(self):
+        # White disc with a 5 px black rim on transparent: every opaque pixel that
+        # touches transparency must be black, or the outline has a gap.
+        src = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))
+        px = src.load()
+        for y in range(1000):
+            for x in range(1000):
+                d2 = (x - 500) ** 2 + (y - 500) ** 2
+                if d2 < 400 ** 2:
+                    px[x, y] = (0, 0, 0, 255) if d2 >= 395 ** 2 else (255, 255, 255, 255)
+        out = afm.ink_resize(src, (100, 100))
+        op = out.load()
+        gaps = [(x, y) for y in range(1, 99) for x in range(1, 99)
+                if op[x, y] not in (afm.TRANSPARENT, afm.BLACK)
+                and any(op[x + dx, y + dy] == afm.TRANSPARENT
+                        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))]
+        self.assertEqual(gaps, [])
+
+    def test_ink_resize_does_not_grow_black_fills_or_eat_colour(self):
+        src = Image.new("RGBA", (1000, 1000), (0, 0, 0, 0))
+        src.paste((255, 255, 255, 255), (100, 100, 900, 900))
+        src.paste((0, 0, 0, 255), (200, 200, 400, 400))      # black block: 20x20 badge px
+        src.paste((220, 20, 30, 255), (600, 600, 800, 800))  # red block
+        out = afm.ink_resize(src, (100, 100))
+        op = out.load()
+        self.assertEqual(sum(op[x, y] == afm.BLACK for y in range(100) for x in range(100)), 400)
+        self.assertEqual(sum(op[x, y] == afm.RED for y in range(100) for x in range(100)), 400)
+        self.assertEqual(op[5, 5], afm.TRANSPARENT)
+        self.assertEqual(op[50, 30], afm.WHITE)
+        self.assertLessEqual(set(out.getdata()),
+                             {afm.BLACK, afm.WHITE, afm.RED, afm.TRANSPARENT})
+
+    def test_cut_pet_keeps_a_thin_outline_closed(self):
+        raw = Image.new("RGBA", afm.CANVAS, afm.KEY)
+        px = raw.load()
+        for y in range(180, 860):
+            for x in range(500, 1100):
+                edge = x < 505 or x >= 1095 or y < 185 or y >= 855   # 5 px rim, ~0.5 badge px
+                px[x, y] = (0, 0, 0, 255) if edge else (255, 255, 255, 255)
+        out = afm.cut_pet(raw, (32, 1, 117, 74))
+        op = out.load()
+        w, h = out.size
+        gaps = [(x, y) for y in range(h) for x in range(w)
+                if op[x, y] == afm.WHITE
+                and any(not (0 <= x + dx < w and 0 <= y + dy < h) or op[x + dx, y + dy] == afm.TRANSPARENT
+                        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))]
+        self.assertEqual(gaps, [])
+
     def test_idle_box_is_the_bbox_of_the_pets_own_idle_pcx(self):
         w, h, rows = ac.decode_pcx(ac.TO_BADGE / "050100.PCX")
         xs = [x for r in rows for x, v in enumerate(r) if v != 3]
