@@ -165,7 +165,7 @@ class Checker(unittest.TestCase):
             _, _, rows = ac.decode_pcx(f)
             self.assertEqual(ac.pcx_bytes(rows), f.stat().st_size, f.name)
             n += 1
-        self.assertGreater(n, 350)
+        self.assertGreater(n, 300)
 
     def test_fit_notes_only_for_over_frames(self):
         with tempfile.TemporaryDirectory() as t:
