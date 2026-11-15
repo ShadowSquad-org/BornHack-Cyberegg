@@ -1334,8 +1334,8 @@ STATE_BRIEFS: dict[str, str] = {
 # the 72 frames have to fit the volume, and a frame over 2048 B costs a second cluster.
 FLAT_FILL = (
     "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no "
-    "texture, no stippling, no speckles or scattered dots; few small details; every outline a "
-    "continuous unbroken line. Solid white stays solid white."
+    "texture, no stippling, no speckles or scattered dots; few small details; fur, stripes and shading are a few big solid shapes, never many small "
+    "marks; every outline a continuous unbroken line. Solid white stays solid white."
 )
 
 
@@ -1418,23 +1418,71 @@ def state_prompt(state: str, note: str | None = None) -> str:
     return text
 
 
-def cut_back(raw: Image.Image) -> Image.Image:
-    """Crop the reference rectangle out of a CANVAS result: exact FRAME, badge palette.
+def idle_box(prefix: str) -> tuple[int, int, int, int]:
+    """Bounding box (x0, y0, x1, y1, exclusive) of the pet's own shipped idle frame."""
+    rows = decode_pcx(TO_BADGE / f"{prefix}0100.PCX")[2]
+    cols = [x for r in rows for x, v in enumerate(r) if v != 3]
+    live = [y for y, r in enumerate(rows) if any(v != 3 for v in r)]
+    return min(cols), live[0], max(cols) + 1, live[-1] + 1
 
-    BOX is an exact 6x6 average, so a reference fed straight back returns its
-    own pixels (LANCZOS rings at the red/black edges). No rescale to the art's
-    bbox: the size follows idle.
+
+_HALO_MIN = 24    # a blend darker than this is the pet's own black outline, not halo
+
+
+def dekey_halo(img: Image.Image) -> Image.Image:
+    """`dekey`, plus the soft shadow halo the model paints around the pet.
+
+    The halo fades from black out into the key colour, so the plain key test
+    leaves its dark inner part opaque: it grows the bbox and survives as black
+    specks. Flood in from the border through every purple-ish pixel that is
+    not near-black (outline); the pet's outline (near black) and red/white art stop it.
     """
-    assert raw.size == CANVAS, f"expected {CANVAS}, got {raw.size}"
-    ox, oy = REF_ORIGIN
-    box = (ox, oy, ox + FRAME[0] * REF_SCALE, oy + FRAME[1] * REF_SCALE)
-    small = raw.convert("RGBA").crop(box).resize(FRAME, Image.BOX)
-    small = dekey(small)
-    px = small.load()
+    out = dekey(img)
+    w, h = out.size
+    px = out.load()
+
+    def halo(p) -> bool:
+        r, g, b, a = p
+        return a < 128 or (g < 110 and abs(r - b) < 60 and max(r, b) >= _HALO_MIN)
+
+    seen = [[False] * w for _ in range(h)]
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    while stack:
+        x, y = stack.pop()
+        if not (0 <= x < w and 0 <= y < h) or seen[y][x]:
+            continue
+        seen[y][x] = True
+        if halo(px[x, y]):
+            px[x, y] = TRANSPARENT
+            stack += [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    return out
+
+
+def cut_pet(raw: Image.Image, idle: tuple[int, int, int, int], margin: int = 4) -> Image.Image:
+    """Cut a whole-pet raw to a FRAME that is framed like the pet's idle frame.
+
+    The model draws the whole pet bigger than the hand-drawn art, and the
+    firmware lays toast, HAX counter, status line and litter over the sprite.
+    So take the bbox of the art, scale it uniformly to fit (frame width - 2 *
+    margin) x idle height, and put it bottom-aligned at the idle bottom, centred
+    on the idle centre, clamped inside the frame. A raw with no art is blank.
+    """
+    raw = dekey_halo(raw.convert("RGBA"))
+    out = Image.new("RGBA", FRAME, TRANSPARENT)
+    bbox = raw.getbbox()
+    if bbox is None:
+        return out
+    art = raw.crop(bbox)
+    scale = min((FRAME[0] - 2 * margin) / art.width, (idle[3] - idle[1]) / art.height)
+    art = art.resize((max(1, round(art.width * scale)), max(1, round(art.height * scale))),
+                     Image.LANCZOS)
+    x = min(max((idle[0] + idle[2] - art.width) // 2, margin), FRAME[0] - margin - art.width)
+    out.paste(art, (x, idle[3] - art.height))
+    px = out.load()
     for y in range(FRAME[1]):
         for x in range(FRAME[0]):
             px[x, y] = classify(px[x, y])
-    return despeckle(small, MIN_BLOB)
+    return despeckle(out, MIN_BLOB)
 
 
 _N8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
@@ -1564,7 +1612,7 @@ def cmd_state(args: argparse.Namespace) -> None:
                 # Never re-cut over an existing frame: that would undo `simplify`.
                 print(f"[{n}/{len(wanted)}] {fid}: cached")
                 continue
-            cut_back(Image.open(raw_path).convert("RGBA")).save(frame_path)
+            cut_pet(Image.open(raw_path).convert("RGBA"), idle_box(prefix)).save(frame_path)
         except Exception as exc:   # one bad frame must not abandon the others
             failed.append(fid)
             print(f"[{n}/{len(wanted)}] {fid}: FAILED - {type(exc).__name__}: {str(exc)[:300]}",

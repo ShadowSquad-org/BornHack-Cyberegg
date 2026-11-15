@@ -236,46 +236,71 @@ class StateFlow(Base):
                     self.assertEqual(px[x, y], afm.KEY)
         self.assertNotEqual(px[ox + 456, oy + 300], afm.KEY)   # the panda is inside
 
-    def test_cut_back_returns_the_exact_frame_and_palette(self):
-        with tempfile.TemporaryDirectory() as t:
-            p = Path(t) / "r.png"
-            afm.ref_png("05", 0x01, p)
-            out = afm.cut_back(Image.open(p).convert("RGBA"))
-        self.assertEqual(out.size, ac.FRAME)
-        self.assertLessEqual(set(out.getdata()), {afm.BLACK, afm.WHITE, afm.RED, afm.TRANSPARENT})
-        self.assertEqual(self._as_rows(out), ac.decode_pcx(ac.TO_BADGE / "050100.PCX")[2])
-
-    def test_cut_back_rejects_a_wrong_canvas(self):
-        with self.assertRaises(AssertionError):
-            afm.cut_back(Image.new("RGBA", (1024, 1024), afm.KEY))
+    @staticmethod
+    def synthetic_raw(halo=True):
+        """A whole pet on a magenta CANVAS: white body, black outline, red paws, a soft dark halo."""
+        raw = Image.new("RGBA", afm.CANVAS, afm.KEY)
+        px = raw.load()
+        for y in range(180, 860):
+            for x in range(500, 1100):
+                edge = x < 508 or x >= 1092 or y < 188 or y >= 852
+                px[x, y] = (0, 0, 0, 255) if edge else (255, 255, 255, 255)
+        for y in range(780, 850):
+            for x in range(540, 700):
+                px[x, y] = (255, 0, 0, 255)
+        if halo:
+            for k in range(1, 40):      # a ring fading from black out into the key colour
+                v = (k * 250 // 40, 0, k * 250 // 40, 255)
+                for y in range(180 - k, 860 + k):
+                    px[500 - k, y] = v
+                    px[1099 + k, y] = v
+                for x in range(500 - k, 1100 + k):
+                    px[x, 180 - k] = v
+                    px[x, 859 + k] = v
+        return raw
 
     @staticmethod
-    def _as_rows(img):
-        idx = {afm.BLACK: 0, afm.RED: 1, afm.WHITE: 2, afm.TRANSPARENT: 3}
-        w, h = img.size
-        px = img.load()
-        return [[idx[px[x, y]] for x in range(w)] for y in range(h)]
+    def art_box(img):
+        return Image.eval(img.getchannel("A"), lambda a: 255 if a >= 128 else 0).getbbox()
 
-    def test_cut_back_round_trips_idle_for_all_five_pets(self):
-        code = (
-            "import sys; sys.path.insert(0, %r)\n"
-            "import tempfile\nfrom pathlib import Path\nfrom PIL import Image\n"
-            "import bornpets_ai_frames as afm, bornpets_art_check as ac\n"
-            "idx={afm.BLACK:0,afm.RED:1,afm.WHITE:2,afm.TRANSPARENT:3}\n"
-            "with tempfile.TemporaryDirectory() as t:\n"
-            "    p=Path(t)/'r.png'; afm.ref_png(sys.argv[1], 1, p)\n"
-            "    out=afm.cut_back(Image.open(p).convert('RGBA'))\n"
-            "px=out.load()\n"
-            "rows=[[idx[px[x,y]] for x in range(152)] for y in range(75)]\n"
-            "want=ac.decode_pcx(ac.TO_BADGE/(sys.argv[1]+'0100.PCX'))[2]\n"
-            "sys.exit(0 if rows==want else 1)\n" % str(SCRIPTS)
-        )
-        for pet, (prefix, *_) in ac.ART_PETS.items():
-            env = {k: v for k, v in os.environ.items() if k != "BORNPETS_PET"}
-            env["BORNPETS_PET"] = pet
-            res = REAL_RUN([sys.executable, "-I", "-c", code, prefix],
-                           env=env, capture_output=True, text=True)
-            self.assertEqual(res.returncode, 0, f"{pet}: {res.stdout}{res.stderr}")
+    def test_cut_pet_fits_the_pet_inside_the_idle_framing(self):
+        idle = (32, 1, 117, 74)                       # panda idle bbox, exclusive
+        for halo in (False, True):
+            out = afm.cut_pet(self.synthetic_raw(halo), idle)
+            self.assertEqual(out.size, ac.FRAME)
+            x0, y0, x1, y1 = self.art_box(out)
+            self.assertGreater(x0, 0)
+            self.assertLess(x1, ac.FRAME[0])
+            self.assertGreater(y0, 0)
+            self.assertLess(y1, ac.FRAME[1])
+            self.assertLessEqual(y1 - y0, idle[3] - idle[1])
+            self.assertEqual(y1, idle[3])             # bottom-aligned to idle
+            self.assertLessEqual(abs((x0 + x1) - (idle[0] + idle[2])), 1)   # centred on idle
+            self.assertLessEqual(set(out.getdata()),
+                                 {afm.BLACK, afm.WHITE, afm.RED, afm.TRANSPARENT})
+
+    def test_cut_pet_clamps_a_pet_whose_idle_sits_at_the_right_edge(self):
+        idle = (100, 5, 152, 70)                      # like the slug: idle touches the right edge
+        x0, y0, x1, y1 = self.art_box(afm.cut_pet(self.synthetic_raw(), idle))
+        self.assertLessEqual(x1, 152)
+        self.assertGreaterEqual(x0, 0)
+        self.assertEqual(y1, 70)
+
+    def test_cut_pet_halo_does_not_enlarge_the_pet(self):
+        idle = (32, 1, 117, 74)
+        plain = afm.cut_pet(self.synthetic_raw(False), idle)
+        haloed = afm.cut_pet(self.synthetic_raw(True), idle)
+        self.assertEqual(self.art_box(plain), self.art_box(haloed))
+
+    def test_cut_pet_of_an_empty_raw_is_a_blank_frame(self):
+        out = afm.cut_pet(Image.new("RGBA", afm.CANVAS, afm.KEY), (32, 1, 117, 74))
+        self.assertEqual(set(out.getdata()), {afm.TRANSPARENT})
+
+    def test_idle_box_is_the_bbox_of_the_pets_own_idle_pcx(self):
+        w, h, rows = ac.decode_pcx(ac.TO_BADGE / "050100.PCX")
+        xs = [x for r in rows for x, v in enumerate(r) if v != 3]
+        ys = [y for y, r in enumerate(rows) if any(v != 3 for v in r)]
+        self.assertEqual(afm.idle_box("05"), (min(xs), min(ys), max(xs) + 1, max(ys) + 1))
 
     def test_merge_islands_merges_enclosed_specks(self):
         img = Image.new("RGBA", (12, 12), afm.TRANSPARENT)
