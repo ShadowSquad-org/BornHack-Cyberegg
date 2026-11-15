@@ -68,6 +68,7 @@ pub fn install_pets_from_cfg_text(text: &str) {
 
     let mut pets: heapless::Vec<PetDef, MAX_PETS> = heapless::Vec::new();
     crate::game::pets_cfg::parse(text.as_bytes(), &mut pets);
+    crate::game::pets_cfg::migrate_old_format(&mut pets);
     pet_registry::install(&pets);
     pet_registry::drop_without_sprites(|id| {
         let idle = crate::game::engine::anim_files::anim_id_for(crate::game::engine::DisplayAnim::Idle);
