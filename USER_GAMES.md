@@ -46,11 +46,11 @@ Both switches are in **Main -> Bornagotchi**, under **Mode**:
 
 Pets can fight the friends they have met over the mesh radio. Open the **Play** menu and pick **Battle: <form>**. The word after the colon (`top form`, `in form`, `off form` or `poor form`) says how your pet would do against an average pet. The list shows each friend with `~<n>%`, an estimate of your chance from their last beacon, and how old that beacon is. Fire sends the challenge.
 
-The other badge buzzes and shows a card with both pets' numbers (power, guard, speed, stamina, focus, HP) and the exact chance. Its player has 15 seconds to choose **Fire** (fight) or **Cancel** (decline). You wait up to 20 seconds. If nobody answers, the fight is played against the friend's last beacon.
+The other badge buzzes and shows a card with both pets' numbers (power, guard, speed, stamina, focus, HP) and the exact chance. Its player has 15 seconds to choose **Fire** (fight) or **Cancel** (decline). You wait up to 20 seconds. If nobody answers, the fight is played against the friend's last beacon and the result card shows as usual; with no usable beacon the card says `no answer` and nothing happens.
 
 The fight is ten rounds at most. The faster pet strikes first, a pet that is past its stamina slows down, and after ten rounds the pet with more HP left wins. Care decides the numbers: a rested, fed, clean, cheerful pet fights well. Twenty words (such as `well rested`, `hung over`, `sore`) show what helps or hurts. The result card shows `chance was <n>%` and what decided the fight.
 
-A fight costs energy, water and dirt, and adds strain and bruises. A tired, hungry or thirsty pet strains more, and too much strain tears a muscle. In money mode the first win of the day pays `BATTLE_PRIZE_FIRST_HAX` and later wins `BATTLE_PRIZE_LATER_HAX`; a fight against a beacon older than `BATTLE_PRIZE_BEACON_MIN` minutes pays nothing. Declining costs a little mood (`BATTLE_DECLINE_MOOD_PCT` for `BATTLE_DECLINE_MIN` minutes). Demo pets fight only demo pets. The balance numbers are keys in `BPETS_V3.CFG` (see the key list below).
+A fight costs energy, water and dirt, and adds strain and bruises. A tired, hungry or thirsty pet strains more, and too much strain tears a muscle. In money mode the first win of the day pays `BATTLE_PRIZE_FIRST_HAX` and later wins `BATTLE_PRIZE_LATER_HAX`; a fight against a beacon older than `BATTLE_PRIZE_BEACON_MIN` minutes pays nothing and costs nothing, but still counts in the record and sets the Battle rest. Declining costs a little mood (`BATTLE_DECLINE_MOOD_PCT` for `BATTLE_DECLINE_MIN` minutes). Demo pets fight only demo pets. The balance numbers are keys in `BPETS_V3.CFG` (see the key list below).
 
 ## Game modes
 

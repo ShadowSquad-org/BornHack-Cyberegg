@@ -76,7 +76,8 @@ The record belongs to this pet. A new egg starts it at zero. A demo pet shows
 #w("Demo <w>W-<l>L") instead. Each row reads #w("<name> ~<n>% <age>"): the
 friend's #w("<name>"), then an estimate of your chance to win, marked with a
 tilde. It comes from the friend's last beacon, and the age says how old that
-beacon is. A friend of the other league shows #w("<name> demo") or
+beacon is: #w("now"), or a count in minutes (#w("<n>m")), hours (#w("<n>h")) or
+days (#w("<n>d")). A friend of the other league shows #w("<name> demo") or
 #w("<name> player"), with #w("demo") or #w("player") as the league word,
 and no chance. Under the
 rows the badge shows your pet's own form word, and below it up to two words
@@ -103,11 +104,13 @@ fifteen seconds to answer.
   ],
   screen("pre-battle", width: shot-m, caption: [A challenge.]))
 
-If nobody answers, the fight happens anyway, against the last beacon, and
-the card says #w("no answer"). If the other player declines, the card says
+If nobody answers, the fight is played anyway against the friend's last
+beacon, and the result card shows as usual. Only when there is no usable
+beacon does the waiting card say #w("no answer"), and then no fight happens.
+If the other player declines, the waiting card says
 #w("declined"), and the pet that said no is a bit sulky: mood
--#v("BATTLE_DECLINE_MOOD_PCT") for #v("BATTLE_DECLINE_MIN"). A pet that is
-asleep still gets woken by Fire. A frozen pet answers too, but the fight does
+-#v("BATTLE_DECLINE_MOOD_PCT") for #v("BATTLE_DECLINE_MIN"). A challenged pet that
+is asleep still gets woken by Fire. A frozen pet answers too, but the fight does
 not touch it. Demo pets fight only demo pets, and they accept by themselves
 after a short while.
 
@@ -132,7 +135,7 @@ First the words that help, then the ones that hurt.
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   tbl((auto, 1fr), // digits-ok: layout
-    table.header([*The word*], [*What it does*]),
+    table.header([*Helps (+)*], [*What it does*]),
     [#w("well rested")], [Slept well: quicker, better aim, more stamina.],
     [#w("heavy")], [A big body: more power and guard. Slower, and tires sooner.],
     [#w("tipsy")], [A little drink gives courage: a bit more power.],
@@ -142,7 +145,7 @@ First the words that help, then the ones that hurt.
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   tbl((auto, 1fr), // digits-ok: layout
-    table.header([*The word*], [*What it does*]),
+    table.header([*Hurts (-)*], [*What it does*]),
     [#w("injured")], [Power and speed are cut.],
     [#w("sloppy")], [Too much drink: poor aim and a weak guard.],
     [#w("hung over")], [Slower, poor aim and tires sooner.],
@@ -171,8 +174,9 @@ left wins.
 card, titled #w("Battle Result"), with two HP bars and a banner,
 #w("YOU WON!") or #w("YOU LOST"). Your side is labelled #w("You") and the
 friend's side carries the friend's name, or #w("Friend") when the name is
-empty. The card says #w("chance was <n>%"): the exact chance you had. When
-one thing decided the fight, a line says so, such as #w("You were <word>")
+empty. The card says #w("chance was <n>%"): the chance you had (from the
+beacon, when the friend did not answer). When one thing made the loser lose,
+a line says so, such as #w("You were <word>")
 or #w("They were <word>"), with a word from the table, or
 #w("You ran out of steam") or #w("They ran out of steam"). The card says
 #w("Any button to close"), and any button does. If no fight has been played
@@ -181,11 +185,14 @@ yet, it says #w("No result yet").
 *The prize.* In money mode the first win of the day pays
 #v("BATTLE_PRIZE_FIRST_HAX") and each win after it #v("BATTLE_PRIZE_LATER_HAX"),
 shown as #w("+<n> HAX"). A fight against a beacon older than
-#v("BATTLE_PRIZE_BEACON_MIN") pays nothing. Without money there is no prize.
+#v("BATTLE_PRIZE_BEACON_MIN") pays nothing and costs nothing (see below). Without money there is no prize.
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
-*A fight costs.* Win or lose, the pet pays: energy -#v("BATTLE_ENERGY_PCT"),
+*A fight costs.* A fight against a beacon older than
+#v("BATTLE_PRIZE_BEACON_MIN") costs nothing and pays no prize. It still counts
+in the record, and the Battle row still rests. Any other fight, win or lose,
+makes the pet pay: energy -#v("BATTLE_ENERGY_PCT"),
 water -#v("BATTLE_WATER_PCT"), fun +#v("BATTLE_FUN_PCT"), dirt
 +#v("BATTLE_DIRT_PCT"), and some strain. A tired, hungry or thirsty pet strains
 more, and a well rested one less. The pet also gets bruises: the more HP it
