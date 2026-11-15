@@ -473,8 +473,7 @@ class Profiles(unittest.TestCase):
             "assert any(k.startswith(ac.ART_PETS[pet][3] + '_') for k in idx) if pet in ac.ART_PETS else True\n"
             % str(SCRIPTS)
         )
-        # jellyfish is paired with the panda sheet and stays at 41 rows after A3
-        # (plan 7 deletes it), so it is deliberately not loaded here.
+        # the Jellyfish is gone (plan 7); the five art pets are loaded here.
         for pet in ("bartholomeus", "cat", "panda", "badger", "seastar"):
             env = {k: v for k, v in os.environ.items() if k != "BORNPETS_PET"}
             env["BORNPETS_PET"] = pet

@@ -65,8 +65,8 @@ ART_PETS = {  # pet -> (prefix, json5, sheet, sequence prefix)
 }
 FRAME = (152, 75)
 CLUSTER_BYTES = 2048
-# FAT12 volume: 502 usable 2 KiB clusters, minus 429 used (after plan 7 removes the
-# Jellyfish), minus 2 for the files that grow (BPETS_V3.CFG, plans 5 and 7), minus
+# FAT12 volume: 502 usable 2 KiB clusters, minus 429 used (main after plan 7, which
+# removed the Jellyfish), minus 2 for the files that grow (BPETS_V3.CFG, plans 5 and 7), minus
 # a 16-cluster guard = 55 for the 50 new PCX. The 429 is an assumption about the
 # volume: used_clusters() recomputes it from the real tree and budget reports drift.
 USABLE_CLUSTERS = 502
@@ -430,7 +430,7 @@ def main(argv=None) -> int:
             print(f"{name}  MISSING")
         if res["measured_used"] != res["assumed_used"]:
             print(f"note: assumed_used {res['assumed_used']}, measured_used {res['measured_used']} "
-                  "(plan 7 removes the Jellyfish PCX and their MANIFEST lines; re-derive the budget if this stays off)")
+                  "(main after plan 7 measures 429; re-derive the budget if this stays off)")
         print(f"total {res['total']} / {NEW_PCX_BUDGET} clusters: "
               f"{'fits' if res['fits'] else 'DOES NOT FIT'}")
         return 0 if res["fits"] and not res["missing"] else 1

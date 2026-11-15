@@ -26,7 +26,7 @@ The pet configs only land on the right `PP` byte when exported in this order
 ```
 bornpets-bartholomeus.json5 bornpets-sponsors-cat.json5 bornpets-sponsors-slug.json5
 sponsors.json5 bornpets-menu-icons.json5 bornpets-sponsors-panda.json5
-bornpets-sponsors-badger.json5 bornpets-sponsors-seastar.json5 bornpets-sponsors-jellyfish.json5
+bornpets-sponsors-badger.json5 bornpets-sponsors-seastar.json5
 ```
 
 Not `bornpets-sponsors.json5`, `-v2` or `-v3`. Never export into `assets/to-badge`
