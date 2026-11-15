@@ -30,12 +30,14 @@ and a menu pops up. Up and Down move the cursor. Fire does the row.
     - *A mark* on the right edge: #w("!"). It says the dose would go wrong.
       The title bar then reads #w("risk: <what>") for the row under the
       cursor.
-    - *A grey row* is shut. The cursor still stops on it.
+    - *A grey row* is shut. The cursor skips it.
   ],
   screen("risk-marker", width: shot-m, caption: [Every row warns.]))
 
-*Press a shut row and the badge tells you why.* The title bar shows the
-reason for a moment. All the reasons are listed at the end of this chapter.
+*The cursor jumps over grey rows.* Up and Down stop only on rows you can
+use. If every other row is grey, the cursor stays where it is. When the
+badge refuses an action, the title bar shows the reason for a moment. All
+the reasons are listed at the end of this chapter.
 
 #pic-row((("feeding", [Fed.]), ("drinking", [Watered.]), ("playing", [Played.])))
 

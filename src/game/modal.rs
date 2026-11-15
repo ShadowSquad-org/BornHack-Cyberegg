@@ -788,20 +788,24 @@ fn first_selectable(len: usize, selectable: impl Fn(usize) -> bool) -> usize {
     (0..len).find(|&i| selectable(i)).unwrap_or(0)
 }
 
-/// The row after `from` (or before it when `forward` is false), wrapping
-/// around the ends of a list of `len` rows.
-fn step_cursor(len: usize, from: usize, forward: bool) -> usize {
-    if len == 0 {
-        from
-    } else if forward {
-        (from + 1) % len
-    } else {
-        (from + len - 1) % len
+/// The next row after `from` (before it when `forward` is false) that
+/// `enabled` accepts, wrapping around the ends of a list of `len` rows.
+/// Disabled rows are never returned; when no other row is enabled the
+/// cursor stays at `from`.
+fn next_enabled(len: usize, from: usize, forward: bool, enabled: impl Fn(usize) -> bool) -> usize {
+    let mut i = from;
+    for _ in 0..len {
+        i = if forward { (i + 1) % len } else { (i + len - 1) % len };
+        if enabled(i) {
+            return i;
+        }
     }
+    from
 }
 
-/// Move the cursor one row up or down. Disabled rows are NOT skipped: the
-/// player can rest on one and press it to be told why it is disabled.
+/// Move the cursor to the next enabled row up or down, wrapping at the
+/// ends. Disabled rows are skipped, never highlighted; with no other row
+/// enabled the cursor stays put.
 fn move_cursor(forward: bool) {
     if dismiss_hint() {
         return;
@@ -818,8 +822,9 @@ fn move_cursor(forward: bool) {
     if items.is_empty() {
         return;
     }
+    let stats = super::lifecycle::cycle();
     let pos = (MODAL_POS.load(Ordering::Relaxed) as usize).min(items.len() - 1);
-    let next = step_cursor(items.len(), pos, forward);
+    let next = next_enabled(items.len(), pos, forward, |i| items[i].selectable(stats.as_ref()));
     MODAL_POS.store(next as u8, Ordering::Relaxed);
 }
 
@@ -1468,7 +1473,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Item, ModalKind, cooldown_string, first_selectable, step_cursor};
+    use super::{Item, ModalKind, cooldown_string, first_selectable, next_enabled};
     use crate::game::engine::{GameState, PetKind, Phase};
     use crate::game::lifecycle;
     use crate::game::stats_pages::Page;
@@ -1659,13 +1664,73 @@ mod tests {
     }
 
     #[test]
-    fn the_cursor_steps_one_row_and_wraps() {
-        assert_eq!(step_cursor(5, 1, true), 2);
-        assert_eq!(step_cursor(5, 4, true), 0);
-        assert_eq!(step_cursor(5, 2, false), 1);
-        assert_eq!(step_cursor(5, 0, false), 4);
-        assert_eq!(step_cursor(1, 0, true), 0);
-        assert_eq!(step_cursor(0, 0, false), 0);
+    fn the_cursor_skips_disabled_rows_and_wraps() {
+        let flags = [true, false, false, true, true];
+        let en = |i: usize| flags[i];
+        // Skips one or several disabled rows, both directions.
+        assert_eq!(next_enabled(5, 0, true, en), 3);
+        assert_eq!(next_enabled(5, 3, false, en), 0);
+        assert_eq!(next_enabled(5, 3, true, en), 4);
+        // Wraps from either end onto the first enabled row.
+        assert_eq!(next_enabled(5, 4, true, en), 0);
+        assert_eq!(next_enabled(5, 0, false, en), 4);
+        // Disabled ends wrap past themselves.
+        let ends = [false, true, true, false];
+        assert_eq!(next_enabled(4, 2, true, |i| ends[i]), 1);
+        assert_eq!(next_enabled(4, 1, false, |i| ends[i]), 2);
+        // Only the current row enabled: it stays put.
+        assert_eq!(next_enabled(5, 2, true, |i| i == 2), 2);
+        assert_eq!(next_enabled(5, 2, false, |i| i == 2), 2);
+        // Nothing enabled / empty list: stays put.
+        assert_eq!(next_enabled(5, 1, true, |_| false), 1);
+        assert_eq!(next_enabled(0, 0, false, |_| true), 0);
+        // All enabled: plain one-row steps.
+        assert_eq!(next_enabled(5, 4, true, |_| true), 0);
+        assert_eq!(next_enabled(5, 0, false, |_| true), 4);
+        assert_eq!(next_enabled(1, 0, true, |_| true), 0);
+    }
+
+    fn cursor_item() -> Item {
+        ModalKind::Rest.items()[super::MODAL_POS.load(core::sync::atomic::Ordering::Relaxed) as usize]
+    }
+
+    #[test]
+    fn the_menu_cursor_never_lands_on_a_disabled_row() {
+        let _guard = crate::game::lock_test_state();
+        let stats = menu_pet(false, false, |s| s.dirt = 0);
+        let items = ModalKind::Rest.items();
+        assert!(!Item::Wash.available(&stats));
+        assert!(!Item::WakeFromSleep.available(&stats));
+        super::open(ModalKind::Rest);
+        for _ in 0..2 * items.len() {
+            assert!(cursor_item().selectable(Some(&stats)), "down landed on {:?}", cursor_item().label());
+            super::cursor_down();
+        }
+        for _ in 0..2 * items.len() {
+            assert!(cursor_item().selectable(Some(&stats)), "up landed on {:?}", cursor_item().label());
+            super::cursor_up();
+        }
+        // Relax -> (Wash, Wake shut) -> Cancel, and back.
+        super::MODAL_POS.store(1, core::sync::atomic::Ordering::Relaxed);
+        super::cursor_down();
+        assert!(cursor_item() == Item::Cancel);
+        super::cursor_up();
+        assert!(cursor_item() == Item::Relax);
+        super::close();
+        lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn a_menu_opens_on_an_enabled_row_when_the_first_is_shut() {
+        let _guard = crate::game::lock_test_state();
+        // Asleep: Sleep is shut, Relax/Wash may be too; the cursor starts on a usable row.
+        let stats = menu_pet(false, false, |s| s.is_sleeping = true);
+        assert!(!Item::Sleep.available(&stats));
+        super::open(ModalKind::Rest);
+        assert!(cursor_item().selectable(Some(&stats)));
+        assert!(cursor_item() != Item::Sleep);
+        super::close();
+        lifecycle::set_state_for_test(None);
     }
 
     #[test]

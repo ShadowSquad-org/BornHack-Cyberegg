@@ -97,7 +97,7 @@ result does not travel across repeaters.
   [#w("On cooldown <n>s")], [The Battle rest has not run out. The count is in seconds.],
 )
 
-The Battle row itself is grey, with its own reason, when the pet is
+The Battle row itself is grey, and the cursor skips it, when the pet is
 #w("asleep"), #w("busy"), #w("hibernating"), #w("still an egg") or
 #w("pet is gone"). It says
 #w("wait <time>") while the rest runs. An injured pet may still fight.

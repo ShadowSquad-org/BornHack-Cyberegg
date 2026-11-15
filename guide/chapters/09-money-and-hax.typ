@@ -122,9 +122,9 @@ a mechanic the badge actually has. It is not a metaphor for anything.]
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
-    A row you cannot pay for is grey. Press it and the title bar says
-    #w("can't afford"). Nothing is charged, and the pet is not harmed. The
-    balance never goes below zero. The pet's #w("Hint") row never suggests
+    A row you cannot pay for is grey, and the cursor skips it. If a buy is
+    refused, the title bar says #w("can't afford"). Nothing is charged, and
+    the pet is not harmed. The balance never goes below zero. The pet's #w("Hint") row never suggests
     a row you cannot afford.
 
     *Broke?* The free rows still work. In order of effort:

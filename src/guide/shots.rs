@@ -214,6 +214,13 @@ fn count_risk_rows() {
     RISK_ROWS.store(modal::risk_row_count(&stats), Ordering::Relaxed);
 }
 
+fn drink_water() {
+    assert!(
+        lifecycle::drink(crate::game::engine::DrinkKind::Water),
+        "the pet would not drink"
+    );
+}
+
 fn sleep() {
     assert!(lifecycle::sleep(), "the pet would not go to sleep");
 }
@@ -542,10 +549,10 @@ pub static SHOTS: &[Shot] = &[
         [
             Do(content),
             Open(ModalKind::Drink),
-            Press(Fire),
+            // The pet drinks while the menu is open: the cursor cannot reach
+            // a shut row, so the row under it goes shut and Fire says why.
+            Do(drink_water),
             Step::Ticks(3),
-            Open(ModalKind::Drink),
-            Press(ButtonId::Up),
             Press(Fire)
         ],
         || reason_toast() == Some(Reason::Refused(Refusal::NotThirsty))
