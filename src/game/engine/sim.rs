@@ -139,7 +139,10 @@ pub struct Setup {
     /// The pet's own care is animated (else instant with a note).
     pub animated: bool,
     /// Leave the HAX gate on (the routines never earn HAX, so by default it
-    /// is switched off); the battle prizes then pay in.
+    /// is switched off); the battle prizes then pay in. The pet starts with
+    /// `MONEY_FLOAT_HAX`, so no purchase is refused: the prototype lets HAX
+    /// go negative (spec 15.9), and a money run measures the prizes, not
+    /// the price list.
     pub money: bool,
 }
 
@@ -599,6 +602,9 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
     run_pet(routine, days, driver, seed, setup, false)
 }
 
+/// HAX a money run starts with: more than any routine spends in a run.
+pub const MONEY_FLOAT_HAX: u32 = 1_000_000;
+
 /// A trait at 50 % (`trait_pct`).
 const AVERAGE_TRAIT: u16 = 32768;
 
@@ -628,8 +634,10 @@ fn run_pet(
         s.resilience = AVERAGE_TRAIT;
     }
     // The routines earn no HAX but battle prizes; with the gate on they would
-    // starve, so only a money run keeps it.
-    if !setup.money {
+    // starve, so only a money run keeps it, with a float to buy from.
+    if setup.money {
+        s.money = MONEY_FLOAT_HAX;
+    } else {
         s.money_enabled = false;
     }
     // The egg hatches and the pet is fresh at 08:00 on day 0, as in the

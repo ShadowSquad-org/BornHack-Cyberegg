@@ -2762,6 +2762,20 @@ mod balance {
         assert!(!o.diabetic);
     }
 
+    /// A money run measures the prizes, not the price list: the prototype
+    /// lets HAX go negative (spec 15.9), so its fighter, which never works,
+    /// keeps eating. With the badge's prices and a 100 HAX start the sim's
+    /// fighter spent 80 HAX before its first fight and starved by day 3.
+    #[test]
+    fn money_run_is_paid_its_prizes() {
+        let o = run(sim::fighter, 10, Driver::Delta, 1, MONEY);
+        eprintln!("fighter money 10 days: {o:?}");
+        assert!(o.alive);
+        assert_eq!(o.fights, 10);
+        assert_eq!(o.prizes_hax, 100 * o.fights_won, "first win of each day");
+        assert!(o.fights_won >= 5, "won {}", o.fights_won);
+    }
+
     #[test]
     #[ignore]
     fn fit_fighter_one_a_day() {
@@ -2829,6 +2843,8 @@ mod balance {
         }
         for o in runs("fighter money", sim::fighter, MONEY) {
             assert!(o.prizes_hax <= 30 * 100, "{}", o.prizes_hax);
+            // spec 18.5: about 2600 a month (26 of 30 won)
+            assert!(o.alive && o.prizes_hax >= 1500, "{}", o.prizes_hax);
         }
     }
 
