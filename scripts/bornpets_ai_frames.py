@@ -1418,12 +1418,41 @@ def state_prompt(state: str, note: str | None = None) -> str:
     return text
 
 
+_MARK_MAX = 12  # opaque islands this small (the cat's are 3x3) are corner marks, not the pet
+
+
+def rows_box(rows: list[list[int]], mark_max: int = _MARK_MAX) -> tuple[int, int, int, int]:
+    """Bounding box (x0, y0, x1, y1, exclusive) of the opaque art in badge rows.
+
+    Islands of at most `mark_max` pixels are left out: the Bartholomeus and Cat
+    idle frames carry tiny marks in their top corners, which would otherwise
+    stretch the box to the whole frame and blow the pet up when it is cut.
+    """
+    h, w = len(rows), len(rows[0])
+    seen = [[False] * w for _ in range(h)]
+    xs, ys = [], []
+    for sy in range(h):
+        for sx in range(w):
+            if seen[sy][sx] or rows[sy][sx] == 3:
+                continue
+            island, stack = [], [(sx, sy)]
+            seen[sy][sx] = True
+            while stack:
+                x, y = stack.pop()
+                island.append((x, y))
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx] and rows[ny][nx] != 3:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            if len(island) > mark_max:
+                xs += [p[0] for p in island]
+                ys += [p[1] for p in island]
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+
 def idle_box(prefix: str) -> tuple[int, int, int, int]:
     """Bounding box (x0, y0, x1, y1, exclusive) of the pet's own shipped idle frame."""
-    rows = decode_pcx(TO_BADGE / f"{prefix}0100.PCX")[2]
-    cols = [x for r in rows for x, v in enumerate(r) if v != 3]
-    live = [y for y, r in enumerate(rows) if any(v != 3 for v in r)]
-    return min(cols), live[0], max(cols) + 1, live[-1] + 1
+    return rows_box(decode_pcx(TO_BADGE / f"{prefix}0100.PCX")[2])
 
 
 _HALO_MIN = 24    # a blend darker than this is the pet's own black outline, not halo

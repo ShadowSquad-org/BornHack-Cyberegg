@@ -302,6 +302,21 @@ class StateFlow(Base):
         ys = [y for y, r in enumerate(rows) if any(v != 3 for v in r)]
         self.assertEqual(afm.idle_box("05"), (min(xs), min(ys), max(xs) + 1, max(ys) + 1))
 
+    def test_rows_box_ignores_tiny_corner_marks(self):
+        rows = [[3] * 152 for _ in range(75)]
+        for x, y in [(0, 0), (1, 0), (2, 0), (149, 0), (150, 0), (151, 0), (150, 1), (151, 1)]:
+            rows[y][x] = 0
+        for y in range(30, 61):
+            for x in range(70, 91):
+                rows[y][x] = 0
+        self.assertEqual(afm.rows_box(rows), (70, 30, 91, 61))
+
+    def test_idle_box_of_the_cat_is_its_small_body_not_the_corner_marks(self):
+        x0, y0, x1, y1 = afm.idle_box("01")
+        self.assertGreater(x0, 10)
+        self.assertGreater(y0, 10)
+        self.assertLess(y1 - y0, 45)
+
     def test_merge_islands_merges_enclosed_specks(self):
         img = Image.new("RGBA", (12, 12), afm.TRANSPARENT)
         for y in range(2, 10):
