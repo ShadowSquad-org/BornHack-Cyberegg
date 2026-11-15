@@ -425,5 +425,21 @@
       frame_width: 152,
       frame_height: 75,
     },
+    {
+      type: "sequence",
+      name: "panda_needs_rehab",
+      comment: "v3 state art (plan 9)",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "panda_starving",
+      comment: "v3 state art (plan 9)",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
   ],
 }

@@ -429,5 +429,21 @@
       frame_width: 152,
       frame_height: 75,
     },
+    {
+      type: "sequence",
+      name: "seastar_needs_rehab",
+      comment: "v3 state art (plan 9)",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
+    {
+      type: "sequence",
+      name: "seastar_starving",
+      comment: "v3 state art (plan 9)",
+      frames: 1,
+      frame_width: 152,
+      frame_height: 75,
+    },
   ],
 }
