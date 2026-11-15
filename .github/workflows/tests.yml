@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [lib, engine_v3, engine_v3_casual, engine_v3_demo, save_format, game_engine, others]
+        suite: [lib, engine_v3, engine_v3_casual, engine_v3_demo, save_format, game_engine, battle_v3, others]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,12 +44,14 @@ jobs:
             others)
               for t in tests/*.rs; do
                 n=$(basename "$t" .rs)
-                case "$n" in engine_v3|engine_v3_casual|engine_v3_demo|save_format|game_engine) continue ;; esac
+                case "$n" in engine_v3|engine_v3_casual|engine_v3_demo|save_format|game_engine|battle_v3) continue ;; esac
                 cargo test --features simulator --test "$n"
               done ;;
             # The 30-day demo balance runs are #[ignore]d: the generic arm
             # would skip them silently, so this one asks for them.
             engine_v3_demo) cargo test --features simulator --test engine_v3_demo -- --include-ignored --nocapture ;;
+            # The long battle runs are #[ignore]d: ask for them.
+            battle_v3) cargo test --features simulator --test battle_v3 -- --include-ignored --nocapture ;;
             *) cargo test --features simulator --test "${{ matrix.suite }}" ;;
           esac
 
@@ -83,7 +85,7 @@ jobs:
         with:
           submodules: recursive
       - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libclang-dev
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev libclang-dev python3-pil
       - uses: Swatinem/rust-cache@v2
         with:
           key: guide

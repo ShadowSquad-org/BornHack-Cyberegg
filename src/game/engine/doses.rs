@@ -23,6 +23,14 @@ pub enum Refusal {
     Tired,
     /// Demo mode needs a pet in fair shape first.
     FixMeFirst,
+    /// Health under `BATTLE_MIN_HEALTH_PCT`.
+    TooWeak,
+    /// Felt drink over `BATTLE_DRUNK_PCT`.
+    TooDrunk,
+    /// A demo pet and a player friend.
+    DemoOnly,
+    /// A player pet and a demo friend.
+    NoDemo,
 }
 
 /// Why a menu row is disabled or an action was turned away.
@@ -52,6 +60,10 @@ impl Refusal {
             Refusal::NoNeed => "no need",
             Refusal::Tired => "too tired",
             Refusal::FixMeFirst => "fix me first",
+            Refusal::TooWeak => "too weak",
+            Refusal::TooDrunk => "too drunk",
+            Refusal::DemoOnly => "demo pets only",
+            Refusal::NoDemo => "no demo pets",
         }
     }
 }
@@ -87,6 +99,10 @@ impl Reason {
             Reason::Refused(Refusal::NoNeed) => (4, 0),
             Reason::Refused(Refusal::Tired) => (5, 0),
             Reason::Refused(Refusal::FixMeFirst) => (12, 0),
+            Reason::Refused(Refusal::TooWeak) => (13, 0),
+            Reason::Refused(Refusal::TooDrunk) => (14, 0),
+            Reason::Refused(Refusal::DemoOnly) => (15, 0),
+            Reason::Refused(Refusal::NoDemo) => (16, 0),
             Reason::Wait(secs) => (6, secs),
             Reason::CantAfford => (7, 0),
             Reason::Busy => (8, 0),
@@ -112,6 +128,10 @@ impl Reason {
             10 => Reason::Egg,
             11 => Reason::Gone,
             12 => Reason::Refused(Refusal::FixMeFirst),
+            13 => Reason::Refused(Refusal::TooWeak),
+            14 => Reason::Refused(Refusal::TooDrunk),
+            15 => Reason::Refused(Refusal::DemoOnly),
+            16 => Reason::Refused(Refusal::NoDemo),
             _ => Reason::Refused(Refusal::NoNeed),
         }
     }
@@ -336,20 +356,62 @@ fn exercise(s: &mut GameState) {
         .hangover_min
         .saturating_sub(t::DOSE_EXERCISE_HANGOVER_MIN());
     s.groggy_min = 0;
-    if s.strain as i32 > needs::strain_inj() {
-        s.injured_min = t::DOSE_INJURY_MIN();
-        let before = s.health;
-        bump(&mut s.health, -lvl(t::DOSE_INJURY_HEALTH_PCT()));
-        if s.demo.on {
-            s.health = super::demo::floor(before, s.health, super::demo::health_floor());
-        }
-        s.causes
-            .push(Cause::TornMuscle(blame.unwrap_or(StrainWhy::Overdone)));
-    } else {
+    if !tear_if_over(s, blame.unwrap_or(StrainWhy::Overdone)) {
         bump(&mut s.fitness, lvl(t::DOSE_EXERCISE_FIT_PCT()));
         if let Some(why) = blame {
             s.causes.push(Cause::Strained(why));
         }
+    }
+}
+
+/// The injury rule of every strain source: a strain over the tear line
+/// injures (`DOSE_INJURY_MIN`, `DOSE_INJURY_HEALTH_PCT`, held at the demo
+/// floor) and names `why`. Returns whether it tore.
+fn tear_if_over(s: &mut GameState, why: StrainWhy) -> bool {
+    if s.strain as i32 <= needs::strain_inj() {
+        return false;
+    }
+    s.injured_min = t::DOSE_INJURY_MIN();
+    let before = s.health;
+    bump(&mut s.health, -lvl(t::DOSE_INJURY_HEALTH_PCT()));
+    if s.demo.on {
+        s.health = super::demo::floor(before, s.health, super::demo::health_floor());
+    }
+    s.causes.push(Cause::TornMuscle(why));
+    true
+}
+
+/// One fight's costs (spec 12.2), the same on both badges. The handicaps
+/// look at the pet as it was before the fight; `hp_left_pct` is the pet's
+/// own HP left at the end.
+pub(super) fn battle(s: &mut GameState, won: bool, hp_left_pct: u8) {
+    let mut strain = lvl(t::BATTLE_STRAIN_PCT()) as i64;
+    let scale = |strain: i64, pct: u16| strain * pct as i64 / 100;
+    if (s.fullness as i32) < needs::full_lo()
+        || (s.hydration as i32) < needs::water_lo()
+        || (s.energy as i32) < needs::energy_lo()
+    {
+        strain = scale(strain, t::BATTLE_STRAIN_NEED_PCT());
+    }
+    if s.rested_min > 0 {
+        strain = scale(strain, t::BATTLE_STRAIN_RESTED_PCT());
+    }
+    bump(&mut s.strain, strain.min(MAX as i64) as i32);
+    bump(&mut s.hydration, -lvl(t::BATTLE_WATER_PCT()));
+    bump(&mut s.energy, -lvl(t::BATTLE_ENERGY_PCT()));
+    bump(&mut s.fun, lvl(t::BATTLE_FUN_PCT()));
+    bump(&mut s.dirt, lvl(t::BATTLE_DIRT_PCT()));
+    let mood = lvl(t::BATTLE_MOOD_PCT());
+    bump(&mut s.mood, if won { mood } else { -mood });
+    // Bruises: up to BATTLE_BRUISE_MAX_PCT at 0 % HP left.
+    let lost_hp = 100 - hp_left_pct.min(100) as i32;
+    let before = s.health;
+    bump(&mut s.health, -(lost_hp * t::BATTLE_BRUISE_MAX_PCT() as i32 * P / 100));
+    if s.demo.on {
+        s.health = super::demo::floor(before, s.health, super::demo::health_floor());
+    }
+    if !tear_if_over(s, StrainWhy::Fight) && s.strain as i32 > needs::SORE_PCT as i32 * P {
+        s.causes.push(Cause::Strained(StrainWhy::Fight));
     }
 }
 

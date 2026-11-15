@@ -126,6 +126,13 @@ pub fn phase() -> Phase {
     }
 }
 
+/// The highlighted row of the phase that is showing. Host-only, for the
+/// guide's shot checks.
+#[cfg(any(test, feature = "simulator"))]
+pub fn selection() -> u8 {
+    SELECTION.load(Ordering::Relaxed)
+}
+
 /// Open the pet selection screen for a brand new game.
 pub fn open_new_game() {
     SELECTION.store(0, Ordering::Relaxed);

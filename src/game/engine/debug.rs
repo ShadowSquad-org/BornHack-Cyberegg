@@ -233,6 +233,8 @@ impl GameState {
     pub fn debug_reset_battle_record(&mut self) {
         self.wins = 0;
         self.losses = 0;
+        self.demo_wins = 0;
+        self.demo_losses = 0;
         self.cooldown_battle = 0;
     }
 }

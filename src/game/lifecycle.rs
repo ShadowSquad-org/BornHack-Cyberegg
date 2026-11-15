@@ -367,6 +367,7 @@ pub fn start_new_game(kind: super::engine::PetKind, money_enabled: bool, hard_mo
     egg.hard_mode = hard_mode;
     forget_boot_gap(&BOOT_SAVED_UNIX, &CATCH_UP_DONE);
     clear_diary();
+    super::battle_link::cancel();
     unsafe {
         *GAME.get() = Some(egg);
     }
@@ -528,6 +529,8 @@ pub fn toggle_demo() -> Result<bool, super::engine::doses::Reason> {
     event_at(s, now_tick(), |_| {});
     let on = !s.is_demo();
     s.set_demo(on)?;
+    // A challenge belongs to the league it was made in.
+    super::battle_link::cancel();
     Ok(on)
 }
 
@@ -575,7 +578,11 @@ fn demo_refusal_label(why: super::engine::doses::Reason) -> &'static str {
             | Refusal::Injured
             | Refusal::Asleep
             | Refusal::NoNeed
-            | Refusal::Tired,
+            | Refusal::Tired
+            | Refusal::TooWeak
+            | Refusal::TooDrunk
+            | Refusal::DemoOnly
+            | Refusal::NoDemo,
         ) => DEMO_LABEL_NO_PET,
     }
 }
@@ -701,7 +708,7 @@ fn current_severity(state: &GameState) -> Severity {
 /// muted, and never in demo mode, which is silent. `upward` is whether the
 /// event is an alert at all (a severity rise; the onset alerts and the
 /// farewell pass `true`).
-fn alert_due(muted: bool, demo: bool, upward: bool) -> bool {
+pub(super) fn alert_due(muted: bool, demo: bool, upward: bool) -> bool {
     upward && !muted && !demo
 }
 
@@ -798,8 +805,10 @@ static SLEEP_ANIM_UNTIL_TICK: AtomicU32 = AtomicU32::new(0);
 /// Get the current display animation (cheap, no update).
 pub fn display_anim() -> DisplayAnim {
     let state = unsafe { (*GAME.get()).as_ref() };
+    // A v3 anim is shown only when this pet has its sprite row; else the
+    // anim the pet showed before the v3 art (see `display_anim_with`).
     let raw = match state {
-        Some(s) => s.display_anim(),
+        Some(s) => s.display_anim_with(|a| super::engine::anim_files::frame_count(s.pet_kind, a) > 0),
         None => return DisplayAnim::Gone,
     };
     // Display-layer floor for the sleep animation — see
@@ -813,6 +822,17 @@ pub fn display_anim() -> DisplayAnim {
             | DisplayAnim::WarningSick
             | DisplayAnim::WarningHungry
             | DisplayAnim::WarningMiserable
+            // The v3 states that replaced the ones above.
+            | DisplayAnim::Tipsy
+            | DisplayAnim::Sore
+            | DisplayAnim::NeedsRehab
+            | DisplayAnim::Wasted
+            | DisplayAnim::Thirsty
+            | DisplayAnim::HungOver
+            | DisplayAnim::Groggy
+            | DisplayAnim::Injured
+            | DisplayAnim::Wired
+            | DisplayAnim::Stuffed
     ) && now_tick() < SLEEP_ANIM_UNTIL_TICK.load(Ordering::Relaxed)
     {
         return DisplayAnim::Sleeping;
@@ -864,12 +884,16 @@ pub fn sleep_refusal() -> Option<super::engine::doses::Reason> {
     state.sleep_refusal()
 }
 
-/// Why a mini-game (`Some`) or a Battle (`None`) cannot start now.
-pub fn game_refusal(
-    game: Option<super::engine::MiniGame>,
-) -> Option<super::engine::doses::Reason> {
+/// Why a mini-game cannot start now.
+pub fn game_refusal(game: super::engine::MiniGame) -> Option<super::engine::doses::Reason> {
     let state = unsafe { (*GAME.get()).as_ref() }?;
     state.game_refusal(game)
+}
+
+/// Why a Battle cannot start or be accepted now (`None` when it can).
+pub fn battle_refusal() -> Option<super::engine::doses::Reason> {
+    let state = unsafe { (*GAME.get()).as_ref() }?;
+    state.battle_refusal()
 }
 
 /// Tick the display must be redrawn by for the sleep-animation floor to end
@@ -945,6 +969,11 @@ pub fn drink(kind: super::engine::DrinkKind) -> bool {
 /// recurring reunion. No-op if no game is active.
 pub fn friend_boost(big: bool) {
     with_game_now(|s| s.friend_boost(big));
+}
+
+/// A fight was declined: mood target -3 for an hour.
+pub fn declined() {
+    with_game_now(|s| s.declined());
 }
 
 pub fn rehab() -> bool {
@@ -1051,6 +1080,7 @@ fn win_jingle_due(muted: bool, demo: bool) -> bool {
 /// same as `kind`.
 pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mode: bool) {
     use super::engine::Phase;
+    super::battle_link::cancel();
     let state = unsafe { (*GAME.get()).as_mut() };
     let Some(s) = state else {
         // Nothing to succeed — "Reset Pet" can be confirmed on a badge
@@ -1187,33 +1217,29 @@ pub fn pet_traits() -> Option<(u16, u16, u16)> {
     state.map(|s| (s.vitality, s.curiosity, s.resilience))
 }
 
-/// Lifetime mesh Battle record `(wins, losses)` of the current pet, or
-/// `None` if no game is active.
+/// Mesh Battle record `(wins, losses)` of the league the current pet is in
+/// (the demo record in demo mode), or `None` if no game is active.
 pub fn battle_record() -> Option<(u16, u16)> {
     let state = unsafe { (*GAME.get()).as_ref() };
-    state.map(|s| (s.wins, s.losses))
+    state.map(|s| s.battle_record())
 }
 
-/// Derive the current pet's mesh-Battle combat stats (Attack/Defense/
-/// Speed/HP) from its live `PetStats` snapshot plus traits. Used both by
-/// the beacon ticker (to fill the outgoing `PetBeacon`) and by
-/// `battle::challenge` (to compute the challenger's live stats).
-/// `None` if no pet is active.
-pub fn combat_stats() -> Option<super::battle::CombatStats> {
-    let stats = cycle()?;
-    let (vitality, curiosity, resilience) = pet_traits()?;
-    Some(super::battle::derive_combat_stats(
-        &stats,
-        super::engine::trait_pct(vitality),
-        super::engine::trait_pct(curiosity),
-        super::engine::trait_pct(resilience),
-    ))
+/// A result for a fight the current pet did not take part in: the record
+/// only. No-op if no game is active.
+pub fn record_only(won: bool) {
+    with_game_now(|s| s.record_only(won));
 }
 
-/// Apply the outcome of a mesh Battle to the current pet's lifetime
-/// win/loss tally and cooldown. No-op if no game is active.
-pub fn record_battle(won: bool) {
-    with_game_now(|s| s.record_battle(won));
+/// The current pet as the fight sees it, brought up to now.
+pub fn snapshot() -> Option<super::engine::combat::Snapshot> {
+    let mut snap = None;
+    with_game_now(|s| snap = Some(s.snapshot()));
+    snap
+}
+
+/// How the current pet rates against the reference pet.
+pub fn battle_form() -> Option<super::engine::combat::Form> {
+    snapshot().map(|s| super::engine::combat::form(&s))
 }
 
 /// Get the current generation (defaults to 0 if no game).
@@ -1403,7 +1429,7 @@ mod tests {
     };
     use crate::game::engine::status::{Word, status_line};
     use crate::game::engine::needs::P;
-    use crate::game::engine::{GameState, PetKind, Phase};
+    use crate::game::engine::{Fought, GameState, PetKind, Phase};
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     fn pet() -> GameState {
@@ -1597,7 +1623,9 @@ mod tests {
         // The last frame was at tick 0; the event lands 18 ticks (3 min) later.
         let mut s = pet();
         s.last_update_tick = 0;
-        event_at(&mut s, 18, |s| s.record_battle(true));
+        event_at(&mut s, 18, |s| {
+            s.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: false });
+        });
         assert_eq!(s.last_update_tick, 18);
         // The battle cooldown the event set was not consumed by the gap.
         assert_eq!(s.cooldown_battle, crate::game::engine::thresholds::BATTLE_COOLDOWN());
@@ -1605,7 +1633,7 @@ mod tests {
         // Applied at the stale base instead, the next update eats it.
         let mut stale = pet();
         stale.last_update_tick = 0;
-        stale.record_battle(true);
+        stale.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: false });
         stale.update(18);
         assert!(stale.cooldown_battle < s.cooldown_battle);
     }

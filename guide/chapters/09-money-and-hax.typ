@@ -82,19 +82,20 @@ dear food. @ch-care says what each one does.]
 
 == Earning HAX
 
-Three things pay, and only in money mode. A loss and a refused row pay
-nothing.
+Three things pay, and only in money mode. A refused row pays nothing, and
+so does a mini-game you leave before it ends.
 
 #tbl((1fr, auto, 1fr),
   table.header([*What*], [*Pays*], [*It costs*]),
   [#w("Only pets") (from the Play menu)], v("ONLYPETS_HOBBY_REWARD"),
   [Energy #sg("OnlyPets", "energy"), mood #sg("OnlyPets", "mood"). Fun
    #sg("OnlyPets", "fun"). Takes #v("PLAY_DURATION").],
-  [A mini-game win or draw], v("MINIGAME_HAX_REWARD"),
+  [A finished mini-game: win, draw or loss],
+  [#v("MINIGAME_HAX_REWARD"), #v("MINIGAME_HAX_DRAW"), #v("MINIGAME_HAX_LOSS")],
   [Energy -#v("DOSE_MINI_ENERGY_PCT"). That game rests for
    #v("MINIGAME_COOLDOWN"). The other four stay open.],
-  [A Battle win], v("BATTLE_HAX_REWARD"),
-  [The Battle row rests for #v("BATTLE_COOLDOWN"). See @ch-friends.],
+  [A Battle win (first of the day, then later)], [#v("BATTLE_PRIZE_FIRST_HAX"), then #v("BATTLE_PRIZE_LATER_HAX")],
+  [Rests for #v("BATTLE_COOLDOWN"). See @ch-friends.],
 )
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
@@ -104,8 +105,8 @@ nothing.
     #w("asleep"), #w("injured") or #w("too tired"). The reward is a flat
     amount: it does not depend on the pet's mood.
 
-    A mini-game always pays the same, whatever the difficulty. A Battle pays
-    only when you win. @ch-friends tells what the other badge gets.
+    A mini-game pays by its result, win, draw or loss, and the same whatever
+    the difficulty. A Battle pays only when you win. @ch-friends tells what the other badge gets.
   ],
   hero-pic("exercising"))
 
@@ -122,13 +123,13 @@ a mechanic the badge actually has. It is not a metaphor for anything.]
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
-    A row you cannot pay for is grey. Press it and the title bar says
-    #w("can't afford"). Nothing is charged, and the pet is not harmed. The
-    balance never goes below zero. The pet's #w("Hint") row never suggests
+    A row you cannot pay for is grey, and the cursor skips it. If a buy is
+    refused, the title bar says #w("can't afford"). Nothing is charged, and
+    the pet is not harmed. The balance never goes below zero. The pet's #w("Hint") row never suggests
     a row you cannot afford.
 
     *Broke?* The free rows still work. In order of effort:
-    - Win a mini-game. It needs no money and little energy.
+    - Finish a mini-game. It needs no money and little energy.
     - Send the pet to #w("Only pets"), if it has the energy.
     - Win a Battle against a friend.
     - Wait. Sleep, Relax, Wash and Exercise are free, so the pet is never
@@ -143,7 +144,7 @@ All the rules are the same. Only the money side is gone.
 - No balance on the pet screen. The spot stays empty.
 - No prices on any row. #w("can't afford") never shows.
 - The Play menu has no #w("Only pets") row.
-- Wins pay nothing. A won mini-game still gives its fun. A won Battle still
+- Games pay nothing. A finished mini-game still gives its fun. A won Battle still
   counts in the record.
 
 Pick this mode for a relaxed week. Pick the other to feel what a pet costs.

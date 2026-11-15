@@ -865,13 +865,32 @@ async fn push_grp_data(
         return;
     }
 
-    // Mesh Battle result, same private/SHDW-only treatment as the beacon
-    // above — the challenger already resolved the fight locally, this is
-    // just the async notification to the target's badge.
+    // Mesh Battle packets (challenge, accept, decline, result): same
+    // private/SHDW-only treatment as the beacon above, handed to the game.
     #[cfg(feature = "game")]
-    if ch.slot_idx == channels::SHDW_SLOT && dec.data_type == crate::game::battle::PET_BATTLE_TYPE {
-        crate::game::battle::on_battle_result(&dec.data).await;
-        return;
+    if ch.slot_idx == channels::SHDW_SLOT {
+        use crate::game::battle::{
+            PET_ACCEPT_TYPE, PET_BATTLE_TYPE, PET_CHALLENGE_TYPE, PET_DECLINE_TYPE,
+        };
+        match dec.data_type {
+            PET_CHALLENGE_TYPE => {
+                crate::game::battle_link::on_challenge(&dec.data).await;
+                return;
+            }
+            PET_ACCEPT_TYPE => {
+                crate::game::battle_link::on_accept(&dec.data).await;
+                return;
+            }
+            PET_DECLINE_TYPE => {
+                crate::game::battle_link::on_decline(&dec.data).await;
+                return;
+            }
+            PET_BATTLE_TYPE => {
+                crate::game::battle_link::on_result(&dec.data).await;
+                return;
+            }
+            _ => {}
+        }
     }
 
     // Queue the binary blob for the companion app.

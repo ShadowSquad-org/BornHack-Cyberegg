@@ -322,6 +322,7 @@ mod budget {
                 demo: true,
                 clock: true,
                 animated: false,
+                money: false,
             },
         )
         .outcome;

@@ -10,6 +10,17 @@ use embedded_graphics::prelude::*;
 
 use crate::{TriColor, ui};
 
+/// Pay a finished mini-game by its result (`engine::GRADE_*`): HAX, fun, the
+/// game's cooldown and a toast. Each game calls this once, from `close()`.
+pub fn pay_result(game: super::engine::MiniGame, grade: u8) {
+    super::lifecycle::award_inspiration(game, grade);
+    super::show_toast(if grade == super::engine::GRADE_LOSS {
+        super::Toast::MinigameTry
+    } else {
+        super::Toast::MinigameWin
+    });
+}
+
 /// Difficulty-picker overlay state: open flag, highlighted row, and the
 /// difficulty confirmed for the current game.
 pub struct DifficultyPicker {

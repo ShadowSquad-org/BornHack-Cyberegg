@@ -32,6 +32,8 @@ pub fn is_action_anim(anim: DisplayAnim) -> bool {
             | DisplayAnim::Ozempic
             | DisplayAnim::Rehab
             | DisplayAnim::OnlyPets
+            | DisplayAnim::Relaxing
+            | DisplayAnim::Washing
     )
 }
 
@@ -185,6 +187,7 @@ mod tests {
         use DisplayAnim::*;
         let fast = [
             Feeding, Healing, Playing, Exercising, Medicating, Drinking, Ozempic, Rehab, OnlyPets,
+            Relaxing, Washing,
         ];
         let all = [
             Gone,
@@ -202,6 +205,20 @@ mod tests {
             Ozempic,
             Rehab,
             OnlyPets,
+            Relaxing,
+            Washing,
+            Tipsy,
+            Wasted,
+            ThrowingUp,
+            HungOver,
+            Sore,
+            Injured,
+            Groggy,
+            Stuffed,
+            Thirsty,
+            Wired,
+            NeedsRehab,
+            Starving,
             Leaving { maxed_count: 1 },
             CriticalSick,
             CriticalTired,

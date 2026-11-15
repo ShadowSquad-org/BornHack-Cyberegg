@@ -2,6 +2,9 @@
 //!
 //! The roster comes entirely from the `PETS.CFG` manifest on the USB-MSC
 //! partition — there are no built-in pets.  See [`crate::game::pets_cfg`].
+//! One exception to "no built-ins" in effect: an old-format `PETS.CFG` (pets
+//! declared, none of the prefixes 0, 1, 2) is migrated in memory to start with
+//! Bartholomeus, Cat and Slug before [`install`] sees it.
 //! A badge whose `PETS.CFG` is missing, empty or unreadable has an empty
 //! roster and no pet can be selected until the file is restored.
 //!
@@ -228,6 +231,29 @@ mod tests {
         assert_eq!(reg.dropped, 1 << 8);
         assert!(reg.defs.iter().any(|d| d.id == 8 && d.name.as_str() == "Jellyfish"));
         assert!(!reg.ids.iter().any(|k| k.0 == 8));
+    }
+
+    #[test]
+    fn migrated_pets_survive_only_with_their_sprites() {
+        let mut parsed: heapless::Vec<PetDef, MAX_PETS> = heapless::Vec::new();
+        crate::game::pets_cfg::parse(b"5=Panda\n6=Badger\n7=Seastar\n8=Jellyfish\n", &mut parsed);
+        assert!(crate::game::pets_cfg::migrate_old_format(&mut parsed));
+        let mut reg = Registry { defs: heapless::Vec::new(), ids: heapless::Vec::new(), dropped: 0 };
+        for d in parsed.iter() {
+            let _ = reg.defs.push(d.clone());
+            let _ = reg.ids.push(PetKind(d.id));
+        }
+        // Slug (2) and Jellyfish (8) have no sprites.
+        drop_from(&mut reg, true, |id| id != 2 && id != 8);
+        let ids: std::vec::Vec<u8> = reg.ids.iter().map(|k| k.0).collect();
+        assert_eq!(ids, [0, 1, 5, 6, 7]);
+        // With every sprite set present nothing goes.
+        let mut all = Registry { defs: heapless::Vec::new(), ids: heapless::Vec::new(), dropped: 0 };
+        for d in parsed.iter() {
+            let _ = all.ids.push(PetKind(d.id));
+        }
+        drop_from(&mut all, true, |_| true);
+        assert_eq!(all.ids.len(), 7);
     }
 
     #[test]

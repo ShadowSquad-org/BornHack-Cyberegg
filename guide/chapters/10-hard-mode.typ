@@ -28,7 +28,7 @@ describes what the badge does today, and nothing more.
     The egg starts with the same purse as in the other money mode:
     #v("START_HAX").
   ],
-  screen("select-mode", width: shot-m, caption: [The third row.]))
+  screen("select-hard", width: shot-m, caption: [The third row.]))
 
 == What costs more
 

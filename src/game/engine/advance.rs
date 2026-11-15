@@ -88,6 +88,10 @@ pub fn advance(s: &mut GameState, dt: u32) {
         *c = c.saturating_sub(spent);
     }
 
+    // The prize timer counts down; nothing visible reads it, so it is not a
+    // solver boundary.
+    sub_min(&mut s.prize_min, dt);
+
     // Slow counters, by the regime at the start.
     let (booze, weight, fit) = (s.booze as i32, s.weight as i32, s.fitness as i32);
     let (heavy, lean) = (
@@ -170,6 +174,7 @@ pub fn advance(s: &mut GameState, dt: u32) {
     for timer in [
         &mut s.rested_min,
         &mut s.injured_min,
+        &mut s.decline_min,
         &mut s.groggy_min,
         &mut s.med_cd_min,
         &mut s.recovering_min,

@@ -6,7 +6,7 @@ mod state {
     use bornhack_aegg::game::engine::hint::Remedy;
     use bornhack_aegg::game::engine::needs::P;
     use bornhack_aegg::game::engine::{
-        FoodKind, GRADE_WIN, GameState, MiniGame, PetKind, Phase, SAVE_KEY, SAVE_SIZE,
+        FoodKind, GRADE_WIN, Fought, GameState, MiniGame, PetKind, Phase, SAVE_KEY, SAVE_SIZE,
     };
 
     fn active() -> GameState {
@@ -192,7 +192,7 @@ mod state {
         assert_eq!(s.money, 50);
         s.award_inspiration(MiniGame::Nim, GRADE_WIN);
         assert_eq!(s.money, 50);
-        s.record_battle(true);
+        s.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: true });
         assert_eq!(s.money, 50);
         s.add_money(10);
         assert_eq!(s.money, 50);
@@ -954,7 +954,7 @@ mod policy {
                 Choice::Wake => c.wake(),
                 Choice::Wash => c.wash(),
                 Choice::Play => c.play(),
-                Choice::Game(g, _) => c.game_refusal(Some(g)).is_none(),
+                Choice::Game(g, _) => c.game_refusal(g).is_none(),
                 Choice::Relax => c.relax(),
                 Choice::Medicine => c.heal(),
                 Choice::Insulin => c.medicate(),
@@ -2353,6 +2353,7 @@ mod balance {
         demo: true,
         clock: true,
         animated: false,
+        money: false,
     };
     const ANIMATED: Setup = Setup {
         animated: true,

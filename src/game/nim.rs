@@ -91,7 +91,17 @@ pub fn open() {
 }
 
 pub fn close() {
-    ACTIVE.store(false, Ordering::Relaxed);
+    // A finished game pays by result, once, however the screen is left.
+    if ACTIVE.swap(false, Ordering::Relaxed) {
+        let grade = match RESULT.load(Ordering::Relaxed) {
+            RESULT_HUMAN_WINS => Some(super::engine::GRADE_WIN),
+            RESULT_EI_WINS => Some(super::engine::GRADE_LOSS),
+            _ => None,
+        };
+        if let Some(grade) = grade {
+            super::minigame::pay_result(super::engine::MiniGame::Nim, grade);
+        }
+    }
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
 }
 
@@ -182,16 +192,8 @@ pub fn activate() {
         return;
     }
 
-    // Game over: any Fire closes (and awards inspiration on a win).
-    let r = RESULT.load(Ordering::Relaxed);
-    if r != RESULT_IN_PROGRESS {
-        if r == RESULT_HUMAN_WINS {
-            super::lifecycle::award_inspiration(
-                super::engine::MiniGame::Nim,
-                super::engine::GRADE_WIN,
-            );
-            super::show_toast(super::Toast::MinigameWin);
-        }
+    // Game over: any Fire closes (`close` pays the result).
+    if RESULT.load(Ordering::Relaxed) != RESULT_IN_PROGRESS {
         close();
         return;
     }
@@ -489,4 +491,55 @@ where
         })
     });
     display.draw_iter(pixels)
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_LOSS, MINIGAME_HAX_REWARD};
+    use crate::game::{current_toast, minigame_pay_read, minigame_pay_setup, Toast};
+
+    const GAME: MiniGame = MiniGame::Nim;
+
+    /// Open the game, put it in the finished state `result`, leave with Cancel.
+    fn finish_and_cancel(result: u8) {
+        open();
+
+        RESULT.store(result, Ordering::Relaxed);
+        close();
+    }
+
+    #[test]
+    fn a_won_game_closed_with_cancel_pays_the_win() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_REWARD, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+        assert!(!is_active());
+    }
+
+    #[test]
+    fn closing_twice_pays_once() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(1);
+        close();
+        close();
+        assert_eq!(minigame_pay_read(GAME).0, MINIGAME_HAX_REWARD);
+    }
+
+    #[test]
+    fn a_game_in_progress_pays_nothing() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(0);
+        assert_eq!(minigame_pay_read(GAME), (0, false));
+        assert_eq!(current_toast(), None);
+    }
+
+    #[test]
+    fn a_lost_game_pays_the_loss() {
+        let _g = minigame_pay_setup();
+        finish_and_cancel(2);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_LOSS, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameTry));
+    }
 }

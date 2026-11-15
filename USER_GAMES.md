@@ -46,6 +46,16 @@ Both switches are in **Main -> Bornagotchi**, under **Mode**:
 - **Demo mode: on / off** turns it on or off. A pet in poor health (under 40 %) cannot start it and the row says "Demo: fix me first"; an egg or a pet that left shows "Demo: no pet".
 - **Demo care: instant / animated** picks how the pet looks after itself. Instant (the default) applies the care at once and leaves a note. Animated plays the real eat, drink and wash animations; it costs more screen refreshes, so it drains the battery faster. It is saved per pet and can be set before turning demo on.
 
+### Battles
+
+Pets can fight the friends they have met over the mesh radio. Open the **Play** menu and pick **Battle: <form>**. The word after the colon (`top form`, `in form`, `off form` or `poor form`) says how your pet would do against an average pet. The list shows each friend with `~<n>%`, an estimate of your chance from their last beacon, and how old that beacon is. Fire sends the challenge.
+
+The other badge buzzes and shows a card with both pets' numbers (power, guard, speed, stamina, focus, HP) and the exact chance. Its player has 15 seconds to choose **Fire** (fight) or **Cancel** (decline). You wait up to 20 seconds. If nobody answers, the fight is played against the friend's last beacon and the result card shows as usual; with no usable beacon the card says `no answer` and nothing happens.
+
+The fight is ten rounds at most. The faster pet strikes first, a pet that is past its stamina slows down, and after ten rounds the pet with more HP left wins. Care decides the numbers: a rested, fed, clean, cheerful pet fights well. Twenty words (such as `well rested`, `hung over`, `sore`) show what helps or hurts. The result card shows `chance was <n>%` and what decided the fight.
+
+A fight costs energy, water and dirt, and adds strain and bruises. A tired, hungry or thirsty pet strains more, and too much strain tears a muscle. In money mode the first win of the day pays `BATTLE_PRIZE_FIRST_HAX` and later wins `BATTLE_PRIZE_LATER_HAX`; a fight against a beacon older than `BATTLE_PRIZE_BEACON_MIN` minutes pays nothing and costs nothing, but still counts in the record and sets the Battle rest. Declining costs a little mood (`BATTLE_DECLINE_MOOD_PCT` for `BATTLE_DECLINE_MIN` minutes). Demo pets fight only demo pets. The balance numbers are keys in `BPETS_V3.CFG` (see the key list below).
+
 ## Game modes
 
 Two built-in difficulty presets, picked via **Main → Bornagotchi → Mode**:
@@ -368,6 +378,55 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DEMO_PICK_WATER_PCT` | 70 | 70 |
 | `DEMO_PICK_COLA_PCT` | 20 | 20 |
 | `DEMO_PICK_GAME_PCT` | 30 | 30 |
+| `BATTLE_POWER_BASE_PTS` | 22 | 22 |
+| `BATTLE_POWER_WEIGHT_PCT` | 28 | 28 |
+| `BATTLE_COURAGE_PEAK_PTS` | 8 | 8 |
+| `BATTLE_HIGH_MOOD_PCT` | 80 | 80 |
+| `BATTLE_HIGH_MOOD_PTS` | 3 | 3 |
+| `BATTLE_LOW_MOOD_PCT` | 40 | 40 |
+| `BATTLE_GUARD_WEIGHT_PCT` | 26 | 26 |
+| `BATTLE_GUARD_BASE_PTS` | 7 | 7 |
+| `BATTLE_SPEED_BASE_PTS` | 25 | 25 |
+| `BATTLE_SPEED_FIT_PCT` | 40 | 40 |
+| `BATTLE_RESTED_SPEED_PTS` | 5 | 5 |
+| `BATTLE_RESTED_FOCUS_PTS` | 5 | 5 |
+| `BATTLE_GROGGY_SPEED_PTS` | 10 | 10 |
+| `BATTLE_GROGGY_FOCUS_PTS` | 5 | 5 |
+| `BATTLE_HANGOVER_SPEED_PTS` | 8 | 8 |
+| `BATTLE_HANGOVER_FOCUS_PTS` | 12 | 12 |
+| `BATTLE_CRAVING_FOCUS_PTS` | 10 | 10 |
+| `BATTLE_CRAVING_POWER_PTS` | 3 | 3 |
+| `BATTLE_HEAVY_UNFIT_FIT_PCT` | 50 | 50 |
+| `BATTLE_SLOPPY_PCT` | 40 | 40 |
+| `BATTLE_FELT_BASE_PCT` | 150 | 150 |
+| `BATTLE_HP_BASE_PTS` | 45 | 45 |
+| `BATTLE_HP_WEIGHT_PCT` | 25 | 25 |
+| `BATTLE_POWER_FLOOR_PTS` | 33 | 33 |
+| `BATTLE_GUARD_FLOOR_PTS` | 14 | 14 |
+| `BATTLE_HP_FLOOR_PTS` | 60 | 60 |
+| `BATTLE_STAMINA_FLOOR_PTS` | 1 | 1 |
+| `BATTLE_INJURED_PCT` | 60 | 60 |
+| `BATTLE_FORM_TOP_PCT` | 65 | 65 |
+| `BATTLE_FORM_IN_PCT` | 50 | 50 |
+| `BATTLE_FORM_OFF_PCT` | 30 | 30 |
+| `BATTLE_COOLDOWN` | 180 | 180 |
+| `BATTLE_PAIR_COOLDOWN_MIN` | 60 | 60 |
+| `BATTLE_ENERGY_PCT` | 10 | 10 |
+| `BATTLE_WATER_PCT` | 8 | 8 |
+| `BATTLE_FUN_PCT` | 20 | 20 |
+| `BATTLE_DIRT_PCT` | 8 | 8 |
+| `BATTLE_STRAIN_PCT` | 20 | 20 |
+| `BATTLE_STRAIN_NEED_PCT` | 150 | 150 |
+| `BATTLE_STRAIN_RESTED_PCT` | 70 | 70 |
+| `BATTLE_BRUISE_MAX_PCT` | 5 | 2 |
+| `BATTLE_MOOD_PCT` | 8 | 8 |
+| `BATTLE_MIN_HEALTH_PCT` | 30 | 30 |
+| `BATTLE_DRUNK_PCT` | 70 | 70 |
+| `BATTLE_PRIZE_FIRST_HAX` | 100 | 100 |
+| `BATTLE_PRIZE_LATER_HAX` | 20 | 20 |
+| `BATTLE_PRIZE_BEACON_MIN` | 30 | 30 |
+| `BATTLE_DECLINE_MOOD_PCT` | 3 | 3 |
+| `BATTLE_DECLINE_MIN` | 60 | 60 |
 | `BG_NIGHT_FROM_MIN` | 1260 | 1260 |
 | `BG_NIGHT_TO_MIN` | 420 | 420 |
 | `FLOOR_CRUMBS_DIRT_PCT` | 40 | 40 |

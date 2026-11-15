@@ -245,6 +245,7 @@ fn timer_bound(s: &GameState) -> u32 {
     for left in [
         ceil_div(s.hangover_min as i64, hangover_mult),
         s.injured_min as i64,
+        s.decline_min as i64,
         s.groggy_min as i64,
         s.insulin_min as i64,
         s.rehab_min as i64,

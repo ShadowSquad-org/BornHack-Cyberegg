@@ -18,7 +18,7 @@
   if n == h { n } else { [#n #linebreak() #text(size: 7pt)[Hard: #h]] }
 }
 
-// Fun from a finished mini-game of grade 1 (draw) or 2 (win).
+// Fun from a finished mini-game of grade 0 (loss), 1 (draw) or 2 (win).
 #let mini-fun(grade, preset: classic) = str(
   num("DOSE_MINI_FUN_BASE_PCT", preset: preset)
     + num("DOSE_MINI_FUN_GRADE_PCT", preset: preset) * grade) + " %"

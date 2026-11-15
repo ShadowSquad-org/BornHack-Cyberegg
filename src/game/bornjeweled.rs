@@ -120,11 +120,10 @@ pub fn close() {
         // game that scored at least one cleared row.
         let score = SCORE.load(Ordering::Relaxed);
         if score > 0 {
-            super::lifecycle::award_inspiration(
+            super::minigame::pay_result(
                 super::engine::MiniGame::BornJeweled,
                 super::engine::GRADE_WIN,
             );
-            super::show_toast(super::Toast::MinigameWin);
         }
     }
     crate::FULL_REFRESH_PENDING.store(true, Ordering::Relaxed);
@@ -523,4 +522,29 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_REWARD};
+    use crate::game::{minigame_pay_read, minigame_pay_setup};
+
+    #[test]
+    fn a_scored_game_pays_once_and_a_zero_score_pays_nothing() {
+        let _g = minigame_pay_setup();
+        open();
+        SCORE.store(0, Ordering::Relaxed);
+        close();
+        assert_eq!(minigame_pay_read(MiniGame::BornJeweled), (0, false));
+
+        open();
+        SCORE.store(3, Ordering::Relaxed);
+        close();
+        close();
+        assert_eq!(
+            minigame_pay_read(MiniGame::BornJeweled),
+            (MINIGAME_HAX_REWARD, true)
+        );
+    }
 }

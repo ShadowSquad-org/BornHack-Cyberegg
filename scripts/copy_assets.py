@@ -75,7 +75,7 @@ IGNORED_ENTRIES = {".Trash-1000", ".trash", "System Volume Information"}
 # Kept outside to-badge so it is never copied to a badge.
 CHANGES_FILE = REPO_ROOT / "assets" / "asset-changes.txt"
 # Per-badge or player-edited files: never removed or replaced (folded names).
-PROTECTED = frozenset({"000000.pcx", "010000.pcx", "pets.cfg",
+PROTECTED = frozenset({"000000.pcx", "pets.cfg",
                        "bpets_v3.cfg", "bornpets.cfg"})
 # FAT12 volume geometry of the badge, for volume_budget().
 VOLUME_CLUSTERS, CLUSTER_BYTES, ROOT_ENTRIES = 502, 2048, 511

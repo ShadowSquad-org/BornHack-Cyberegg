@@ -15,8 +15,8 @@ use crate::game::engine::sim;
 use crate::game::engine::status::SECOND_WORD_UNDER;
 use crate::game::engine::thresholds::{BORNPETS_CFG_KEYS, Mode, Thresholds, badge_preset};
 use crate::game::engine::{
-    ASPIRINE_HAX_COST, Action, BATTLE_HAX_REWARD, DRUG_HAX_COST, DrinkKind, FoodKind, GameState,
-    MEDICATION_HARD_MULT, MINIGAME_HAX_REWARD, ONLYPETS_HOBBY_REWARD, PET_NAME_MAX, PLAY_HAX_COST,
+    ASPIRINE_HAX_COST, Action, DRUG_HAX_COST, DrinkKind, FoodKind, GameState,
+    MEDICATION_HARD_MULT, MINIGAME_HAX_DRAW, MINIGAME_HAX_LOSS, MINIGAME_HAX_REWARD, ONLYPETS_HOBBY_REWARD, PET_NAME_MAX, PLAY_HAX_COST,
     PetKind, Phase, REALM_MAX_PETS, REHAB_HARD_MULT, TICKS_PER_MINUTE,
 };
 use crate::game::lifecycle::CATCH_UP_MAX_MIN;
@@ -82,6 +82,10 @@ pub fn unit_of(field: &str) -> Unit {
         Unit::Min
     } else if field.ends_with("_TICKS") || field.ends_with("_DURATION") {
         Unit::Ticks
+    } else if field.ends_with("_PTS") {
+        Unit::Count
+    } else if field.ends_with("_HAX") {
+        Unit::Hax
     } else {
         // `_PM`, `_DIV`, `_MULT` and anything unknown.
         Unit::Raw
@@ -169,7 +173,8 @@ pub fn fixed() -> Vec<(&'static str, u32, Unit)> {
         ),
         ("IDLE_FRAME_SECS", IDLE_FRAME_SECS as u32, Unit::Secs),
         ("MINIGAME_HAX_REWARD", MINIGAME_HAX_REWARD, Unit::Hax),
-        ("BATTLE_HAX_REWARD", BATTLE_HAX_REWARD, Unit::Hax),
+        ("MINIGAME_HAX_DRAW", MINIGAME_HAX_DRAW, Unit::Hax),
+        ("MINIGAME_HAX_LOSS", MINIGAME_HAX_LOSS, Unit::Hax),
         ("ONLYPETS_HOBBY_REWARD", ONLYPETS_HOBBY_REWARD, Unit::Hax),
         ("PLAY_HAX_COST", PLAY_HAX_COST, Unit::Hax),
         ("DRUG_HAX_COST", DRUG_HAX_COST, Unit::Hax),

@@ -15,16 +15,19 @@ pub enum StrainWhy {
     Heavy,
     WornOut,
     Overdone,
+    /// A battle's rough handling (plan 5).
+    Fight,
 }
 
 impl StrainWhy {
-    pub const ALL: [StrainWhy; 6] = [
+    pub const ALL: [StrainWhy; 7] = [
         StrainWhy::Hungry,
         StrainWhy::Thirsty,
         StrainWhy::Tired,
         StrainWhy::Heavy,
         StrainWhy::WornOut,
         StrainWhy::Overdone,
+        StrainWhy::Fight,
     ];
 
     fn why(self) -> &'static str {
@@ -35,6 +38,7 @@ impl StrainWhy {
             StrainWhy::Heavy => "sport: heavy",
             StrainWhy::WornOut => "sport: worn out",
             StrainWhy::Overdone => "sport: too much",
+            StrainWhy::Fight => "in a fight",
         }
     }
 }

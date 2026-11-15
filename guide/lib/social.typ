@@ -77,7 +77,7 @@
   ),
 )
 
-// The seven kinds in a row, each at one common scale.
+// The six kinds in a row, each at one common scale.
 #let realm-row() = grid(
   columns: roster.pets.map(_ => 1fr),
   column-gutter: 2mm,

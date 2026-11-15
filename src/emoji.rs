@@ -1198,14 +1198,20 @@ pub fn column_width(s: &str) -> usize {
         .sum()
 }
 
-/// Pixel width of `s` rendered with [`draw_string`] — `columns × 7` plus
-/// any per-emoji slack.
+/// Pixel width of `s` rendered with [`draw_string`] in the 7 px body font:
+/// `columns x 7` plus any per-emoji slack.
 pub fn pixel_width(s: &str) -> i32 {
+    pixel_width_for(s, 7)
+}
+
+/// Like [`pixel_width`] for a font whose advance is `char_w` px a column
+/// (the 6 px font, say). Emoji and replacement glyphs keep their own advance.
+pub fn pixel_width_for(s: &str, char_w: i32) -> i32 {
     let mut w = 0i32;
     for t in decode_with_emojis(s) {
         match t {
             Token::Char(c) if is_unrenderable(c as u32) => w += EMOJI_ADVANCE_PX,
-            Token::Char(_) => w += 7,
+            Token::Char(_) => w += char_w,
             Token::Emoji(_) => w += EMOJI_ADVANCE_PX,
         }
     }
@@ -1342,10 +1348,11 @@ where
     // inner text run to draw left-aligned — otherwise each batched run would
     // re-centre itself around the moving cursor.
     let mut position = position;
+    let char_w = (style.font.character_size.width + style.font.character_spacing) as i32;
     match text_style.alignment {
         Alignment::Left => {}
-        Alignment::Center => position.x -= pixel_width(s) / 2,
-        Alignment::Right => position.x -= pixel_width(s),
+        Alignment::Center => position.x -= pixel_width_for(s, char_w) / 2,
+        Alignment::Right => position.x -= pixel_width_for(s, char_w),
     }
     let run_style = TextStyleBuilder::new()
         .baseline(text_style.baseline)

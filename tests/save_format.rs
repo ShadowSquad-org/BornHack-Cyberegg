@@ -7,7 +7,11 @@
 //! `GAME_GOLDEN` is the format-2 save (97 bytes, kv key `state`); the v3
 //! save (177 bytes, key `state_v3`) is pinned by `V3_GOLDEN`.
 
-use bornhack_aegg::game::battle::{BattleResultMsg, KIND_UNKNOWN};
+use bornhack_aegg::game::battle::{
+    AcceptMsg, BattleResultMsg, ChallengeMsg, DeclineMsg, KIND_UNKNOWN,
+};
+use bornhack_aegg::game::engine::combat::{Flags, Snapshot};
+use bornhack_aegg::game::engine::doses::Reason;
 use bornhack_aegg::game::engine::advance::SLOW_SCALE;
 use bornhack_aegg::game::engine::thresholds;
 use bornhack_aegg::game::engine::{
@@ -15,7 +19,7 @@ use bornhack_aegg::game::engine::{
     REALM_MAX_PETS, REALM_SAVE_SIZE, SAVE_FORMAT_VERSION, SAVE_SIZE, SAVE_SIZE_V2, pick_save,
 };
 use bornhack_aegg::game::friends::{
-    FRIENDS_MAX, FRIENDS_SAVE_SIZE, FriendRecord, FriendsList, PetBeacon,
+    FRIENDS_MAX, FRIENDS_SAVE_SIZE, FRIENDS_SAVE_SIZE_OLD, FriendRecord, FriendsList, PetBeacon,
 };
 
 // ---------------------------------------------------------------------------
@@ -38,7 +42,7 @@ const GAME_GOLDEN: [u8; 97] = [
 const V3_GOLDEN: [u8; 177] = [
     0x03, 0x92, 0xC7, 0x8C, 0xED, 0x89, 0xEC, 0x86, 0xEB, 0xAC, 0x8A, 0x7F, 0x16, 0x82, 0x17, 0x85,
     0x18, 0x88, 0x19, 0x8C, 0x6A, 0x49, 0x2A, 0x8D, 0x6B, 0x4A, 0x2B, 0x01, 0x94, 0x1D, 0x15, 0x14,
-    0x13, 0x12, 0x9A, 0x1F, 0x0A, 0x09, 0x00, 0x00, 0x01, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x13, 0x12, 0x9A, 0x1F, 0x0A, 0x09, 0x01, 0x51, 0x01, 0x41, 0x02, 0x52, 0x23, 0x01, 0x33, 0x00,
     0x02, 0x42, 0x03, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x0D, 0x0C, 0x0B, 0x0A, 0x11, 0x10, 0x0F, 0x0E, 0x01, 0x00, 0x01, 0x01, 0xA5, 0x83, 0x62, 0x43,
     0xA6, 0x84, 0x63, 0x44, 0x05, 0xDF, 0x36, 0xE2, 0x37, 0xE5, 0x38, 0xAB, 0x89, 0x68, 0x49, 0x01,
@@ -108,6 +112,10 @@ fn v3_state() -> GameState {
     s.saved_unix = 0x2122_2324;
     s.active_food = Some(FoodKind::Pizza);
     s.active_drink = Some(DrinkKind::Whiskey);
+    s.demo_wins = 0x5101;
+    s.demo_losses = 0x5202;
+    s.prize_min = 0x0123;
+    s.decline_min = 0x0033;
     s
 }
 
@@ -133,7 +141,12 @@ fn v3_golden_bytes_round_trip() {
     assert_eq!(&bytes[40..42], &s.med_cd_min.to_le_bytes()); // old cooldown_heal
     assert_eq!(&bytes[48..50], &s.insulin_min.to_le_bytes()); // old cooldown_medicate
     assert_eq!(&bytes[50..52], &s.ozempic_cd_min.to_le_bytes()); // old cooldown_ozempic
-    for ofs in [38usize, 42, 44, 46, 52, 54] {
+    // The battle fields sit in the old feed, relax, play and exercise slots.
+    assert_eq!(&bytes[38..40], &0x5101u16.to_le_bytes()); // demo_wins
+    assert_eq!(&bytes[42..44], &0x5202u16.to_le_bytes()); // demo_losses
+    assert_eq!(&bytes[44..46], &0x0123u16.to_le_bytes()); // prize_min
+    assert_eq!(&bytes[46..48], &0x0033u16.to_le_bytes()); // decline_min
+    for ofs in [52usize, 54] {
         assert_eq!(&bytes[ofs..ofs + 2], &[0, 0], "removed cooldown slot {ofs}");
     }
     assert_eq!(&bytes[56..64], &[0u8; 8]); // removed interval counters
@@ -288,6 +301,17 @@ fn v2_upgrade_scales_slow_counters() {
 }
 
 #[test]
+fn v2_upgrade_leaves_battle_slots_zero() {
+    // A format-2 save has old cooldowns in the slots format 3 reuses.
+    let mut b = GAME_GOLDEN;
+    for (i, byte) in b[38..48].iter_mut().enumerate() {
+        *byte = 0x10 + i as u8;
+    }
+    let s = GameState::from_bytes_v2(&b).unwrap();
+    assert_eq!((s.demo_wins, s.demo_losses, s.prize_min, s.decline_min), (0, 0, 0, 0));
+}
+
+#[test]
 fn v2_upgrade_maps_alcoholic_to_dependent() {
     let mut b = GAME_GOLDEN;
     b[FLAGS_OFS + 3] = 1;
@@ -334,7 +358,12 @@ fn game_state_decode_normalises_out_of_range_bytes() {
     b[FLAGS_OFS + 1] = 0x02; // hibernating
     b[V3_FOOD_OFS] = 0x55; // unknown food -> None
     b[V3_DRINK_OFS] = 0x55;
+    b[44..48].fill(0xFF); // prize_min, decline_min: held to their limits
+    b[38..40].fill(0xFF); // the record counters are not limited
     let s = GameState::from_bytes(&b).unwrap();
+    assert_eq!(s.prize_min, bornhack_aegg::game::engine::demo::MINUTES_PER_DAY);
+    assert_eq!(s.decline_min, thresholds::BATTLE_DECLINE_MIN());
+    assert_eq!(s.demo_wins, u16::MAX);
     assert_eq!(s.phase, Phase::Gone);
     assert_eq!(s.active_action, None);
     assert!(s.is_sleeping);
@@ -531,12 +560,18 @@ fn friend(
         first_seen_tick: ticks[0],
         last_boost_tick: ticks[1],
         last_seen_tick: ticks[2],
-        attack: combat[0],
-        defense: combat[1],
+        power: combat[0],
+        guard: combat[1],
         speed: combat[2],
-        max_hp: combat[3],
+        hp: combat[3],
+        stamina: 0,
+        focus: 0,
+        demo: false,
+        v3: false,
+        fought_tick: 0,
         wins: wl[0],
         losses: wl[1],
+        heard_this_boot: false,
     }
 }
 
@@ -562,15 +597,59 @@ fn friends_value() -> FriendsList {
     f
 }
 
+/// The old `list` blob decodes through `from_old_bytes`, new fields zero.
+#[test]
+fn friends_golden_old_blob_migrates() {
+    assert_eq!(FRIENDS_SAVE_SIZE_OLD, 721);
+    let golden: [u8; FRIENDS_SAVE_SIZE_OLD] = padded(&FRIENDS_PREFIX);
+    let f = FriendsList::from_old_bytes(&golden);
+    assert_eq!(f.count, 2);
+    let want = friends_value();
+    for i in 0..2 {
+        let (a, b) = (&f.friends[i], &want.friends[i]);
+        assert_eq!(a.device_id, b.device_id);
+        assert_eq!((a.pet_kind, a.name_len), (b.pet_kind, b.name_len));
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.first_seen_tick, b.first_seen_tick);
+        assert_eq!(a.last_boost_tick, b.last_boost_tick);
+        assert_eq!(a.last_seen_tick, b.last_seen_tick);
+        assert_eq!((a.power, a.guard, a.speed, a.hp), (b.power, b.guard, b.speed, b.hp));
+        assert_eq!((a.wins, a.losses), (b.wins, b.losses));
+        assert_eq!((a.stamina, a.focus, a.demo, a.v3, a.fought_tick), (0, 0, false, false, 0));
+    }
+}
+
+// `list_v3`: layout 3, count 2, two 43-byte records (the old 36 bytes, then
+// stamina, focus, flags, fought_tick); the other eighteen slots are zero.
+const FRIENDS_V3_PREFIX: [u8; 89] = [
+    0x03, 0x02, 0xA1, 0xB2, 0x04, 0x52, 0x65, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B, 0x0A, 0x09, 0x29, 0x20,
+    0x17, 0x72, 0x02, 0x01, 0x04, 0x03, 0x05, 0xFE, 0x01, 0x78, 0x56, 0x34, 0x12, 0xC3, 0xD4, 0x08,
+    0x46, 0x6C, 0x75, 0x66, 0x66, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x14, 0x13, 0x12,
+    0x11, 0x18, 0x17, 0x16, 0x15, 0x1C, 0x1B, 0x1A, 0x19, 0x37, 0x42, 0x4D, 0x58, 0x12, 0x11, 0x14,
+    0x13, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+fn friends_v3_value() -> FriendsList {
+    let mut f = friends_value();
+    f.friends[0].stamina = 5;
+    f.friends[0].focus = -2;
+    f.friends[0].demo = true;
+    f.friends[0].fought_tick = 0x1234_5678;
+    // v3 alone on record 1 (flags 0x02), so the two bits are pinned apart.
+    f.friends[1].v3 = true;
+    f
+}
+
 #[test]
 fn friends_golden_bytes_round_trip() {
-    assert_eq!(FRIENDS_SAVE_SIZE, 721);
-    let golden: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_PREFIX);
-    assert_eq!(friends_value().to_bytes(), golden);
+    assert_eq!(FRIENDS_SAVE_SIZE, 862);
+    let golden: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_V3_PREFIX);
+    assert_eq!(friends_v3_value().to_bytes(), golden);
 
     let f = FriendsList::from_bytes(&golden);
     assert_eq!(f.count, 2);
-    let want = friends_value();
+    let want = friends_v3_value();
     for i in 0..2 {
         let (a, b) = (&f.friends[i], &want.friends[i]);
         assert_eq!(a.device_id, b.device_id);
@@ -580,10 +659,12 @@ fn friends_golden_bytes_round_trip() {
         assert_eq!(a.first_seen_tick, b.first_seen_tick);
         assert_eq!(a.last_boost_tick, b.last_boost_tick);
         assert_eq!(a.last_seen_tick, b.last_seen_tick);
-        assert_eq!(a.attack, b.attack);
-        assert_eq!(a.defense, b.defense);
+        assert_eq!(a.power, b.power);
+        assert_eq!(a.guard, b.guard);
         assert_eq!(a.speed, b.speed);
-        assert_eq!(a.max_hp, b.max_hp);
+        assert_eq!(a.hp, b.hp);
+        assert_eq!((a.stamina, a.focus), (b.stamina, b.focus));
+        assert_eq!((a.demo, a.v3, a.fought_tick), (b.demo, b.v3, b.fought_tick));
         assert_eq!(a.wins, b.wins);
         assert_eq!(a.losses, b.losses);
     }
@@ -593,11 +674,13 @@ fn friends_golden_bytes_round_trip() {
 #[test]
 fn friends_short_and_oversized_input() {
     assert_eq!(FriendsList::from_bytes(&[]).count, 0);
-    let mut b: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_PREFIX);
-    b[0] = 250;
+    // An old blob (first byte is a count, not layout 3) is not a v3 blob.
+    assert_eq!(FriendsList::from_bytes(&FRIENDS_PREFIX).count, 0);
+    let mut b: [u8; FRIENDS_SAVE_SIZE] = padded(&FRIENDS_V3_PREFIX);
+    b[1] = 250;
     assert_eq!(FriendsList::from_bytes(&b).count as usize, FRIENDS_MAX);
     // Truncated mid second record: first decodes, second stays default.
-    let f = FriendsList::from_bytes(&FRIENDS_PREFIX[..1 + 36 + 10]);
+    let f = FriendsList::from_bytes(&FRIENDS_V3_PREFIX[..2 + 43 + 10]);
     assert_eq!(f.count, 2);
     assert_eq!(f.friends[0].device_id, [0xA1, 0xB2]);
     assert_eq!(f.friends[1].device_id, [0, 0]);
@@ -609,42 +692,72 @@ const BEACON_GOLDEN: [u8; 22] = [
     0x00, 0x05, 0x31, 0x42, 0x53, 0x64,
 ];
 
+const BEACON_V3_GOLDEN: [u8; 25] = [
+    0xE5, 0xF6, 0x06, 0x0B, 0x0A, 0x50, 0x69, 0x78, 0x65, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x05, 0x31, 0x42, 0x53, 0x64, 0x07, 0xFB, 0x01,
+];
+
 #[test]
-fn pet_beacon_golden_bytes_round_trip() {
+fn pet_beacon_v3_golden_bytes() {
     let beacon = PetBeacon {
         device_id: [0xE5, 0xF6],
         pet_kind: 6,
         generation: 0x0A0B,
         name: name12("Pixel"),
         name_len: 5,
-        attack: 0x31,
-        defense: 0x42,
+        power: 0x31,
+        guard: 0x42,
         speed: 0x53,
-        max_hp: 0x64,
+        hp: 0x64,
+        stamina: 7,
+        focus: -5,
+        demo: true,
+        v3: true,
     };
-    assert_eq!(beacon.to_bytes(), BEACON_GOLDEN);
+    assert_eq!(beacon.to_bytes(), BEACON_V3_GOLDEN);
 
-    let b = PetBeacon::from_bytes(&BEACON_GOLDEN).unwrap();
+    let b = PetBeacon::from_bytes(&BEACON_V3_GOLDEN).unwrap();
     assert_eq!(b.device_id, [0xE5, 0xF6]);
     assert_eq!(b.pet_kind, 6);
     assert_eq!(b.generation, 0x0A0B);
     assert_eq!(b.name, name12("Pixel"));
     assert_eq!(b.name_len, 5);
     assert_eq!(
-        (b.attack, b.defense, b.speed, b.max_hp),
+        (b.power, b.guard, b.speed, b.hp),
         (0x31, 0x42, 0x53, 0x64)
     );
-    assert_eq!(b.to_bytes(), BEACON_GOLDEN);
+    assert_eq!((b.stamina, b.focus, b.demo, b.v3), (7, -5, true, true));
+    assert_eq!(b.to_bytes(), BEACON_V3_GOLDEN);
 
     // Too short -> rejected; longer is tolerated (trailing bytes ignored).
-    assert!(PetBeacon::from_bytes(&BEACON_GOLDEN[..21]).is_none());
+    assert!(PetBeacon::from_bytes(&BEACON_V3_GOLDEN[..21]).is_none());
     assert!(PetBeacon::from_bytes(&[]).is_none());
-    let mut long = BEACON_GOLDEN.to_vec();
+    let mut long = BEACON_V3_GOLDEN.to_vec();
     long.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(PetBeacon::from_bytes(&long).unwrap().to_bytes(), BEACON_V3_GOLDEN);
+}
+
+#[test]
+fn beacon_v3_starts_with_the_old_beacon() {
+    // Old firmware reads the first 22 bytes of a v3 beacon.
+    assert_eq!(BEACON_V3_GOLDEN[..22], BEACON_GOLDEN);
+}
+
+#[test]
+fn pet_beacon_old_still_decodes() {
+    let b = PetBeacon::from_bytes(&BEACON_GOLDEN).unwrap();
+    assert_eq!(b.device_id, [0xE5, 0xF6]);
+    assert_eq!(b.pet_kind, 6);
+    assert_eq!(b.generation, 0x0A0B);
+    assert_eq!(b.name, name12("Pixel"));
     assert_eq!(
-        PetBeacon::from_bytes(&long).unwrap().to_bytes(),
-        BEACON_GOLDEN
+        (b.power, b.guard, b.speed, b.hp),
+        (0x31, 0x42, 0x53, 0x64)
     );
+    assert_eq!((b.stamina, b.focus, b.demo, b.v3), (3, 0, false, false));
+    // 23 and 24 bytes are also an old beacon (the extra bytes are not a v3 tail).
+    assert!(!PetBeacon::from_bytes(&BEACON_V3_GOLDEN[..24]).unwrap().v3);
+    assert!(PetBeacon::from_bytes(&BEACON_GOLDEN[..21]).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -722,4 +835,121 @@ fn pet_name_prefers_name_v3_and_falls_back_to_the_old_key() {
     // A present but empty v3 name is a real answer, not "missing".
     assert_eq!(pick_name(Some(b""), Some(b"Old")), Some(&b""[..]));
     assert_eq!(pick_name(None, None), None);
+}
+
+// ---------------------------------------------------------------------------
+// v3 fight packets (on-air): snapshot, CHALLENGE, ACCEPT, DECLINE
+// ---------------------------------------------------------------------------
+
+/// power 40, guard 20, speed 50, hp 80, stamina 6, focus -10, flags 0x800005
+/// (bits 0 and 2, demo).
+const SNAPSHOT_GOLDEN: [u8; 9] = [0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80];
+/// Same numbers, flags 0x880201 (bits 0, 9, 19 and demo): all three flag bytes.
+const SNAPSHOT_FLAGS_GOLDEN: [u8; 9] = [0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x01, 0x02, 0x88];
+
+fn snap(flags: u32) -> Snapshot {
+    Snapshot {
+        power: 40,
+        guard: 20,
+        speed: 50,
+        hp: 80,
+        stamina: 6,
+        focus: -10,
+        flags: Flags(flags),
+    }
+}
+
+#[test]
+fn snapshot_golden_bytes() {
+    for (g, flags) in [(SNAPSHOT_GOLDEN, 0x80_0005u32), (SNAPSHOT_FLAGS_GOLDEN, 0x88_0201)] {
+        assert_eq!(snap(flags).to_wire(), g);
+        assert_eq!(Snapshot::from_wire(&g), Some(snap(flags)));
+        assert_eq!(Snapshot::from_wire(&g[..g.len() - 1]), None);
+    }
+}
+
+const CHALLENGE_GOLDEN: [u8; 29] = [
+    0x01, 0x02, 0x03, 0x04, 0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80, 0xEF, 0xBE, 0x05,
+    0x42, 0x72, 0x61, 0x6D, 0, 0, 0, 0, 0, 0, 0, 0, 0x04,
+];
+const ACCEPT_GOLDEN: [u8; 15] = [
+    0x01, 0x02, 0x03, 0x04, 0x28, 0x14, 0x32, 0x50, 0x06, 0xF6, 0x05, 0x00, 0x80, 0x34, 0x12,
+];
+const DECLINE_GOLDEN: [u8; 7] = [0x01, 0x02, 0x03, 0x04, 0x06, 0x02, 0x01];
+
+#[test]
+fn challenge_golden_bytes() {
+    let msg = ChallengeMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        snap: snap(0x80_0005),
+        nonce: 0xBEEF,
+        kind: 5,
+        name: name12("Bram"),
+        name_len: 4,
+    };
+    assert_eq!(msg.to_bytes(), CHALLENGE_GOLDEN);
+    assert_eq!(ChallengeMsg::from_bytes(&CHALLENGE_GOLDEN), Some(msg));
+    assert_eq!(ChallengeMsg::from_bytes(&CHALLENGE_GOLDEN[..28]), None);
+}
+
+#[test]
+fn accept_golden_bytes() {
+    let msg = AcceptMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        snap: snap(0x80_0005),
+        nonce: 0x1234,
+    };
+    assert_eq!(msg.to_bytes(), ACCEPT_GOLDEN);
+    assert_eq!(AcceptMsg::from_bytes(&ACCEPT_GOLDEN), Some(msg));
+    assert_eq!(AcceptMsg::from_bytes(&ACCEPT_GOLDEN[..14]), None);
+}
+
+#[test]
+fn decline_golden_bytes() {
+    let msg = DeclineMsg {
+        challenger_id: [1, 2],
+        target_id: [3, 4],
+        why: 6,
+        secs: 0x0102,
+    };
+    assert_eq!(msg.to_bytes(), DECLINE_GOLDEN);
+    assert_eq!(DeclineMsg::from_bytes(&DECLINE_GOLDEN), Some(msg));
+    assert_eq!(DeclineMsg::from_bytes(&DECLINE_GOLDEN[..6]), None);
+    assert_eq!(msg.reason(), Some(Reason::Wait(0x0102)));
+}
+
+#[test]
+fn decline_new_saturates_a_long_wait() {
+    let msg = DeclineMsg::new([1, 2], [3, 4], Reason::Wait(70_000));
+    assert_eq!(msg.secs, u16::MAX);
+    assert_eq!(msg.why, 6);
+    assert_eq!(msg.reason(), Some(Reason::Wait(u16::MAX as u32)));
+    let short = DeclineMsg::new([1, 2], [3, 4], Reason::Wait(90));
+    assert_eq!(short.secs, 90);
+    assert_eq!(short.to_bytes()[5..7], [90, 0]);
+    let busy = DeclineMsg::new([1, 2], [3, 4], Reason::Busy);
+    assert_eq!((busy.why, busy.secs), (8, 0));
+    assert_eq!(busy.reason(), Some(Reason::Busy));
+}
+
+#[test]
+fn player_decline_has_no_reason() {
+    let mut b = DECLINE_GOLDEN;
+    b[4] = bornhack_aegg::game::battle::WHY_DECLINED;
+    assert_eq!(DeclineMsg::from_bytes(&b).unwrap().reason(), None);
+}
+
+#[test]
+fn longer_packets_are_tolerated() {
+    let mut c = CHALLENGE_GOLDEN.to_vec();
+    c.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(ChallengeMsg::from_bytes(&c).unwrap().to_bytes(), CHALLENGE_GOLDEN);
+    let mut a = ACCEPT_GOLDEN.to_vec();
+    a.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(AcceptMsg::from_bytes(&a).unwrap().to_bytes(), ACCEPT_GOLDEN);
+    let mut d = DECLINE_GOLDEN.to_vec();
+    d.extend_from_slice(&[0xEE, 0xEE]);
+    assert_eq!(DeclineMsg::from_bytes(&d).unwrap().to_bytes(), DECLINE_GOLDEN);
 }
