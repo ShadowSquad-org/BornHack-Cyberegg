@@ -7,6 +7,8 @@ Subcommands:
                            that is not one of the 50 shipped new-state names.
   budget EXPORT            FAT12 cost (2 KiB clusters) of the 50 new PCX; exit 1
                            unless it fits NEW_PCX_BUDGET (or a file is missing).
+  inventory                word x pet table of the art each status word / action shows;
+                           writes target/v3art/inventory.json (Task M1).
   review EXPORT --round N  write the owner-gallery files under target/v3art/review
                            and print the manifest path.
 
@@ -393,6 +395,102 @@ def write_review(export_dir, round_no: int, out_dir=REVIEW_DIR, litter_dir=LITTE
     return mpath
 
 
+# ---------------------------------------------------------------- state inventory (Task M1)
+
+# The Slug is not in ART_PETS until A4b; the inventory already covers it.
+INVENTORY_PETS = {"bartholomeus": "00", "cat": "01", "slug": "02",
+                  "panda": "05", "badger": "06", "seastar": "07"}
+_O = "owner 2026-11-14: "
+
+
+def _row(stand_in, art, decided=None):
+    return {"stand_in": list(stand_in), "art": art, "decided": decided}
+
+
+_IDLE, _TIRED, _HUNGRY, _SICK, _MISER = (0x01, 0x02), (0x08, 0x04), (0x09, 0x05), (0x07, 0x03), (0x0B,)
+_NEW = {st: 0x29 + i for i, st in enumerate(STATES)}
+_NEW.update({"needs_rehab": 0x33, "starving": 0x34})   # A4b appends these to STATES
+
+# Status word or action -> what it shows today (src/game/engine/to_display.rs display_anim,
+# groups 2 to 6, and status.rs graded / status_line) and the anim id of its own art.
+# "stand_in" lists the ids the word can show today (warning, critical); "art" is the
+# anim id of its own frame (real, or 0x29+ new) or None. Parched, sloppy and the like share
+# the frame of the word they grade into.
+SHOWN: dict[str, dict] = {
+    # real art
+    "content": _row(_IDLE, 0x01), "peckish": _row(_HUNGRY, 0x09), "hungry": _row(_HUNGRY, 0x09),
+    "sleepy": _row(_TIRED, 0x08), "poorly": _row(_SICK, 0x07),
+    "bored": _row(_MISER, 0x0B), "asleep": _row((0x10,), 0x10),
+    "well_rested": _row(_IDLE, 0x01, "shows the normal idle or happy art"),
+    # new: the 12 states (ids 0x29 + STATES index; needs_rehab 0x33, starving 0x34)
+    "tipsy": _row(_IDLE, _NEW["tipsy"]), "sloppy": _row(_MISER, _NEW["wasted"], "shows the wasted frame"),
+    "wasted": _row(_MISER, _NEW["wasted"]), "hung_over": _row(_TIRED, _NEW["hung_over"]),
+    "sore": _row(_IDLE, _NEW["sore"]), "injured": _row(_SICK, _NEW["injured"]),
+    "groggy": _row(_TIRED, _NEW["groggy"]), "stuffed": _row(_MISER, _NEW["stuffed"]),
+    "thirsty": _row(_HUNGRY, _NEW["thirsty"]), "parched": _row(_HUNGRY, _NEW["thirsty"], "shows the thirsty frame"),
+    "wired": _row(_MISER, _NEW["wired"]), "throwing_up": _row((0x23,), _NEW["throwing_up"]),
+    "needs_rehab": _row(_IDLE, _NEW["needs_rehab"]), "starving": _row(_HUNGRY, _NEW["starving"]),
+    # candidates: still on a stand-in
+    "waterlogged": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "grubby": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "filthy": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "overweight": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "underweight": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "unfit": _row(_MISER, None, _O + "kept on miserable 0B"),
+    "exhausted": _row(_TIRED, None, _O + "kept on the tired art"),
+    "no_insulin": _row(_IDLE, None, "a prompt word under the normal art"),
+    "wash": _row((0x0F,), None, "Wash shows Playing 0F (owner, design 1.2)"),
+    # actions and life stages (real art)
+    "feed": _row((0x0C,), 0x0C), "heal": _row((0x0D,), 0x0D), "play": _row((0x0F,), 0x0F),
+    "relax": _row((0x0F,), 0x0E, "Relaxing 0E; today shows Playing, Part B maps it"),
+    "sleep": _row((0x10,), 0x10), "exercise": _row((0x23,), 0x23), "medicate": _row((0x24,), 0x24),
+    "drink": _row((0x25,), 0x25), "ozempic": _row((0x26,), 0x26), "rehab": _row((0x27,), 0x27),
+    "only_pets": _row((0x28,), 0x28), "leaving": _row((0x11,), 0x11), "gone": _row((0x12,), 0x12),
+    "hibernating": _row((0x13,), 0x13), "hatching": _row((0x14,), 0x14),
+}
+# Words still on a stand-in after the 12 states, for the owner to confirm at the gallery.
+CANDIDATES: tuple[str, ...] = tuple(w for w, r in SHOWN.items() if r["art"] is None)
+
+
+def inventory(to_badge_dir=TO_BADGE) -> list[dict]:
+    """One row per word or action: {"word", "stand_in", "art", "decided", "pets", "frames"}.
+
+    pets[pet] is "real" (own art id < 0x29 with frame 00 in the tree), "new" (a 0x29+ state
+    frame, drawn in plan 9) or "stand-in" (no own art). frames[pet] counts the tree's files
+    of the art row."""
+    d = Path(to_badge_dir)
+    rows = []
+    for word, r in SHOWN.items():
+        pets, frames = {}, {}
+        for pet, pp in INVENTORY_PETS.items():
+            art = r["art"]
+            n = len(list(d.glob(f"{pp}{art:02X}??.PCX"))) if art is not None else 0
+            frames[pet] = n
+            if art is None:
+                pets[pet] = "stand-in"
+            elif art >= FIRST_STATE_ANIM:
+                pets[pet] = "new"
+            else:
+                pets[pet] = "real" if (d / f"{pp}{art:02X}00.PCX").is_file() else "stand-in"
+        rows.append({"word": word, "stand_in": r["stand_in"], "art": r["art"],
+                     "decided": r["decided"], "pets": pets, "frames": frames})
+    return rows
+
+
+def _inventory_table(rows) -> str:
+    pets = list(INVENTORY_PETS)
+    w = max(len(r["word"]) for r in rows)
+    mark = {"real": "real", "new": "NEW", "stand-in": "stand-in"}
+    out = [f"{'word':{w}}  stand_in  art   " + "  ".join(f"{p[:9]:9}" for p in pets)]
+    for r in rows:
+        si = "/".join(f"{i:02X}" for i in r["stand_in"])
+        art = "--" if r["art"] is None else f"{r['art']:02X}"
+        out.append(f"{r['word']:{w}}  {si:8}  {art:4}  "
+                   + "  ".join(f"{mark[r['pets'][p]]:9}" for p in pets))
+    out.append("candidates: " + ", ".join(CANDIDATES))
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------- CLI
 
 def main(argv=None) -> int:
@@ -406,8 +504,16 @@ def main(argv=None) -> int:
     r = sub.add_parser("review")
     r.add_argument("export")
     r.add_argument("--round", type=int, required=True, dest="round_no")
+    sub.add_parser("inventory")
     a = ap.parse_args(argv)
 
+    if a.cmd == "inventory":
+        rows = inventory()
+        print(_inventory_table(rows))
+        out = REPO / "target/v3art/inventory.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"rows": rows, "candidates": list(CANDIDATES)}, indent=1))
+        return 0
     if a.cmd == "diff":
         res = diff_exports(a.old, a.new)
         for k in ("changed", "removed", "added", "protected"):

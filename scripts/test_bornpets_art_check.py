@@ -392,5 +392,75 @@ class Checker(unittest.TestCase):
             self.assertEqual(Image.open(Path(o, "floor/strip.png")).size, (152 * 4, 10 * 4))
 
 
+class Inventory(unittest.TestCase):
+    """M1: which status word / action shows which art, per pet (reads src/ and assets/to-badge)."""
+
+    STATUS_RS = ac.REPO / "src/game/engine/status.rs"
+    DISPLAY_RS = ac.REPO / "src/game/engine/to_display.rs"
+    ANIM_RS = ac.REPO / "src/game/engine/anim_files.rs"
+    PETS = ("00", "01", "02", "05", "06", "07")
+    RETIRED_PREFIXES = ("00", "01", "05", "06", "07")   # Drained 06 / 0A go in A4b
+
+    @staticmethod
+    def snake(name):
+        import re
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+    def status_words(self):
+        import re
+        text = self.STATUS_RS.read_text()
+        m = re.search(r"pub const ALL: \[Word; (\d+)\] = \[(.*?)\];", text, re.S)
+        names = [self.snake(n) for n in re.findall(r"Word::(\w+)", m.group(2))]
+        self.assertEqual(int(m.group(1)), len(names))
+        return names
+
+    def test_inventory_covers_every_status_word(self):
+        words = self.status_words()
+        self.assertEqual(len(words), 29)
+        self.assertGreaterEqual(set(ac.SHOWN), set(words))
+
+    def test_inventory_covers_every_display_anim(self):
+        import re
+        enum = re.search(r"pub enum DisplayAnim \{(.*?)\n\}", self.DISPLAY_RS.read_text(), re.S).group(1)
+        variants = re.findall(r"^    ([A-Z]\w*)", enum, re.M)
+        ids = {v: int(i, 16) for v, i in
+               re.findall(r"DisplayAnim::(\w+)(?: \{ \.\. \})? => (0x[0-9A-Fa-f]+)", self.ANIM_RS.read_text())}
+        known = {i for row in ac.SHOWN.values() for i in list(row["stand_in"]) + [row["art"]] if i is not None}
+        self.assertTrue(variants)
+        for v in variants:
+            self.assertIn(v, ids, v)
+            self.assertIn(ids[v], known, f"{v} 0x{ids[v]:02X} is in no SHOWN row")
+
+    def test_every_pet_has_the_shipped_rows(self):
+        shipped = [a for a in list(range(0x01, 0x15)) + list(range(0x20, 0x29))]
+        for pp in self.PETS:
+            for a in shipped:
+                if pp in self.RETIRED_PREFIXES and a in (0x06, 0x0A):
+                    continue
+                self.assertTrue((ac.TO_BADGE / f"{pp}{a:02X}00.PCX").is_file(), f"{pp}{a:02X}00")
+        rows = {r["word"]: r for r in ac.inventory()}
+        for word, row in rows.items():
+            art = ac.SHOWN[word]["art"]
+            if art is not None and art < 0x29:
+                self.assertEqual(set(row["pets"].values()), {"real"}, word)
+        self.assertEqual(set(rows["content"]["pets"]), set(ac.INVENTORY_PETS))
+        self.assertEqual(len(ac.INVENTORY_PETS), 6)
+
+    def test_new_states_are_new_for_every_pet(self):
+        rows = {r["word"]: r for r in ac.inventory()}
+        for i, st in enumerate(ac.STATES):
+            self.assertEqual(ac.SHOWN[st]["art"], 0x29 + i, st)
+            self.assertEqual(set(rows[st]["pets"].values()), {"new"}, st)
+
+    def test_candidates_are_the_stand_ins_left(self):
+        self.assertEqual(set(ac.CANDIDATES),
+                         {w for w, r in ac.SHOWN.items() if r["art"] is None})
+        for w in ("waterlogged", "wash", "no_insulin"):
+            self.assertIn(w, ac.CANDIDATES)
+        self.assertFalse(set(ac.CANDIDATES) & set(ac.STATES))
+        for w in ac.CANDIDATES:
+            self.assertTrue(ac.SHOWN[w]["stand_in"], w)
+
+
 if __name__ == "__main__":
     unittest.main()
