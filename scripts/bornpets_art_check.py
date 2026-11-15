@@ -231,14 +231,17 @@ def used_clusters(to_badge_dir=TO_BADGE) -> int:
 def volume_limit(to_badge_dir=TO_BADGE) -> dict:
     """The space the 72 new PCX may use, computed from the real tree.
 
-    limit = 502 - 16 - (used - retired_present) - cfg_growth - manifest_growth, where
-    retired_present is what the RETIRED files still in the tree occupy, cfg_growth the
+    limit = 502 - 16 - (used - retired_present - new_present) - cfg_growth - manifest_growth, where
+    retired_present is what the RETIRED files still in the tree occupy, new_present what the
+    72 new PCX already copied into the tree occupy, cfg_growth the
     clusters BPETS_V3.CFG gains up to CFG_PROJECTED_BYTES, and manifest_growth the clusters
     MANIFEST.TXT gains when the RETIRED lines go and the new lines come.
     """
     d = Path(to_badge_dir)
     used = used_clusters(d)
     retired_present = sum(clusters((d / n).stat().st_size) for n in RETIRED if (d / n).is_file())
+    # Once shipped, the new frames sit in the tree too; they are what the limit is for.
+    new_present = sum(clusters((d / n).stat().st_size) for n in new_files() if (d / n).is_file())
     cfg = d / CFG_NAME
     cfg_now = cfg.stat().st_size if cfg.is_file() else 0
     cfg_growth = max(0, clusters(CFG_PROJECTED_BYTES) - clusters(cfg_now))
@@ -253,8 +256,8 @@ def volume_limit(to_badge_dir=TO_BADGE) -> dict:
             have.add(name)
     add = sum(len(l) for l in manifest_lines() if l.split(" ")[0] not in have)
     manifest_growth = max(0, clusters(man_now - drop + add) - clusters(man_now))
-    base = used - retired_present
-    return {"used": used, "retired_present": retired_present, "base": base,
+    base = used - retired_present - new_present
+    return {"used": used, "retired_present": retired_present, "new_present": new_present, "base": base,
             "cfg_growth": cfg_growth, "manifest_growth": manifest_growth,
             "limit": USABLE_CLUSTERS - GUARD_CLUSTERS - base - cfg_growth - manifest_growth}
 
