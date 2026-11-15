@@ -144,6 +144,11 @@ fn stats_needs() {
 fn cause_toast() {
     play(CAUSE_TOAST);
 }
+/// A made-up friend challenges the pet (the chapter on battles shows the
+/// screen the player then sees).
+fn bram_challenges() {
+    crate::game::battle_link::inject_challenge_for_shot("Bram", 1);
+}
 fn leaving() {
     play(LEAVING);
 }
@@ -525,6 +530,11 @@ pub static SHOTS: &[Shot] = &[
     shot!("engine-info", [Do(debug_menu), Press(Fire)], || {
         toast_is(Toast::DebugInfo)
     }),
+    shot!(
+        "pre-battle",
+        [Do(content), Do(bram_challenges)],
+        crate::game::battle_view::is_active
+    ),
 ];
 
 /// Play the shot `name` on a fresh game, check its expectation, save

@@ -40,7 +40,7 @@ const NO_FRIENDS: &str = "No friends met yet";
 const DETAIL_TITLE: &str = "Friend Details";
 const DETAIL_HINT: &str = "Fire for details";
 const NO_SELECTION: &str = "No friend selected";
-const BAR_LABELS: [&str; 4] = ["Atk", "Def", "Spd", "HP"];
+const BAR_LABELS: [&str; 4] = ["Pow", "Grd", "Spd", "HP"];
 
 /// Fixed texts of the Friends screens (host-only, for the guide's word list).
 #[cfg(any(test, feature = "simulator"))]
@@ -205,6 +205,13 @@ where
     Ok(())
 }
 
+/// The HP bar's fill: the wire range `WIRE_HP` (15..=120) mapped to 0..=100.
+fn hp_bar_pct(hp: u8) -> u8 {
+    let (lo, hi) = super::engine::combat::WIRE_HP;
+    let span = (hi - lo) as u32;
+    ((hp.saturating_sub(lo) as u32 * 100) / span).min(100) as u8
+}
+
 fn draw_detail<D>(display: &mut D) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = TriColor>,
@@ -247,8 +254,8 @@ where
     y += 13 + 2;
 
     // Cached combat numbers (power, guard, speed, hp) from the friend's
-    // beacon. Power/guard/speed are shown as stored; hp (old badges send
-    // 20-150) is normalized to the same 0-100 scale purely for this bar,
+    // beacon. Power/guard/speed are shown as stored; hp (wire range
+    // 15-120) is normalized to the same 0-100 scale purely for this bar,
     // not a raw stat value.
     const BAR_H: u32 = 12;
     const BAR_X: i32 = 36;
@@ -258,7 +265,7 @@ where
         (BAR_LABELS[2], friend.speed.min(100)),
         (
             BAR_LABELS[3],
-            (((friend.hp.saturating_sub(20) as u32) * 100) / 130).min(100) as u8,
+            hp_bar_pct(friend.hp),
         ),
     ];
     for (label, pct) in bars {
@@ -290,4 +297,23 @@ where
     Text::with_text_style("Back", Point::new(148, 150), TEXT_BLACK, bottom_right).draw(display)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hp_bar_spans_the_wire_range() {
+        assert_eq!(hp_bar_pct(15), 0);
+        assert_eq!(hp_bar_pct(120), 100);
+        assert_eq!(hp_bar_pct(255), 100);
+        assert_eq!(hp_bar_pct(67), 49);
+    }
+
+    #[test]
+    fn bar_labels_fit_and_name_the_snapshot_fields() {
+        assert_eq!(BAR_LABELS, ["Pow", "Grd", "Spd", "HP"]);
+        assert!(BAR_LABELS.iter().all(|l| l.len() <= 8));
+    }
 }

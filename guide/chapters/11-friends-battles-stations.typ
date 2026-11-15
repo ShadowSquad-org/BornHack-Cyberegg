@@ -41,7 +41,7 @@ last #v("FRIENDS_MAX") friends, the one seen most recently on top. When it is
 full, the oldest drops off. The list is empty at first, and says
 #w("No friends met yet"). Up and Down move the cursor. Fire opens the
 details: the friend's name and kind, #w("Met <d>d <h>h ago") and
-#w("Last seen <d>d <h>h ago"), four bars (#w("Atk"), #w("Def"), #w("Spd")
+#w("Last seen <d>d <h>h ago"), four bars (#w("Pow"), #w("Grd"), #w("Spd")
 and #w("HP")) and the record between you two, as #w("Battles: <w>W-<l>L").
 The foot of the list says #w("Fire for details"). The details card is
 titled #w("Friend Details") and its corner says #w("Back"): any button goes
@@ -55,54 +55,161 @@ look younger than they are.
 
 #versus()
 
-*Where.* #w("Battle") is the first row of the Play menu, in both money modes.
-It opens a list of your friends. The foot of the list says
-#w("Fire to challenge"). The title bar shows your pet's own record,
-#w("Battle <w>W-<l>L"): wins, then losses. The record belongs to this pet.
-A new egg starts it at zero.
+Two pets fight. Your badge plays the whole fight at once. It uses the
+fighting numbers each pet sends out in its beacon.
 
-*How a fight works.* Press Fire on a friend. The fight is *instant*. Your
-badge plays the whole thing at once, against the numbers that friend last
-sent, so the friend does not need to be near. Each pet has four numbers:
-attack, defense, speed and HP. They come from the care you gave. A
-curious, well-kept pet hits harder. A lean, fit pet is quicker and harder to
-hurt. A healthy pet has more HP. Each lasting condition, diabetic and
-dependent, knocks a flat amount off attack, defense and speed. The faster
-pet strikes first. Damage has a little luck in it. After a fixed number of
-rounds, whoever has more HP left wins.
-
-*The result.* A card with two HP bars and a banner,
-#w("YOU WON!") or #w("YOU LOST"). The card is titled #w("Battle Result").
-Your side is labelled #w("You") and the friend's side carries the friend's
-name, or #w("Friend") when the name is empty. In money mode a win also shows
-#w("+<n> HAX"), the reward of #v("BATTLE_PRIZE_FIRST_HAX") for the first win of the day and #v("BATTLE_PRIZE_LATER_HAX") after, and pays it. Just before the card, a short
-full-screen picture shows both pets standing, and then the winner and the
-loser. The card says #w("Any button to close"), and any button does. If no
-fight has been played yet, it says #w("No result yet").
-
-*A fight costs.* Battle HP exists only for the length of the fight, but the
-pet pays for it: energy -#v("BATTLE_ENERGY_PCT"), water -#v("BATTLE_WATER_PCT"),
-some strain, a few bruises, and the #v("BATTLE_COOLDOWN") rest. A pet that is
-injured, too weak, too drunk or asleep does not fight.
-
-*The other badge.* The result is also sent out for the friend's badge to hear.
-If it is in direct radio range, it counts the fight the other way round (your
-win is its loss) and shows a short toast. That pet did not fight, so it
-pays nothing, costs nothing and takes no rest. The
-result does not travel across repeaters.
+*Where.* #w("Battle: <form>") is the first row of the Play menu, in both money
+modes. The word after the colon says how your pet feels about a fight against
+an average pet. It is one of four forms:
 
 #tbl((auto, 1fr),
-  table.header([*The picker says*], [*Because*]),
-  [#w("No friends") and #w("to battle yet")], [The list is empty. Go and meet someone.],
-  [#w("Friend not ready")], [That friend has not sent their fighting numbers yet. Try again later.],
-  [#w("Can't battle now")], [The pet is busy or asleep. Wait.],
-  [#w("On cooldown <n>s")], [The Battle rest has not run out. The count is in seconds.],
+  table.header([*The form*], [*What it means*]),
+  [#w("top form")], [Your pet should win most fights against an average pet.],
+  [#w("in form")], [A fair fight. Your pet has the edge.],
+  [#w("off form")], [Your pet is worse than average today.],
+  [#w("poor form")], [Your pet will probably lose. Look after it first.],
 )
 
-The Battle row itself is grey, with its own reason, when the pet is
+*The picker.* Fire on the Battle row opens a list of your friends. The title
+bar shows your pet's own record, #w("Battle <w>W-<l>L"): wins, then losses.
+The record belongs to this pet. A new egg starts it at zero. A demo pet shows
+#w("Demo <w>W-<l>L") instead. Each row reads #w("<name> ~<n>% <age>"): the
+friend's #w("<name>"), then an estimate of your chance to win, marked with a
+tilde. It comes from the friend's last beacon, and the age says how old that
+beacon is. A friend of the other league shows #w("<name> demo") or
+#w("<name> player"), with #w("demo") or #w("player") as the league word,
+and no chance. Under the
+rows the badge shows your pet's own form word, and below it up to two words
+for what helps (#w("+<word>")) and what hurts (#w("-<word>")) your pet today.
+The foot of the list says #w("Fire to challenge"). With no friends it says
+#w("No friends") and #w("to battle yet"). A friend whose badge has not sent
+its numbers gives #w("Friend not ready"). A badge built without the mesh radio
+says #w("No radio on badge").
+
+#grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
+  [
+*The challenge.* Fire on a friend sends them a challenge. Your screen says
+#w("waiting for <name>") and waits for up to twenty seconds. On the other
+badge the buzzer goes. Its screen shows a pre-battle card, with the friend's
+name and #w("<name> challenges you!") (on a long name, just
+#w("challenges you!")). Your pet's numbers are on the left and
+theirs on the right, as bars labelled #w("Pow"), #w("Grd"), #w("Spd"),
+#w("Sta") and #w("Foc"). Under them is the hit points line,
+#w("HP <n>") on the left and a bare #w("<n>") on the right. The line
+#w("<n>% to win") is your chance. Against a friend who is not in the room it
+shows the estimate, #w("~<n>% to win"). #w("Fire: fight Cancel: no") tells the
+player what to press: Fire to fight, Cancel to decline. The player has
+fifteen seconds to answer.
+  ],
+  screen("pre-battle", width: shot-m, caption: [A challenge.]))
+
+If nobody answers, the fight happens anyway, against the last beacon, and
+the card says #w("no answer"). If the other player declines, the card says
+#w("declined"), and the pet that said no is a bit sulky: mood
+-#v("BATTLE_DECLINE_MOOD_PCT") for #v("BATTLE_DECLINE_MIN"). A pet that is
+asleep still gets woken by Fire. A frozen pet answers too, but the fight does
+not touch it. Demo pets fight only demo pets, and they accept by themselves
+after a short while.
+
+*What the numbers mean.*
+- #w("Pow") is power: how hard the pet hits. A sturdy, cheerful pet hits
+  harder. A sore, sad or craving pet hits softer.
+- #w("Grd") is guard: how well it takes a hit. Resilience and body weight feed
+  it. Drink makes it reckless.
+- #w("Spd") is speed: who strikes first. Fitness and a light body feed it.
+  A full belly, a heavy body and a groggy pet slow it down.
+- #w("Sta") is stamina: how many rounds the pet fights at full strength.
+  Energy, fitness and good food feed it. Past its stamina, a pet gets slower
+  and weaker.
+- #w("Foc") is focus: how often a hit lands. Curiosity and a calm, clean pet
+  feed it. Drink, boredom, too much fun and dirt cost aim.
+- #w("HP") is hit points: how much it can take. Health, vitality and body
+  weight feed it.
+
+*The words.* A helping word is shown with a plus, a hurting word with a
+minus. The pre-battle card and the picker show up to two of them for each pet.
+First the words that help, then the ones that hurt.
+
+#grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
+  tbl((auto, 1fr), // digits-ok: layout
+    table.header([*The word*], [*What it does*]),
+    [#w("well rested")], [Slept well: quicker, better aim, more stamina.],
+    [#w("heavy")], [A big body: more power and guard. Slower, and tires sooner.],
+    [#w("tipsy")], [A little drink gives courage: a bit more power.],
+    [#w("cheerful")], [A happy pet hits harder.],
+  ),
+  hero-pic("happy"))
+
+#grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
+  tbl((auto, 1fr), // digits-ok: layout
+    table.header([*The word*], [*What it does*]),
+    [#w("injured")], [Power and speed are cut.],
+    [#w("sloppy")], [Too much drink: poor aim and a weak guard.],
+    [#w("hung over")], [Slower, poor aim and tires sooner.],
+    [#w("too light")], [Too little body: weak hits.],
+    [#w("hungry")], [Tires sooner.],
+    [#w("thirsty")], [Tires sooner, and the aim suffers.],
+    [#w("craving")], [A dependent pet that wants its drink: poor aim, weak hits.],
+    [#w("wired")], [Too much fun: wild aim.],
+    [#w("stuffed")], [A full belly: slower.],
+    [#w("bored")], [Not into it: poor aim.],
+    [#w("down")], [A sad pet: weaker hits, poor aim.],
+    [#w("groggy")], [Woken too early: slower, poor aim.],
+    [#w("worn out")], [Short nights: tires sooner.],
+    [#w("waterlogged")], [Too much water: slower.],
+    [#w("sore")], [Strained muscles: weaker hits.],
+    [#w("filthy")], [A dirty pet: poor aim.],
+  ),
+  sprite-fit("hero", "sick", w: 50pt, h: 50pt)) // digits-ok: layout
+
+*How a fight goes.* The faster pet strikes first. The fight lasts ten rounds
+at most. Damage has a little luck in it, and a pet that is past its stamina
+slows down. If both pets still stand after ten rounds, whoever has more HP
+left wins.
+
+*The result.* The fight is shown as a short picture of both pets, and then a
+card, titled #w("Battle Result"), with two HP bars and a banner,
+#w("YOU WON!") or #w("YOU LOST"). Your side is labelled #w("You") and the
+friend's side carries the friend's name, or #w("Friend") when the name is
+empty. The card says #w("chance was <n>%"): the exact chance you had. When
+one thing decided the fight, a line says so, such as #w("You were <word>")
+or #w("They were <word>"), with a word from the table, or
+#w("You ran out of steam") or #w("They ran out of steam"). The card says
+#w("Any button to close"), and any button does. If no fight has been played
+yet, it says #w("No result yet").
+
+*The prize.* In money mode the first win of the day pays
+#v("BATTLE_PRIZE_FIRST_HAX") and each win after it #v("BATTLE_PRIZE_LATER_HAX"),
+shown as #w("+<n> HAX"). A fight against a beacon older than
+#v("BATTLE_PRIZE_BEACON_MIN") pays nothing. Without money there is no prize.
+
+#grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
+  [
+*A fight costs.* Win or lose, the pet pays: energy -#v("BATTLE_ENERGY_PCT"),
+water -#v("BATTLE_WATER_PCT"), fun +#v("BATTLE_FUN_PCT"), dirt
++#v("BATTLE_DIRT_PCT"), and some strain. A tired, hungry or thirsty pet strains
+more, and a well rested one less. The pet also gets bruises: the more HP it
+lost, the more health (up to #v("BATTLE_BRUISE_MAX_PCT")). A win lifts the mood
+by #v("BATTLE_MOOD_PCT"), a loss lowers it by the same. Push the strain over
+the line and the pet tears a muscle: the cause toast says
+#w("torn muscle") and #w("in a fight"). Then the Battle row rests for
+#v("BATTLE_COOLDOWN"). The same two pets also need to wait
+#v("BATTLE_PAIR_COOLDOWN_MIN") before they fight again.
+  ],
+  gym-pic())
+
+*The other badge.* If you challenged and nobody answered, the result is also
+sent out. A badge that hears it, in direct radio range, counts the fight the
+other way round and shows #w("won a battle!") or #w("lost a battle"). That pet
+did not fight, so there is no prize, no cost and no rest. The record is all
+it changes. The result does not travel across repeaters.
+
+*Who cannot fight.* The Battle row is grey, with its reason, when the pet is
 #w("asleep"), #w("busy"), #w("hibernating"), #w("still an egg") or
-#w("pet is gone"). It says
-#w("wait <time>") while the rest runs. An injured pet may still fight.
+#w("pet is gone"). A pet that is #w("injured"), #w("too weak") or
+#w("too drunk") cannot fight either. #w("wait <time>") says the rest has not
+run out. A demo pet shows #w("demo pets only") against a player, and a player
+shows #w("no demo pets") against a demo pet.
 
 == Stations: the magic places
 
@@ -115,8 +222,6 @@ cannot do it. It has no key.
 The badge ignores the tap unless it has a pet that has not gone. An egg
 counts. A frozen pet counts too. The phrase is matched whatever its
 capitals. Anything else is ignored without a word.
-
-#station-row()
 
 #tbl((auto, 1fr, auto),
   table.header([*Phrase*], [*What the pet gets*], [*Toast*]),
@@ -133,6 +238,8 @@ capitals. Anything else is ignored without a word.
    oversleeping, so it cannot be groggy. It does not put the pet to sleep.],
   [#w("Sleep bonus!")],
 )
+
+#station-row()
 
 *The cooldown.* Each phrase rests for #v("STATION_COOLDOWN"). The first tap
 after a boot always works. A tap too soon does nothing to the pet. It shows a

@@ -93,8 +93,8 @@ nothing.
   [A mini-game win or draw], v("MINIGAME_HAX_REWARD"),
   [Energy -#v("DOSE_MINI_ENERGY_PCT"). That game rests for
    #v("MINIGAME_COOLDOWN"). The other four stay open.],
-  [A Battle win], [#v("BATTLE_PRIZE_FIRST_HAX") the first time each day, then #v("BATTLE_PRIZE_LATER_HAX")],
-  [The Battle row rests for #v("BATTLE_COOLDOWN"). See @ch-friends.],
+  [A Battle win (first of the day, then later)], [#v("BATTLE_PRIZE_FIRST_HAX"), then #v("BATTLE_PRIZE_LATER_HAX")],
+  [Rests for #v("BATTLE_COOLDOWN"). See @ch-friends.],
 )
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,

@@ -561,6 +561,8 @@ The row shows the wait in place of its price.
   [#w("+happy")], [A known friend met again. See @ch-friends.],
   [#w("new friend!")], [A new friend met. See @ch-friends.],
   [#w("Food bonus!")], [A food station was tapped. See @ch-friends.],
+  [#w("won a battle!")], [A fight you heard of: your pet won.],
+  [#w("lost a battle")], [A fight you heard of: your pet lost.],
   [#w("Heal bonus!")], [A medic station was tapped.],
   [#w("Sleep bonus!")], [A rest station was tapped.],
 )
@@ -572,7 +574,6 @@ Two more things are called a toast:
 A station tapped too soon shows a countdown, such as #raw("wait 1:30"), in
 minutes and seconds. See @ch-friends.
 
-Four toasts exist in the game's list that nothing raises today:
-#w("+inspired"), #w("Inspire bonus!"), #w("won a battle!") and
-#w("lost a battle"). You will not meet them. A Battle shows its result card
-instead (@ch-friends).
+Two toasts are in the game's list but nothing raises them:
+#w("+inspired") and #w("Inspire bonus!"). A Battle you start shows its result
+card instead (@ch-friends).
