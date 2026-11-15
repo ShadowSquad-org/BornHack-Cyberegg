@@ -377,14 +377,48 @@ class StateFlow(Base):
             for x in range(500, 1100):
                 edge = x < 505 or x >= 1095 or y < 185 or y >= 855   # 5 px rim, ~0.5 badge px
                 px[x, y] = (0, 0, 0, 255) if edge else (255, 255, 255, 255)
-        out = afm.cut_pet(raw, (32, 1, 117, 74))
+        self.assertEqual(self.outline_gaps(afm.cut_pet(raw, (32, 1, 117, 74))), [])
+
+    @staticmethod
+    def outline_gaps(out):
+        """White pixels touching transparency or the frame edge: holes in the outline."""
         op = out.load()
         w, h = out.size
-        gaps = [(x, y) for y in range(h) for x in range(w)
+        return [(x, y) for y in range(h) for x in range(w)
                 if op[x, y] == afm.WHITE
                 and any(not (0 <= x + dx < w and 0 <= y + dy < h) or op[x + dx, y + dy] == afm.TRANSPARENT
                         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))]
-        self.assertEqual(gaps, [])
+
+    def test_quantize_one_keeps_a_thin_outline_closed(self):
+        # The sheet-frame path (gen/strip -> quantize) shrinks the same way as cut_pet.
+        raw = Image.new("RGBA", (1024, 1024), afm.KEY)
+        px = raw.load()
+        for y in range(100, 900):
+            for x in range(100, 900):
+                edge = x < 105 or x >= 895 or y < 105 or y >= 895   # 5 px rim, ~0.5 badge px
+                px[x, y] = (0, 0, 0, 255) if edge else (255, 255, 255, 255)
+        out = afm.quantize_one(raw, (75, 75))
+        self.assertEqual(self.outline_gaps(out), [])
+        self.assertIn(afm.WHITE, set(out.getdata()))
+
+    def test_close_outline_blackens_only_white_on_the_silhouette(self):
+        # Finished pixel art with no raw: a white square whose outline has a gap,
+        # a red block on the edge, a white block touching the frame edge.
+        img = Image.new("RGBA", (40, 30), afm.TRANSPARENT)
+        img.paste(afm.BLACK, (5, 5, 25, 25))
+        img.paste(afm.WHITE, (6, 6, 24, 24))
+        img.paste(afm.WHITE, (10, 5, 14, 6))                 # 4 px gap in the top outline
+        img.paste(afm.RED, (28, 10, 32, 14))                 # red art without outline stays red
+        img.paste(afm.WHITE, (34, 20, 40, 30))               # white touching the frame edge
+        out = afm.close_outline(img)
+        op = out.load()
+        self.assertEqual([op[x, 5] for x in range(10, 14)], [afm.BLACK] * 4)
+        self.assertEqual(op[12, 6], afm.WHITE)               # interior unchanged
+        self.assertEqual(op[30, 12], afm.RED)
+        self.assertEqual(op[39, 29], afm.WHITE)              # frame edge is not silhouette
+        self.assertEqual(op[34, 25], afm.BLACK)              # its side facing transparency is
+        changed = sum(a != b for a, b in zip(img.getdata(), out.getdata()))
+        self.assertEqual(changed, 4 + 6 + 10 - 1)            # gap + top + left of the edge block (shared corner)
 
     def test_idle_box_is_the_bbox_of_the_pets_own_idle_pcx(self):
         w, h, rows = ac.decode_pcx(ac.TO_BADGE / "050100.PCX")

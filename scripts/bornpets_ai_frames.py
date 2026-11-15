@@ -1054,18 +1054,10 @@ def quantize_one(raw: Image.Image, size: tuple[int, int]) -> Image.Image:
     # The model stages the whole frame now, so scale its art to the frame
     # itself rather than to whatever bounding box the panda happened to use.
     scale = min(size[0] / art.width, size[1] / art.height)
-    art = art.resize(
-        (max(1, round(art.width * scale)), max(1, round(art.height * scale))),
-        Image.LANCZOS,
-    )
+    art = ink_resize(art, (max(1, round(art.width * scale)), max(1, round(art.height * scale))))
 
     out = Image.new("RGBA", size, TRANSPARENT)
     out.paste(art, ((size[0] - art.width) // 2, (size[1] - art.height) // 2))
-
-    px = out.load()
-    for y in range(size[1]):
-        for x in range(size[0]):
-            px[x, y] = classify(px[x, y])
     return despeckle(out)
 
 
@@ -1537,6 +1529,26 @@ def ink_resize(img: Image.Image, size: tuple[int, int]) -> Image.Image:
     out[is_black] = BLACK
     out[clear] = TRANSPARENT
     return Image.fromarray(out, "RGBA")
+
+
+def close_outline(img: Image.Image) -> Image.Image:
+    """Blacken every white pixel that touches transparency: close a broken outline.
+
+    For finished pixel art that has no raw to re-cut (hand-drawn sheet frames).
+    Judged on the input, so only the outermost white ring changes; red art and
+    the frame edge (art cut off there on purpose) are left alone.
+    """
+    out = img.convert("RGBA").copy()
+    src = img.convert("RGBA").load()
+    px = out.load()
+    w, h = out.size
+    for y in range(h):
+        for x in range(w):
+            if src[x, y] == WHITE and any(
+                    0 <= x + dx < w and 0 <= y + dy < h and src[x + dx, y + dy][3] < 128
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                px[x, y] = BLACK
+    return out
 
 
 def cut_pet(raw: Image.Image, idle: tuple[int, int, int, int], margin: int = 4) -> Image.Image:
