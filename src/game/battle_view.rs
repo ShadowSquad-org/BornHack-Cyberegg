@@ -208,6 +208,23 @@ pub(crate) fn show_result_for_test() {
 static RESULT_SHOWN_MS: AtomicU32 = AtomicU32::new(0);
 const RESULT_DISMISS_GUARD_MS: u32 = 600;
 
+/// When the pre-battle screen opened: the e-paper shows it only after its
+/// redraw, so a press already in flight must not answer the challenge.
+static PRE_SHOWN_MS: AtomicU32 = AtomicU32::new(0);
+/// One partial redraw (0.5 to 2 s on this panel, ~1 s typical) plus a moment
+/// to read the screen; the 15 s answer window leaves ample room.
+const PRE_ANSWER_GUARD_MS: u32 = 1000;
+
+/// Stamp `shown` with the current uptime: a screen just appeared.
+fn mark_shown(shown: &AtomicU32) {
+    shown.store(crate::platform::uptime_ms_u32(), Ordering::Relaxed);
+}
+
+/// The guard after a screen appeared (`mark_shown`) has run out.
+fn guard_over(shown: &AtomicU32, guard_ms: u32) -> bool {
+    crate::platform::uptime_ms_u32().wrapping_sub(shown.load(Ordering::Relaxed)) >= guard_ms
+}
+
 // ── Battle animation ─────────────────────────────────────────────────────────
 //
 // Full-screen two-stage result (see the battle-animation spec). Own pet on the
@@ -468,6 +485,11 @@ pub fn open_pre_battle() {
         super::traits_view::close();
         crate::DISPLAY_STATE.with_mut(|s| s.set_active_screen(crate::SCREEN_GAME));
     }
+    // The guard runs from the first show only: a later change of the same
+    // screen (the numbers arrive) does not restart it.
+    if STATE.load(Ordering::Relaxed) != STATE_PRE || !ACTIVE.load(Ordering::Relaxed) {
+        mark_shown(&PRE_SHOWN_MS);
+    }
     STATE.store(STATE_PRE, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
@@ -483,7 +505,7 @@ pub fn show_fight(friend_name: [u8; PET_NAME_MAX], friend_name_len: u8, fight: F
             fight,
         });
     }
-    RESULT_SHOWN_MS.store(crate::platform::uptime_ms_u32(), Ordering::Relaxed);
+    mark_shown(&RESULT_SHOWN_MS);
     STATE.store(STATE_RESULT, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
@@ -496,9 +518,7 @@ pub fn handle_input(btn: ButtonId) {
             // Any button dismisses the result — but not for a brief guard
             // window after it appears, so the Fire that resolved the battle
             // (or a joystick bounce) can't flick it away before it's seen.
-            let elapsed = crate::platform::uptime_ms_u32()
-                .wrapping_sub(RESULT_SHOWN_MS.load(Ordering::Relaxed));
-            if elapsed >= RESULT_DISMISS_GUARD_MS {
+            if guard_over(&RESULT_SHOWN_MS, RESULT_DISMISS_GUARD_MS) {
                 close();
                 // The card is done with: the Session forgets its finished screen.
                 super::battle_link::dismiss_finished();
@@ -521,6 +541,9 @@ fn handle_pre_input(btn: ButtonId) {
     };
     match (p.role, p.note) {
         (Role::Target, Note::Waiting) => match btn {
+            // Not yet on the display: a press in flight is not an answer.
+            ButtonId::Fire | ButtonId::Execute | ButtonId::Cancel
+                if !guard_over(&PRE_SHOWN_MS, PRE_ANSWER_GUARD_MS) => {}
             ButtonId::Fire | ButtonId::Execute => {
                 // A pet that cannot fight now says why: the Session sends the
                 // refusal and the glue shows the reason.
@@ -1457,12 +1480,51 @@ mod pre_tests {
         assert!(!words().contains(&"Can't battle now"));
     }
 
+    /// Moves the fake clock past the pre-battle guard; back to the real clock
+    /// when dropped.
+    struct ClockReset;
+    impl Drop for ClockReset {
+        fn drop(&mut self) {
+            crate::platform::set_fake_uptime_ms(u64::MAX);
+        }
+    }
+    fn pre_guard_over() -> ClockReset {
+        let now = crate::platform::uptime_ms();
+        crate::platform::set_fake_uptime_ms(now + PRE_ANSWER_GUARD_MS as u64);
+        ClockReset
+    }
+
+    /// A press already in flight when a challenge lands is not an answer:
+    /// the e-paper has not shown the screen yet.
+    #[test]
+    fn the_pre_battle_screen_ignores_presses_until_it_is_shown() {
+        let _guard = lock_test_state();
+        battle_link::reset_for_test();
+        lifecycle::set_state_for_test(Some(pet()));
+        crate::platform::set_fake_uptime_ms(10_000);
+        battle_link::inject_challenge_for_shot("Bram", 1);
+        for b in [ButtonId::Fire, ButtonId::Execute, ButtonId::Cancel] {
+            crate::platform::set_fake_uptime_ms(10_000 + PRE_ANSWER_GUARD_MS as u64 - 1);
+            handle_input(b);
+            assert!(battle_link::view().is_some() && is_active(), "a press answered early");
+        }
+        assert!(battle_link::last_fight().is_none());
+        // Once the guard is over, Fire fights.
+        crate::platform::set_fake_uptime_ms(10_000 + PRE_ANSWER_GUARD_MS as u64);
+        handle_input(ButtonId::Fire);
+        assert!(battle_link::last_fight().is_some());
+        crate::platform::set_fake_uptime_ms(u64::MAX);
+        lifecycle::set_state_for_test(None);
+        battle_link::reset_for_test();
+    }
+
     #[test]
     fn the_target_answers_with_fire_and_cancel() {
         let _guard = lock_test_state();
         battle_link::reset_for_test();
         lifecycle::set_state_for_test(Some(pet()));
         battle_link::inject_challenge_for_shot("Bram", 1);
+        let _clock = pre_guard_over();
         assert!(is_active() && STATE.load(Ordering::Relaxed) == STATE_PRE);
         // Other buttons do nothing.
         handle_input(ButtonId::Left);
@@ -1473,6 +1535,7 @@ mod pre_tests {
         assert!(battle_link::last_fight().is_none());
         // Fire fights.
         battle_link::inject_challenge_for_shot("Bram", 1);
+        let _clock = pre_guard_over();
         handle_input(ButtonId::Fire);
         assert!(battle_link::last_fight().is_some());
         assert!(wants_full_refresh(), "the card is up");
@@ -1539,6 +1602,8 @@ mod pre_tests {
             open();
             crate::DISPLAY_STATE.with_mut(|s| s.set_active_screen(crate::SCREEN_MAIN));
             battle_link::inject_challenge_for_shot("Bram", 1);
+            let _clock = pre_guard_over();
+        let _clock = pre_guard_over();
             assert!(is_active() && STATE.load(Ordering::Relaxed) == STATE_PRE);
             assert!(!friends_view::is_active());
             assert!(!super::super::diary_view::is_active());
@@ -1561,6 +1626,7 @@ mod pre_tests {
         battle_link::reset_for_test();
         lifecycle::set_state_for_test(Some(pet()));
         battle_link::inject_challenge_for_shot("Bram", 1);
+        let _clock = pre_guard_over();
         // Even if one of them is somehow open, Fire/Cancel go to the battle.
         super::super::traits_view::open();
         assert!(crate::game::input::dispatch(ButtonId::Cancel));
@@ -1576,6 +1642,7 @@ mod pre_tests {
         battle_link::reset_for_test();
         lifecycle::set_state_for_test(Some(pet()));
         battle_link::inject_challenge_for_shot("Bram", 1);
+        let _clock = pre_guard_over();
         lifecycle::with_state(|s| {
             s.injured_min = 60;
             true
