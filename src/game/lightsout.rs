@@ -4,7 +4,8 @@
 //! Toggling a cell also toggles its orthogonal neighbours.
 //! Goal: turn all lights off.
 //!
-//! Winning awards HAX (when money mode is on) plus this game's cooldown.
+//! Solving it awards HAX (when money mode is on) plus this game's cooldown,
+//! paid in `close()`.
 //!
 //! State is held in module-level atomics — no heap, no alloc.
 
@@ -99,7 +100,13 @@ pub fn open() {
 }
 
 pub fn close() {
-    ACTIVE.store(false, Ordering::Relaxed);
+    // A solved puzzle pays as a win, once, however the screen is left.
+    if ACTIVE.swap(false, Ordering::Relaxed) && SOLVED.load(Ordering::Relaxed) {
+        super::minigame::pay_result(
+            super::engine::MiniGame::LightsOut,
+            super::engine::GRADE_WIN,
+        );
+    }
     // Many fast LUT (Mode 1) refreshes happen during play; switch the
     // next refresh to the full OTP waveform (Mode 2) so any residual
     // ghosting from the cell grid is cleared in one cycle when we
@@ -154,12 +161,7 @@ fn cursor_right() {
 /// Toggle the cell under the cursor (+ neighbours).
 fn activate() {
     if SOLVED.load(Ordering::Relaxed) {
-        // Puzzle already solved — Fire closes and awards reward.
-        super::lifecycle::award_inspiration(
-            super::engine::MiniGame::LightsOut,
-            super::engine::GRADE_WIN,
-        );
-        super::show_toast(super::Toast::MinigameWin);
+        // Puzzle already solved — Fire closes (`close` pays the win).
         close();
         return;
     }
@@ -290,4 +292,45 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod pay_tests {
+    use super::*;
+    use crate::game::engine::{MiniGame, MINIGAME_HAX_REWARD};
+    use crate::game::{current_toast, minigame_pay_read, minigame_pay_setup, Toast};
+
+    const GAME: MiniGame = MiniGame::LightsOut;
+
+    fn open_and_cancel(solved: bool) {
+        open();
+        SOLVED.store(solved, Ordering::Relaxed);
+        dispatch(ButtonId::Cancel);
+    }
+
+    #[test]
+    fn a_solved_puzzle_closed_with_cancel_pays_the_win() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(true);
+        assert_eq!(minigame_pay_read(GAME), (MINIGAME_HAX_REWARD, true));
+        assert_eq!(current_toast(), Some(Toast::MinigameWin));
+        assert!(!is_active());
+    }
+
+    #[test]
+    fn closing_twice_pays_once() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(true);
+        close();
+        close();
+        assert_eq!(minigame_pay_read(GAME).0, MINIGAME_HAX_REWARD);
+    }
+
+    #[test]
+    fn an_unsolved_puzzle_pays_nothing() {
+        let _g = minigame_pay_setup();
+        open_and_cancel(false);
+        assert_eq!(minigame_pay_read(GAME), (0, false));
+        assert_eq!(current_toast(), None);
+    }
 }

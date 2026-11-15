@@ -287,12 +287,15 @@ difficulty first. It changes the opponent, not the prize.
   [#w("BornJeweled")], [Matching gems until the moves run out. Leave with a point on the board and it counts as a win.],
 )
 
-A *win* gives fun #mini-fun(2) and a *draw* #mini-fun(1). Both cost
-#v("DOSE_MINI_ENERGY_PCT") energy. A tired pet gets the fun doubled. In money
-mode a win or draw also pays #v("MINIGAME_HAX_REWARD"). The toast is
-#w("nice game!"). *A loss gives nothing*: no fun, no HAX, no cooldown.
+A *win* gives fun #mini-fun(2), a *draw* #mini-fun(1) and a *loss*
+#mini-fun(0). Each costs #v("DOSE_MINI_ENERGY_PCT") energy. A tired pet gets
+the fun doubled. In money mode a win pays #v("MINIGAME_HAX_REWARD"), a draw
+#v("MINIGAME_HAX_DRAW") and a loss #v("MINIGAME_HAX_LOSS"), because the pet
+put in the work. The toast is #w("nice game!") for a win or draw and
+#w("good try!") for a loss. A game you leave before it ends gives nothing:
+no fun, no HAX, no cooldown.
 
-After a win or draw that game rests for #v("MINIGAME_COOLDOWN"). The row shows
+After any finished game, win, draw or loss, that game rests for #v("MINIGAME_COOLDOWN"). The row shows
 #w("wait <time>"). The other four games stay open, so there is always
 something to play. A sleeping pet refuses all of them: #w("asleep").
 
@@ -560,6 +563,7 @@ The row shows the wait in place of its price.
   [#w("rehab started")], [Rehab.],
   [#w("hibernating")], [Hibernate.],
   [#w("nice game!")], [A mini-game win or draw.],
+  [#w("good try!")], [A mini-game loss.],
   [#w("+happy")], [A known friend met again. See @ch-friends.],
   [#w("new friend!")], [A new friend met. See @ch-friends.],
   [#w("Food bonus!")], [A food station was tapped. See @ch-friends.],
