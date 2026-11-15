@@ -633,7 +633,7 @@ mod pay_tests {
     /// Open the game, put it in the finished state `result`, leave with Cancel.
     fn finish_and_cancel(result: u8) {
         open();
-        
+
         RESULT.store(result, Ordering::Relaxed);
         dispatch(ButtonId::Cancel);
     }
