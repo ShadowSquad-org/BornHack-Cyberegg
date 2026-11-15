@@ -50,7 +50,9 @@ pub const HERO_NAME: &str = "Bob";
 const WITH: &[(&str, &str)] = &[
     ("naming", "egg"),
     ("hatched", "egg"),
-    ("night", "day"),
+    // The sky test compares day and night with content: the same pet.
+    ("day", "content"),
+    ("night", "content"),
     // No pet on the pick screens; pairing keeps the rotation of the rest.
     ("select-hard", "select-mode"),
     ("wasted", "starving"),
