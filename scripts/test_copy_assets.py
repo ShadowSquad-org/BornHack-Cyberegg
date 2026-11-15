@@ -150,7 +150,7 @@ class CopyAssetsTest(unittest.TestCase):
 
     def test_changes_refuse_protected_names(self):
         h = "a" * 64
-        for name in ["PETS.CFG", "000000.PCX", "010000.PCX", "BPETS_V3.CFG", "bornpets.cfg"]:
+        for name in ["PETS.CFG", "000000.PCX", "BPETS_V3.CFG", "bornpets.cfg"]:
             for op in ("remove", "replace"):
                 f = self.assets.parent / "c.txt"
                 f.write_text(f"{op} {name} {h}\n")
@@ -343,6 +343,47 @@ class RepoAssetsTest(unittest.TestCase):
         changes = copy_assets.load_changes(copy_assets.CHANGES_FILE)
         for _op, name, _hashes in changes:
             self.assertNotIn(name.lower(), copy_assets.PROTECTED)
+
+    @staticmethod
+    def _retired():
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import bornpets_art_check as ac
+        return ac.RETIRED
+
+    def test_retired_art_is_gone_with_remove_lines(self):
+        import subprocess
+        removes = {}
+        for op, name, hashes in copy_assets.load_changes(copy_assets.CHANGES_FILE):
+            if op == "remove":
+                removes.setdefault(name.upper(), []).append(hashes)
+        retired = self._retired()
+        self.assertEqual(len(retired), 23)
+        for name in retired:
+            self.assertFalse((copy_assets.ASSETS_DIR / name).exists(), name)
+            self.assertEqual(len(removes.get(name, [])), 1, name)
+            blob = subprocess.run(["git", "show", f"main:assets/to-badge/{name}"],
+                                  cwd=copy_assets.ASSETS_DIR, capture_output=True)
+            if blob.returncode == 0:
+                self.assertIn(hashlib.sha256(blob.stdout).hexdigest(), removes[name][0], name)
+
+    def test_no_slug_or_hand_added_file_is_retired(self):
+        import re
+        pat = re.compile(r"^(0[012]2[0-8][0-9A-F]{2}|040[67][0-9A-F]{2})\.PCX$")
+        for op, name, _ in copy_assets.load_changes(copy_assets.CHANGES_FILE):
+            if op == "remove":
+                self.assertTrue(name.upper() in ("020000.PCX",) or not name.upper().startswith("02"), name)
+                self.assertFalse(pat.match(name.upper()), name)
+
+    def test_manifest_has_no_retired_lines(self):
+        retired = set(self._retired())
+        for line in (copy_assets.ASSETS_DIR / "MANIFEST.TXT").read_text().splitlines():
+            self.assertNotIn(line.split(" ")[0].upper(), retired, line)
+
+    def test_relaxing_frames_stay_contiguous(self):
+        want = {"00": {0}, "01": {0, 1}, "02": {0, 1}, "05": {0, 1}, "06": {0, 1}, "07": {0, 1}}
+        for pp, frames in want.items():
+            have = {int(p.name[4:6], 16) for p in copy_assets.ASSETS_DIR.glob(f"{pp}0E??.PCX")}
+            self.assertEqual(have, frames, pp)
 
     def test_no_jellyfish_left(self):
         d = copy_assets.ASSETS_DIR

@@ -9,9 +9,13 @@ Pipeline (one frame at a time, so a bad frame can be regenerated alone):
               -> 3-colour palette (black/white/red) + transparency
               -> <work>/frames/
     assemble  <work>/frames/ -> paste into the pet's sheet PNG
+    state     the pet's OWN shipped frames (idle + a few more) as references
+              -> one new state frame -> cut back to the exact 152x75 frame
+    simplify  merge enclosed specks of one colour in a frames/ PNG
 
 BORNPETS_PET picks the pet (default: badger); its prompts live in PROFILES.
-Requires OPENAI_API_KEY in the environment. Network calls go through `curl`
+The API key comes from --key-file, OPENAI_API_KEY_FILE, OPENAI_API_KEY or
+~/.config/openai/api-key (see api_key). Network calls go through `curl`
 (multipart upload); no third-party Python packages beyond Pillow.
 
     python3 scripts/bornpets_ai_frames.py gen --only badger_idle_0
@@ -25,6 +29,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +37,7 @@ from pathlib import Path
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bornpets_art_check import ART_PETS, FRAME, STATES, TO_BADGE, decode_pcx  # noqa: E402
 from bornpets_sheet import BLACK, RED, TRANSPARENT, WHITE, load_sequences  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -40,15 +46,14 @@ PANDA_CFG = REPO / "assets/bornpets-sponsors-panda.json5"
 # Which pet to work on. Its prompts live in PROFILES below; its sheet and config
 # follow the asset naming convention.
 PET = os.environ.get("BORNPETS_PET", "badger")
-# The pet sheet is a SOURCE file that gets hand-edited between generations, so
-# which one to write is a deliberate choice rather than a constant: point these at
-# the working copy (v3, v4, ...) and the hand-edited original is never touched.
-PET_SHEET = Path(os.environ.get("BORNPETS_SHEET", REPO / f"assets/bornpets-sprites-{PET}.png"))
-PET_CFG = Path(os.environ.get("BORNPETS_CFG", REPO / f"assets/bornpets-sponsors-{PET}.json5"))
+# PET_SHEET / PET_CFG are defined after PROFILES (a profile may name its own).
 
 API_URL = "https://api.openai.com/v1/images/edits"
-# gpt-image-1 (which the badger was drawn with) has been retired.
-MODEL = os.environ.get("BORNPETS_MODEL", "gpt-image-2")
+# gpt-image-1 (which the badger was drawn with) has been retired, and gpt-image-2
+# is deprecated in favour of the 2.6 models.
+MODEL = os.environ.get("BORNPETS_MODEL", "gpt-image-2.6-sunburst")
+# Set by the global --key-file (or by another script); api_key() falls back to it.
+KEY_FILE: str | None = None
 
 # gpt-image-1 only renders these canvases. Pick the one closest to the frame's
 # aspect so the model doesn't compose for a square and leave the wide 152x75
@@ -538,6 +543,127 @@ SEASTAR_CONTINUITY: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Profiles for the pets whose art is already shipped (bartholomeus, cat, panda).
+# They are only used for state frames, which are conditioned on the pet's own
+# PCX frames, so there are no poses/strips/anchor here. "min_blob" is the
+# smallest component the shipped art contains: despeckle must not eat it.
+# ---------------------------------------------------------------------------
+BARTHOLOMEUS_IDENTITY = (
+    "The character is Bartholomeus, this game's hand-drawn scribble kid: a tall "
+    "boxy white head drawn with thin sketchy black outline strokes and a few "
+    "spiky black hair lines sticking out of the top and sides; two big square "
+    "eyes that look like tiny screens, each with red scribble marks inside; a "
+    "small narrow white body under the head with a bold RED pi-shaped symbol on "
+    "its chest; two little feet, and a sprinkle of single black dots on the "
+    "ground around them. Thin one-pixel lines, no filled black areas. Anyone "
+    "must recognise it as the same character in every frame."
+)
+BARTHOLOMEUS_FREEDOM = (
+    "Compose this frame yourself: choose Bartholomeus's posture, expression and "
+    "the props that best tell the viewer what is happening, keeping its thin "
+    "scribbly line weight. Be playful - this is a virtual-pet game and the "
+    "scene should read instantly at a glance. Props are small and drawn with "
+    "the same thin outlines."
+)
+CAT_IDENTITY = (
+    "The character is this game's cat: a small SOLID BLACK silhouette cat "
+    "sitting upright in profile-ish three-quarter view, with two tall pointed "
+    "ears, two small white oval eyes with a black pupil dot, a compact body, "
+    "short front legs, and a thin curled tail ending in a little hook on the "
+    "right. There is no fur detail and no outline: the whole cat is one black "
+    "shape with only the white eyes showing. Anyone must recognise it as the "
+    "same cat in every frame."
+)
+CAT_FREEDOM = (
+    "Compose this frame yourself: choose the cat's posture, expression and the "
+    "props that best tell the viewer what is happening. The cat itself stays a "
+    "solid black silhouette with white eyes; props around it are small white "
+    "shapes with thin black outlines (and red where the brief asks), so they "
+    "stand out against the black. Be playful and keep the cat's small size in "
+    "the frame."
+)
+PANDA_IDENTITY = (
+    "The character is this game's panda: a kawaii chibi giant panda sitting "
+    "upright facing the viewer, with a big round white head, two round black "
+    "ears, two big black oval eye patches each holding a white highlight dot, "
+    "a small black nose and a tiny mouth, a white belly on a black body with "
+    "black arms, and two black feet whose soles show bold RED paw pads. "
+    "Chunky black outlines of an even thickness all round. Anyone must "
+    "recognise it as the same panda in every frame."
+)
+PANDA_FREEDOM = (
+    "Compose this frame yourself: choose the panda's posture, expression and "
+    "the props that best tell the viewer what is happening. Panda-native props "
+    "such as bamboo are welcome where they suit the scene. Be playful - this "
+    "is a virtual-pet game and the scene should read instantly at a glance."
+)
+
+SLUG_IDENTITY = (
+    "The character is this game's slug: a soft white garden slug seen from the side, "
+    "with a rounded head hump on the left and a long low body that trails away to the "
+    "right and ends in a flat-bottomed tail, all drawn with one thin continuous black "
+    "outline and a plain white fill. Two long thin eyestalks rise from the head, each "
+    "ending in a round eye with a black pupil dot and a tuft of little eyelash strokes. "
+    "On the head hump are two small curved black marks and a gentle curved smile. Red is "
+    "used only for small accents such as cheeks, hearts and props. Anyone must recognise "
+    "it as the same slug in every frame."
+)
+SLUG_FREEDOM = (
+    "Compose this frame yourself: choose the slug's posture, expression and the props "
+    "that best tell the viewer what is happening, keeping its thin, even line weight. "
+    "Be playful - this is a virtual-pet game and the scene should read instantly at a "
+    "glance. Props are small and drawn with the same thin outlines."
+)
+
+NEW_PROFILES: dict[str, dict] = {
+    "bartholomeus": {
+        "noun": "Bartholomeus",
+        "markings": "its thin sketchy outline strokes, hair lines, eyes and scribbles",
+        "identity": BARTHOLOMEUS_IDENTITY,
+        "freedom": BARTHOLOMEUS_FREEDOM,
+        "poses": {},
+        "strips": {},
+        "min_blob": 1,
+        "cfg": ART_PETS["bartholomeus"][1],
+        "sheet": ART_PETS["bartholomeus"][2],
+    },
+    "cat": {
+        "noun": "cat",
+        "markings": "the cat's solid black body and tail (it is a black silhouette cat)",
+        "identity": CAT_IDENTITY,
+        "freedom": CAT_FREEDOM,
+        "poses": {},
+        "strips": {},
+        "min_blob": 8,
+        "cfg": ART_PETS["cat"][1],
+        "sheet": ART_PETS["cat"][2],
+    },
+    "slug": {
+        "noun": "slug",
+        "markings": "its eyestalks, eyes with their eyelashes, the marks on its head and its outline",
+        "identity": SLUG_IDENTITY,
+        "freedom": SLUG_FREEDOM,
+        "poses": {},
+        "strips": {},
+        "min_blob": 1,
+        "cfg": ART_PETS["slug"][1],
+        "sheet": ART_PETS["slug"][2],
+    },
+    "panda": {
+        "noun": "panda",
+        "markings": "the panda's ears, eye patches, nose, arms, legs and outlines",
+        "identity": PANDA_IDENTITY,
+        "freedom": PANDA_FREEDOM,
+        "poses": {},
+        "strips": {},
+        "min_blob": 4,
+        "cfg": ART_PETS["panda"][1],
+        "sheet": ART_PETS["panda"][2],
+    },
+}
+
+
 PROFILES: dict[str, dict] = {
     "badger": {
         "noun": "badger",
@@ -562,6 +688,7 @@ PROFILES: dict[str, dict] = {
         "continues": SEASTAR_CONTINUES,
         "continuity": SEASTAR_CONTINUITY,
     },
+    **NEW_PROFILES,
 }
 
 if PET not in PROFILES:
@@ -572,6 +699,14 @@ FREEDOM = PROFILE["freedom"]
 POSES = PROFILE["poses"]
 STRIPS = PROFILE["strips"]
 CONTINUES: dict[str, str] = PROFILE.get("continues", {})
+MIN_BLOB = PROFILE.get("min_blob", 12)
+
+# The pet sheet is a SOURCE file that gets hand-edited between generations, so
+# which one to write is a deliberate choice rather than a constant: point these at
+# the working copy (v3, v4, ...) and the hand-edited original is never touched.
+# A profile's own "sheet"/"cfg" win over the naming convention.
+PET_SHEET = Path(os.environ.get("BORNPETS_SHEET", REPO / "assets" / PROFILE.get("sheet", f"bornpets-sprites-{PET}.png")))
+PET_CFG = Path(os.environ.get("BORNPETS_CFG", REPO / "assets" / PROFILE.get("cfg", f"bornpets-sponsors-{PET}.json5")))
 
 # gpt-image-2 treats a second reference as something to reproduce, so stated
 # alone ("keep the props") it returns image 2 unchanged. The new moment has to
@@ -613,26 +748,34 @@ def build_prompt(frame_id: str) -> str:
 
 
 def frame_index() -> dict[str, dict]:
-    """Map pet frame id -> geometry plus the matching panda frame id."""
+    """Map pet frame id -> geometry, plus the matching panda frame id.
+
+    Only profiles with an `anchor_prompt` (the ones drawn from panda frames) are
+    paired with the panda sheet; the shipped-art pets have their own row layout.
+    """
     pet = load_sequences(PET_CFG)
-    panda = load_sequences(PANDA_CFG)
-    assert len(pet) == len(panda), "configs must have identical row layout"
+    paired = "anchor_prompt" in PROFILE
+    panda = load_sequences(PANDA_CFG) if paired else []
+    if paired:
+        assert len(pet) == len(panda), "configs must have identical row layout"
 
     out: dict[str, dict] = {}
-    for bs, ps in zip(pet, panda):
+    for n, bs in enumerate(pet):
         if bs.name.startswith("reserved"):
             continue
+        ps = panda[n] if paired else None
         # Row identity is the position in the list, and frame size has to match
         # so a panda frame can be used as a reference. Frame COUNT may differ:
         # the badge derives it from the PCX filenames on flash, so the pet is
         # free to animate a row the panda draws as a single still.
-        assert (bs.frame_width, bs.frame_height) == (
-            ps.frame_width,
-            ps.frame_height,
-        ), f"frame size mismatch: {bs.name} vs {ps.name}"
+        if ps is not None:
+            assert (bs.frame_width, bs.frame_height) == (
+                ps.frame_width,
+                ps.frame_height,
+            ), f"frame size mismatch: {bs.name} vs {ps.name}"
         for i in range(bs.frames):
             info = {"rect": bs.frame_rect(i)}
-            if i < ps.frames:
+            if ps is not None and i < ps.frames:
                 info["panda_rect"] = ps.frame_rect(i)
                 info["panda_id"] = f"{ps.name}_{i}"
             out[f"{bs.name}_{i}"] = info
@@ -662,28 +805,54 @@ def reference_png(frame: Image.Image, path: Path) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 
-def api_key() -> str:
-    """The API key, from the environment or a key file.
+def _checked(key: str, source: str) -> str:
+    """A key that would corrupt the curl config (quote, newline, ...) is refused."""
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", key):
+        sys.exit(f"{source} does not hold a plain API key (unexpected characters)")
+    return key
+
+
+def _read_key_file(path: Path) -> str:
+    """Read a key file, refusing one in the repo or readable by others.
+
+    Messages name the path, never the content.
+    """
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        sys.exit(f"key file {path} does not exist")
+    if resolved.is_relative_to(REPO.resolve()):
+        sys.exit(f"key file {path} is inside the repository; keep it outside")
+    if resolved.stat().st_mode & 0o077:
+        sys.exit(f"key file {path} is accessible by others; run chmod 600 on it")
+    if resolved.stat().st_nlink > 1:
+        sys.exit(f"key file {path} has several hard links; one of them may be in the repository")
+    key = resolved.read_text(encoding="utf-8").strip()
+    if not key:
+        sys.exit(f"key file {path} is empty")
+    return _checked(key, f"key file {path}")
+
+
+def api_key(key_file: str | None = None) -> str:
+    """The API key: the argument, KEY_FILE (--key-file), OPENAI_API_KEY_FILE,
+    OPENAI_API_KEY, then ~/.config/openai/api-key, in that order.
 
     An `export` in an interactive shell does not reach a tool that was started
-    before it, so the file fallback is what makes the key reachable without
+    before it, so the file sources are what make the key reachable without
     putting it on a command line (argv is world-readable via /proc).
     """
-    key = os.environ.get("OPENAI_API_KEY")
+    explicit = key_file or KEY_FILE or os.environ.get("OPENAI_API_KEY_FILE")
+    if explicit:
+        return _read_key_file(Path(explicit))
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
     if key:
-        return key.strip()
-
-    path = os.environ.get("OPENAI_API_KEY_FILE")
-    candidates = [Path(path)] if path else [Path.home() / ".config/openai/api-key"]
-    for cand in candidates:
-        if cand.is_file():
-            key = cand.read_text(encoding="utf-8").strip()
-            if key:
-                return key
-
+        return _checked(key, "OPENAI_API_KEY")
+    default = Path.home() / ".config/openai/api-key"
+    if default.is_file():
+        return _read_key_file(default)
     sys.exit(
-        "no API key: set OPENAI_API_KEY, or put the key in "
-        f"{candidates[0]} (chmod 600)"
+        "no API key: use --key-file, set OPENAI_API_KEY_FILE or OPENAI_API_KEY, "
+        f"or put the key in {default} (chmod 600)"
     )
 
 
@@ -724,7 +893,9 @@ def call_api(
     if MODEL.startswith("gpt-image-1"):
         cmd += ["-F", f"input_fidelity={fidelity}"]
     curl_cfg = f'header = "Authorization: Bearer {key}"\n'
-    res = subprocess.run(cmd, input=curl_cfg.encode(), capture_output=True)
+    # curl needs the key on stdin only, so keep it out of its environment too.
+    env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+    res = subprocess.run(cmd, input=curl_cfg.encode(), capture_output=True, env=env)
     if res.returncode != 0:
         raise RuntimeError(f"curl failed ({res.returncode}): {res.stderr.decode()[:400]}")
     payload = json.loads(res.stdout)
@@ -883,18 +1054,10 @@ def quantize_one(raw: Image.Image, size: tuple[int, int]) -> Image.Image:
     # The model stages the whole frame now, so scale its art to the frame
     # itself rather than to whatever bounding box the panda happened to use.
     scale = min(size[0] / art.width, size[1] / art.height)
-    art = art.resize(
-        (max(1, round(art.width * scale)), max(1, round(art.height * scale))),
-        Image.LANCZOS,
-    )
+    art = ink_resize(art, (max(1, round(art.width * scale)), max(1, round(art.height * scale))))
 
     out = Image.new("RGBA", size, TRANSPARENT)
     out.paste(art, ((size[0] - art.width) // 2, (size[1] - art.height) // 2))
-
-    px = out.load()
-    for y in range(size[1]):
-        for x in range(size[0]):
-            px[x, y] = classify(px[x, y])
     return despeckle(out)
 
 
@@ -1120,6 +1283,450 @@ def cmd_quantize(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# State frames: the pet's own shipped frames are the references
+# ---------------------------------------------------------------------------
+
+REF_SCALE = 6
+CANVAS = (1536, 1024)
+REF_ORIGIN = ((CANVAS[0] - FRAME[0] * REF_SCALE) // 2, (CANVAS[1] - FRAME[1] * REF_SCALE) // 2)
+_PCX_COLOURS = {0: BLACK, 1: RED, 2: WHITE}
+
+# Anim ids after idle (0x01) whose frame 0 is sent as a reference (design 3.4).
+STATE_REFS: dict[str, tuple[int, ...]] = {
+    "tipsy": (0x25, 0x02),
+    "wasted": (0x25, 0x0B, 0x04),
+    "hung_over": (0x06, 0x07, 0x25),
+    "sore": (0x03, 0x23, 0x07),
+    "injured": (0x03, 0x0D, 0x23),
+    "groggy": (0x0A, 0x08, 0x10),
+    "stuffed": (0x0C, 0x0B),
+    "thirsty": (0x09, 0x25),
+    "wired": (0x0F, 0x02, 0x23),
+    "throwing_up": (0x03, 0x0C, 0x23),
+    "needs_rehab": (0x27, 0x04, 0x0B),   # rehab, critical tired, miserable
+    "starving": (0x05, 0x09, 0x0C),      # critical hungry, warning hungry, feeding
+    "washing": (0x0E, 0x0F),             # relaxing, playing
+}
+
+STATE_BRIEFS: dict[str, str] = {
+    "tipsy": "Tipsy. The {pet} sways happily with a small glass, a silly grin, one little bubble floating up. Nothing else in the frame.",
+    "wasted": "Wasted. The {pet} slumps against nothing, swirly eyes, a hiccup bubble, an empty bottle lying on its side. Nothing else in the frame.",
+    "hung_over": "Hung over. The {pet} squints in pain under a red ice pack, a glass of water in its paw, a tiny storm cloud over its head. Nothing else in the frame.",
+    "sore": "Sore. The {pet} winces and rubs one aching shoulder, two small red ache marks beside it. Nothing else in the frame.",
+    "injured": "Injured. The {pet} stands on one leg with the other in a white bandage and a red cross plaster, leaning on a crutch. Nothing else in the frame.",
+    "groggy": "Groggy. Overslept: bleary half-open eyes, messy bed hair, a big yawn, clutching a coffee mug. Nothing else in the frame.",
+    "stuffed": "Stuffed. The {pet} leans back with a round, overfull belly, an empty plate beside it and a small burp puff. Nothing else in the frame.",
+    "thirsty": "Thirsty. The {pet} pants with its tongue out beside an empty glass, one sweat drop on its brow. Nothing else in the frame.",
+    "wired": "Wired. Overexcited: wide eyes, fur on end, jittery motion lines, a red energy-drink can in its paw. Nothing else in the frame.",
+    "throwing_up": "Throwing up after sport on a full belly. The {pet} bends over with dizzy eyes and a cartoon splash of sick drawn in WHITE with a thick BLACK outline in front of it, a few wobbly lines. No red anywhere in the sick. Nothing else in the frame.",
+    "needs_rehab": "Needs rehab after far too much booze and pills. The {pet} is shaky and sweating, holding on with both arms to a lamp post to keep itself standing, bleary red-rimmed eyes, a few tremble lines; an empty bottle and a spilled strip of pills lie at its feet. It is the same young {pet} as in its idle pose, NOT old: no walking frame, no cane, no grey hair, no wrinkles. Clearly worse than its idle pose. Nothing else in the frame.",
+    "starving": "Starving. The {pet} looks starved: visibly thinner and droopier than its idle pose, sunken eyes and cheeks, holding out an empty bowl, a small rumble mark by its belly. Clearly different from its idle pose. Nothing else in the frame.",
+    "washing": "Washing. The {pet} sits in a small round wash tub and scrubs itself with a little brush, a few round soap bubbles around it and one on its head, looking content. Keep the tub small and simple, with no shells, plants, towels or other props. Clearly different from its idle pose. Nothing else in the frame.",
+}
+
+# Every state prompt carries this, after style() and before any owner note (amendment 1):
+# the 78 frames have to fit the volume, and a frame over 2048 B costs a second cluster.
+FLAT_FILL = (
+    "FLAT FILLS, SMALL FILE: large areas of one flat colour; no dithering, no hatching, no "
+    "texture, no stippling, no speckles or scattered dots; few small details; fur, stripes and shading are a few big solid shapes, never many small "
+    "marks; every outline a continuous unbroken line. Solid white stays solid white."
+)
+
+
+def pet_prefix() -> str:
+    return ART_PETS[PET][0]
+
+
+def state_frame_ids() -> list[str]:
+    return [f"{ART_PETS[PET][3]}_{s}_0" for s in STATES]
+
+
+def key_canvas(rows_w: int, rows_h: int, rows: list[list[int]], scale: int,
+               origin: tuple[int, int]) -> Image.Image:
+    """A decode_pcx result as RGBA on a magenta KEY CANVAS, nearest-upscaled."""
+    small = Image.new("RGBA", (rows_w, rows_h), KEY)
+    px = small.load()
+    for y, row in enumerate(rows):
+        for x, v in enumerate(row):
+            if v in _PCX_COLOURS:
+                px[x, y] = _PCX_COLOURS[v]
+    canvas = Image.new("RGBA", CANVAS, KEY)
+    canvas.paste(small.resize((rows_w * scale, rows_h * scale), Image.NEAREST), origin)
+    return canvas
+
+
+_INDEX = {BLACK: 0, RED: 1, WHITE: 2, TRANSPARENT: 3}
+
+
+def ref_rows(prefix: str, aa: int) -> list[list[int]]:
+    """Frame 0 of anim row `aa` as badge indices (0 black, 1 red, 2 white, 3 transparent).
+
+    The shipped PCX when assets/to-badge has it; otherwise the same cell cropped from the
+    pet's sheet (the retired Drained rows keep their cells there) and mapped through classify.
+    """
+    pcx = TO_BADGE / f"{prefix}{aa:02X}00.PCX"
+    if pcx.is_file():
+        return decode_pcx(pcx)[2]
+    _pet, (_pp, cfg, sheet, _seq) = next((k, v) for k, v in ART_PETS.items() if v[0] == prefix)
+    seq = load_sequences(REPO / "assets" / cfg)[aa]
+    x, y, w, h = seq.frame_rect(0)
+    cell = Image.open(REPO / "assets" / sheet).convert("RGBA").crop((x, y, x + w, y + h))
+    px = cell.load()
+    return [[_INDEX[classify(px[cx, cy])] for cx in range(w)] for cy in range(h)]
+
+
+def ref_png(prefix: str, aa: int, path: Path) -> None:
+    """A shipped frame at a fixed scale in a fixed rectangle of the API canvas."""
+    rows = ref_rows(prefix, aa)
+    key_canvas(len(rows[0]), len(rows), rows, REF_SCALE, REF_ORIGIN).save(path)
+
+
+def state_refs(prefix: str, state: str, work: Path) -> list[Path]:
+    """Idle first (it is the primary image), then the state's table frames."""
+    (work / "ref").mkdir(parents=True, exist_ok=True)
+    out = []
+    for aa in (0x01, *STATE_REFS[state]):
+        path = work / "ref" / f"{prefix}{aa:02X}00.png"
+        ref_png(prefix, aa, path)
+        out.append(path)
+    return out
+
+
+def state_prompt(state: str, note: str | None = None) -> str:
+    n = len(STATE_REFS[state]) + 1
+    pet = PROFILE["noun"]
+    text = (
+        "Draw one frame of a pixel-art virtual-pet game.\n\n"
+        f"{IDENTITY}\n\n"
+        f"IMAGE 1 is this {pet} in its idle pose: same character, same outline "
+        "thickness all round, same size and the same place inside the same "
+        f"rectangle. IMAGES 2 to {n} are other frames of the same pet: match "
+        "their line weight and style, not their poses.\n\n"
+        f"{STATE_BRIEFS[state].format(pet=pet)}\n\n"
+        f"{FREEDOM}\n\n"
+        f"{style()}\n\n"
+        f"{FLAT_FILL}"
+    )
+    if note:
+        text += f"\n\nOwner feedback on the previous attempt: {note}"
+    return text
+
+
+_MARK_MAX = 12  # opaque islands this small (the cat's are 3x3) are corner marks, not the pet
+
+
+def rows_box(rows: list[list[int]], mark_max: int = _MARK_MAX) -> tuple[int, int, int, int]:
+    """Bounding box (x0, y0, x1, y1, exclusive) of the opaque art in badge rows.
+
+    Islands of at most `mark_max` pixels are left out: the Bartholomeus and Cat
+    idle frames carry tiny marks in their top corners, which would otherwise
+    stretch the box to the whole frame and blow the pet up when it is cut.
+    """
+    h, w = len(rows), len(rows[0])
+    seen = [[False] * w for _ in range(h)]
+    xs, ys = [], []
+    for sy in range(h):
+        for sx in range(w):
+            if seen[sy][sx] or rows[sy][sx] == 3:
+                continue
+            island, stack = [], [(sx, sy)]
+            seen[sy][sx] = True
+            while stack:
+                x, y = stack.pop()
+                island.append((x, y))
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx] and rows[ny][nx] != 3:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            if len(island) > mark_max:
+                xs += [p[0] for p in island]
+                ys += [p[1] for p in island]
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+
+def idle_box(prefix: str) -> tuple[int, int, int, int]:
+    """Bounding box (x0, y0, x1, y1, exclusive) of the pet's own shipped idle frame."""
+    return rows_box(decode_pcx(TO_BADGE / f"{prefix}0100.PCX")[2])
+
+
+_HALO_MIN = 24    # a blend darker than this is the pet's own black outline, not halo
+
+
+def dekey_halo(img: Image.Image) -> Image.Image:
+    """`dekey`, plus the soft shadow halo the model paints around the pet.
+
+    The halo fades from black out into the key colour, so the plain key test
+    leaves its dark inner part opaque: it grows the bbox and survives as black
+    specks. Flood in from the border through every purple-ish pixel that is
+    not near-black (outline); the pet's outline (near black) and red/white art stop it.
+    """
+    out = dekey(img)
+    w, h = out.size
+    px = out.load()
+
+    def halo(p) -> bool:
+        r, g, b, a = p
+        return a < 128 or (g < 110 and abs(r - b) < 60 and max(r, b) >= _HALO_MIN)
+
+    seen = [[False] * w for _ in range(h)]
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    while stack:
+        x, y = stack.pop()
+        if not (0 <= x < w and 0 <= y < h) or seen[y][x]:
+            continue
+        seen[y][x] = True
+        if halo(px[x, y]):
+            px[x, y] = TRANSPARENT
+            stack += [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+    return out
+
+
+INK_SOLID = 0.55     # a badge pixel more than this share black is black outright
+INK_RIDGE_MIN = 0.2  # a thinner line still claims the darkest pixel across it
+INK_EDGE_MIN = 0.05  # any outline at all in a silhouette pixel makes it black
+
+
+def ink_resize(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Shrink art onto the badge palette without losing thin black lines.
+
+    A filter resize averages a thin black line with the white beside it into
+    grey, which `classify` reads as white: the outline breaks up. Instead,
+    classify the full-size pixels first, then take the exact area share of each
+    ink per badge pixel (BOX resize of each ink mask). A pixel is black when
+    black covers more than INK_SOLID of it, or when it is the darkest pixel
+    across a line (a ridge in the black share, ties going to the right/lower
+    pixel so a line stays one pixel wide) with at least INK_RIDGE_MIN black.
+    The rest is transparent when under half covered, else red or white by
+    majority. Finally a silhouette pixel (next to transparency) with any
+    outline in it (INK_EDGE_MIN) is black, so the outer outline stays closed.
+    """
+    import numpy as np
+
+    a = np.asarray(img.convert("RGBA"), dtype=np.int32)
+    r, g, b, al = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    opaque = al >= 128
+    red = opaque & (r > 140) & (g < 110) & (b < 110)
+    white = opaque & ~red & ((r * 299 + g * 587 + b * 114) // 1000 >= 128)
+    black = opaque & ~red & ~white
+
+    def share(mask):
+        m = Image.fromarray(mask.astype(np.float32), "F").resize(size, Image.BOX)
+        return np.asarray(m, dtype=np.float32)
+
+    cb, cr, cw = share(black), share(red), share(white)
+    p = np.pad(cb, 1, mode="edge")
+    left, right, up, down = p[1:-1, :-2], p[1:-1, 2:], p[:-2, 1:-1], p[2:, 1:-1]
+    e = 1e-4   # BOX shares carry float noise; equal must compare equal
+    ridge = ((cb >= left - e) & (cb > right + e)) | ((cb >= up - e) & (cb > down + e))
+    is_black = (cb > INK_SOLID) | ((cb >= INK_RIDGE_MIN) & ridge)
+    clear = ~is_black & (cb + cr + cw < 0.5)
+    t = np.pad(clear, 1, constant_values=True)
+    edge = ~clear & (t[1:-1, :-2] | t[1:-1, 2:] | t[:-2, 1:-1] | t[2:, 1:-1])
+    is_black |= edge & (cb >= INK_EDGE_MIN)
+    is_red = ~is_black & ~clear & (cr > cw)
+
+    out = np.empty((size[1], size[0], 4), dtype=np.uint8)
+    out[...] = WHITE
+    out[is_red] = RED
+    out[is_black] = BLACK
+    out[clear] = TRANSPARENT
+    return Image.fromarray(out, "RGBA")
+
+
+def close_outline(img: Image.Image) -> Image.Image:
+    """Blacken every white pixel that touches transparency: close a broken outline.
+
+    For finished pixel art that has no raw to re-cut (hand-drawn sheet frames).
+    Judged on the input, so only the outermost white ring changes; red art and
+    the frame edge (art cut off there on purpose) are left alone.
+    """
+    out = img.convert("RGBA").copy()
+    src = img.convert("RGBA").load()
+    px = out.load()
+    w, h = out.size
+    for y in range(h):
+        for x in range(w):
+            if src[x, y] == WHITE and any(
+                    0 <= x + dx < w and 0 <= y + dy < h and src[x + dx, y + dy][3] < 128
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                px[x, y] = BLACK
+    return out
+
+
+def cut_pet(raw: Image.Image, idle: tuple[int, int, int, int], margin: int = 4) -> Image.Image:
+    """Cut a whole-pet raw to a FRAME that is framed like the pet's idle frame.
+
+    The model draws the whole pet bigger than the hand-drawn art, and the
+    firmware lays toast, HAX counter, status line and litter over the sprite.
+    So take the bbox of the art, scale it uniformly to fit (frame width - 2 *
+    margin) x idle height, and put it bottom-aligned at the idle bottom, centred
+    on the idle centre, clamped inside the frame. A raw with no art is blank.
+    """
+    raw = dekey_halo(raw.convert("RGBA"))
+    out = Image.new("RGBA", FRAME, TRANSPARENT)
+    bbox = raw.getbbox()
+    if bbox is None:
+        return out
+    art = raw.crop(bbox)
+    scale = min((FRAME[0] - 2 * margin) / art.width, (idle[3] - idle[1]) / art.height)
+    art = ink_resize(art, (max(1, round(art.width * scale)), max(1, round(art.height * scale))))
+    x = min(max((idle[0] + idle[2] - art.width) // 2, margin), FRAME[0] - margin - art.width)
+    out.paste(art, (x, idle[3] - art.height))
+    return despeckle(out, MIN_BLOB)
+
+
+_N8 = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
+def merge_islands(img: Image.Image, min_island: int) -> Image.Image:
+    """Recolour small one-colour islands enclosed by exactly one other colour.
+
+    Islands and their surroundings use 8-connectivity, so a diagonal 1-px line
+    is one component and is not mistaken for specks. Repeats until nothing
+    changes. A component with a transparent neighbour or on the frame edge is
+    never changed, so silhouette and outline stay. Within a pass a component
+    that touches a pixel recoloured in that pass waits for the next pass, so
+    sizes are never stale.
+    """
+    out = img.convert("RGBA").copy()
+    w, h = out.size
+    px = out.load()
+    changed = True
+    while changed:
+        changed = False
+        seen = [[False] * w for _ in range(h)]
+        dirty: set[tuple[int, int]] = set()
+        for sy in range(h):
+            for sx in range(w):
+                if seen[sy][sx] or px[sx, sy][3] < 128:
+                    continue
+                colour = px[sx, sy]
+                comp, stack, edge = [], [(sx, sy)], False
+                seen[sy][sx] = True
+                around: set = set()
+                touched: set[tuple[int, int]] = set()
+                while stack:
+                    x, y = stack.pop()
+                    comp.append((x, y))
+                    for dx, dy in _N8:
+                        nx, ny = x + dx, y + dy
+                        if not (0 <= nx < w and 0 <= ny < h):
+                            edge = True
+                        elif px[nx, ny] == colour:
+                            if not seen[ny][nx]:
+                                seen[ny][nx] = True
+                                stack.append((nx, ny))
+                        else:
+                            touched.add((nx, ny))
+                            around.add(px[nx, ny] if px[nx, ny][3] >= 128 else TRANSPARENT)
+                if len(comp) >= min_island or edge or len(around) != 1:
+                    continue
+                (other,) = around
+                if other == TRANSPARENT:
+                    continue
+                if dirty and (dirty & touched or dirty.intersection(comp)):
+                    changed = True      # look again next pass
+                    continue
+                for x, y in comp:
+                    px[x, y] = other
+                dirty.update(comp)
+                changed = True
+    return out
+
+
+def _is_ok(value: object) -> bool:
+    return not isinstance(value, str) or value.strip().rstrip(".").casefold() in ("", "ok")
+
+
+def load_notes(path: str | Path) -> dict:
+    """The --note-file JSON object; a missing or malformed file is a clean exit."""
+    try:
+        notes = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        sys.exit(f"--note-file {path} is not readable JSON: {exc}")
+    if not isinstance(notes, dict):
+        sys.exit(f"--note-file {path} must hold a JSON object {{id: note}}")
+    return notes
+
+
+def needs_call(raw_path: Path, note_path: str | Path | None, note: str | None, force: bool) -> bool:
+    """Whether an item or frame costs an API call.
+
+    A note decides first: a raw newer than the note file already answers it, so
+    `--force --note-file` re-run with the same file buys nothing. --force only
+    covers entries without a note (or runs without a note file).
+    """
+    raw_path = Path(raw_path)
+    if note is not None and note_path is not None:
+        return not raw_path.exists() or raw_path.stat().st_mtime < Path(note_path).stat().st_mtime
+    return force or not raw_path.exists()
+
+
+def cmd_state(args: argparse.Namespace) -> None:
+    prefix = pet_prefix()
+    ids = dict(zip(STATES, state_frame_ids()))
+    wanted = [s.strip() for s in args.states.split(",") if s.strip()] if args.states else list(STATES)
+    unknown = [s for s in wanted if s not in ids]
+    if unknown:
+        sys.exit(f"unknown states: {unknown}; known: {', '.join(STATES)}")
+
+    notes: dict | None = load_notes(args.note_file) if args.note_file else None
+
+    work = Path(args.work)
+    (work / "raw").mkdir(parents=True, exist_ok=True)
+    (work / "frames").mkdir(parents=True, exist_ok=True)
+    failed: list[str] = []
+    for n, state in enumerate(wanted, 1):
+        fid = ids[state]
+        note = None
+        raw_path = work / "raw" / f"{fid}.png"
+        frame_path = work / "frames" / f"{fid}.png"
+        if notes is not None:
+            # Feedback run: only frames with a note other than "ok" are redrawn;
+            # a frame that is absent from the file is left alone.
+            if _is_ok(notes.get(fid)):
+                print(f"[{n}/{len(wanted)}] {fid}: skipped")
+                continue
+            note = notes[fid].strip()
+        generate = needs_call(raw_path, args.note_file, note, args.force)
+        try:
+            if generate:
+                print(f"[{n}/{len(wanted)}] {fid}: generating...", flush=True)
+                raw_path.write_bytes(
+                    call_api(state_refs(prefix, state, work), state_prompt(state, note),
+                             args.quality, CANVAS)
+                )
+            elif not frame_path.exists():
+                print(f"[{n}/{len(wanted)}] {fid}: cutting cached raw")
+            else:
+                # Never re-cut over an existing frame: that would undo `simplify`.
+                print(f"[{n}/{len(wanted)}] {fid}: cached")
+                continue
+            cut_pet(Image.open(raw_path).convert("RGBA"), idle_box(prefix)).save(frame_path)
+        except Exception as exc:   # one bad frame must not abandon the others
+            failed.append(fid)
+            print(f"[{n}/{len(wanted)}] {fid}: FAILED - {type(exc).__name__}: {str(exc)[:300]}",
+                  flush=True)
+    if failed:
+        print(f"\n{len(failed)} frame(s) failed: {', '.join(failed)}")
+        sys.exit(1)
+
+
+def cmd_simplify(args: argparse.Namespace) -> None:
+    """Merge enclosed specks in frames/<fid>.png, in place."""
+    work = Path(args.work)
+    ids = [f.strip() for f in (args.only or "").split(",") if f.strip()]
+    if not ids:
+        sys.exit("simplify needs --only frame,ids")
+    for fid in ids:
+        path = work / "frames" / f"{fid}.png"
+        if not path.exists():
+            sys.exit(f"{fid}: no {path}")
+        merge_islands(Image.open(path).convert("RGBA"), args.min_island).save(path)
+        print(f"{fid}: simplified")
+
+
+# ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
 
@@ -1165,6 +1772,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--work", default=default_work, help="working directory")
     p.add_argument("--only", help="comma-separated frame ids to process")
+    p.add_argument("--key-file", help="file holding the API key (outside the repo, chmod 600)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     a = sub.add_parser("anchor")
@@ -1186,9 +1794,28 @@ def main() -> None:
 
     sub.add_parser("quantize").set_defaults(func=cmd_quantize)
     sub.add_parser("assemble").set_defaults(func=cmd_assemble)
-    sub.add_parser("list").set_defaults(func=lambda a: print("\n".join(frame_index())))
+
+    st = sub.add_parser("state", help="state frames from the pet's own shipped frames")
+    st.add_argument("--states", help="comma-separated states (default: all ten)")
+    st.add_argument("--quality", default="medium", choices=["low", "medium", "high", "max"])
+    st.add_argument("--force", action="store_true", help="regenerate cached raws")
+    st.add_argument("--note-file", help="JSON {frame_id: note}; only non-ok entries are redrawn")
+    st.set_defaults(func=cmd_state)
+
+    si = sub.add_parser("simplify", help="merge enclosed specks of frames/<id>.png in place")
+    si.add_argument("--only", dest="only", default=argparse.SUPPRESS)
+    si.add_argument("--min-island", type=int, default=3)
+    si.set_defaults(func=cmd_simplify)
+
+    ls = sub.add_parser("list")
+    ls.add_argument("--states", action="store_true", help="print the ten state frame ids")
+    ls.set_defaults(func=lambda a: print(",".join(state_frame_ids()) if a.states
+                                         else "\n".join(frame_index())))
 
     args = p.parse_args()
+    global KEY_FILE
+    if args.key_file:
+        KEY_FILE = args.key_file
     args.func(args)
 
 
