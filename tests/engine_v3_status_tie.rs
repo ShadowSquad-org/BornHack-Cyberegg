@@ -39,11 +39,11 @@ fn pet() -> GameState {
 
 fn first_change_min(s: &GameState) -> Option<u32> {
     let mut c = s.clone();
-    let o = status_line(&c);
+    let o = format!("{:?}", c.wake_view_for_test());
     let t0 = c.last_update_tick;
     (1..=LOOKAHEAD_MIN).find(|m| {
         c.update(t0 + m * TICKS_PER_MIN);
-        status_line(&c) != o
+        format!("{:?}", c.wake_view_for_test()) != o
     })
 }
 

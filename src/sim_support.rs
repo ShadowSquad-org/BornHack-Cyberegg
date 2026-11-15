@@ -46,13 +46,33 @@ impl OriginDimensions for TriColorDisplay<'_> {
 /// has none — just the sim's stand-in for the USB volume, kept pointed at the
 /// one file so a pet added there shows up in both.
 pub fn install_pets_from_repo_cfg() {
+    install_pets_from_cfg_text(include_str!("../assets/to-badge/PETS.CFG"));
+}
+
+/// An old badge: `copy_assets --update` never edits a badge's `PETS.CFG`, so
+/// it still lists `8=Jellyfish` after the Jellyfish sprites were removed.
+/// The repo's roster plus that line, with the sprites dropped as at boot.
+pub fn install_pets_from_old_badge_cfg() {
+    let mut text = String::from(include_str!("../assets/to-badge/PETS.CFG"));
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str("8=Jellyfish\n");
+    install_pets_from_cfg_text(&text);
+}
+
+/// Install the roster from `PETS.CFG` text, then drop every pet the
+/// simulator has no idle sprite for (as the boot does). Once per process.
+pub fn install_pets_from_cfg_text(text: &str) {
     use crate::game::pet_registry::{self, MAX_PETS, PetDef};
 
-    const CFG: &[u8] = include_bytes!("../assets/to-badge/PETS.CFG");
-
     let mut pets: heapless::Vec<PetDef, MAX_PETS> = heapless::Vec::new();
-    crate::game::pets_cfg::parse(CFG, &mut pets);
+    crate::game::pets_cfg::parse(text.as_bytes(), &mut pets);
     pet_registry::install(&pets);
+    pet_registry::drop_without_sprites(|id| {
+        let idle = crate::game::engine::anim_files::anim_id_for(crate::game::engine::DisplayAnim::Idle);
+        crate::game::sprite_loader::count_anim_frames(id, idle) > 0
+    });
 }
 
 /// Enlargement of the saved PNGs: the 152 px screen becomes 608 px.

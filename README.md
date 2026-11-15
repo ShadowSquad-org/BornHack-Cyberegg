@@ -811,7 +811,6 @@ cargo run -- export \
     ../bornhack-firmware-2026/assets/bornpets-sponsors-panda.json5 \
     ../bornhack-firmware-2026/assets/bornpets-sponsors-badger.json5 \
     ../bornhack-firmware-2026/assets/bornpets-sponsors-seastar.json5 \
-    ../bornhack-firmware-2026/assets/bornpets-sponsors-jellyfish.json5 \
     --output-dir ../bornhack-firmware-2026/assets/to-badge \
     --format pcx
 ```
@@ -830,7 +829,6 @@ Each JSON5 file contributes a separate `PP` prefix range:
 | `bornpets-sponsors-panda.json5` | `05xx` | Panda pet animations |
 | `bornpets-sponsors-badger.json5` | `06xx` | Badger pet animations |
 | `bornpets-sponsors-seastar.json5` | `07xx` | Sea star pet animations |
-| `bornpets-sponsors-jellyfish.json5` | `08xx` | Jellyfish pet animations |
 
 The `PP` prefix is the config's **position** in the argument list, not its
 filename, so the order above is fixed — reordering or dropping an entry
@@ -847,6 +845,8 @@ Frames that are entirely transparent produce no PCX file, so a row may declare
 more frames than it uses; the firmware counts the files actually present.
 
 After generating, copy all `.PCX` files from `assets/to-badge/` to the badge's USB drive.
+
+**Updating a badge that already has assets.** `scripts/copy_assets.py --update` accepts non-empty `CYBR*` volumes. It adds the files the badge is missing, then applies [`assets/asset-changes.txt`](assets/asset-changes.txt): a `remove` line deletes a retired file and a `replace` line overwrites a changed one, but only when the file on the badge matches the SHA-256 of a version we shipped. A file you changed or made yourself is reported as kept and never touched. `000000.PCX`, `010000.PCX`, `PETS.CFG`, `BPETS_V3.CFG` and `BORNPETS.CFG` are protected and are never removed or replaced. A replacement is written to a `.TMP` file first; if the volume is full the partial file is deleted, the old file stays, and the script prints a `WARN` line naming each file it could not write.
 
 #### Changing or adding assets
 

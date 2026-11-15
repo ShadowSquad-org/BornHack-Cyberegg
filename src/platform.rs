@@ -23,6 +23,26 @@ pub fn fake_uptime_ms() -> Option<u64> {
     }
 }
 
+/// The host's pinned wall clock: unix seconds, or `i64::MIN` for the system
+/// time.
+#[cfg(feature = "simulator")]
+static FAKE_UNIX: core::sync::atomic::AtomicI64 = core::sync::atomic::AtomicI64::new(i64::MIN);
+
+/// 2026-08-01 12:00 local at the default `TZ_OFFSET_QH` (8, +2 h): the instant
+/// lib tests and guide shots start from.
+#[cfg(not(feature = "embassy-core"))]
+pub const GUIDE_NOON_UNIX: u32 = 1_785_578_400;
+
+/// Pin the host wall clock: `unix_secs()` = base + fake uptime / 1000 while
+/// `Some`; `None` restores system time.
+#[cfg(feature = "simulator")]
+pub fn set_fake_unix(base: Option<u32>) {
+    FAKE_UNIX.store(
+        base.map_or(i64::MIN, i64::from),
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Milliseconds of uptime: embassy clock on firmware, process uptime on the
 /// simulator.
 pub fn uptime_ms() -> u64 {
@@ -121,6 +141,11 @@ pub fn unix_secs() -> Option<u32> {
     #[cfg(not(feature = "embassy-core"))]
     {
         use std::time::{SystemTime, UNIX_EPOCH};
+        #[cfg(feature = "simulator")]
+        match FAKE_UNIX.load(core::sync::atomic::Ordering::Relaxed) {
+            i64::MIN => {}
+            base => return Some((base + (fake_uptime_ms().unwrap_or(0) / 1000) as i64) as u32),
+        }
         Some(SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as u32)
     }
 }
@@ -140,4 +165,21 @@ pub fn device_label() -> heapless::String<16> {
         let _ = s.push_str("A3F7");
     }
     s
+}
+
+#[cfg(all(test, feature = "simulator"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_secs_follows_the_fake_clock() {
+        let _guard = crate::game::lock_test_state();
+        set_fake_unix(Some(1000));
+        set_fake_uptime_ms(5_000);
+        assert_eq!(unix_secs(), Some(1005));
+        set_fake_unix(None);
+        assert!(unix_secs().unwrap() > 1_700_000_000, "system time again");
+        set_fake_uptime_ms(u64::MAX);
+        set_fake_unix(None);
+    }
 }

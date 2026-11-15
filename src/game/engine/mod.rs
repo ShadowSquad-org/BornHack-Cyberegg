@@ -22,6 +22,7 @@ pub mod food;
 pub mod hint;
 pub mod needs;
 pub mod regime;
+pub mod scene;
 #[cfg(feature = "simulator")]
 pub mod sim;
 pub mod solver;
@@ -1121,6 +1122,17 @@ impl GameState {
         true
     }
 
+    /// The pet leaves for good now: phase Gone, no running action, not
+    /// hibernating, `realm_pending` false (the caller has pushed the record).
+    pub fn retire(&mut self) {
+        self.phase = Phase::Gone;
+        self.active_action = None;
+        self.hibernating = false;
+        self.realm_pending = false;
+        self.naming_pending = false;
+        self.request_save();
+    }
+
     /// End hibernation — progression resumes from this moment.
     /// Marks the state for immediate persistence (see `hibernate`).
     pub fn wake_from_hibernation(&mut self) -> bool {
@@ -1172,6 +1184,7 @@ type Visible = (
     bool,
     Phase,
     Option<Action>,
+    u8,
     u8,
     u8,
 );
@@ -1503,18 +1516,27 @@ impl GameState {
             self.active_action,
             self.onset_bits(),
             demo::wake_view(self),
+            scene::wake_view(self),
         )
+    }
+
+    /// Host test hook: everything a wake-up has to show. Oracles compare
+    /// this, so they never restate the view by hand.
+    #[cfg(any(test, feature = "simulator"))]
+    pub fn wake_view_for_test(&self) -> impl PartialEq + core::fmt::Debug {
+        self.visible()
     }
 
     /// The tick at which the engine must run next: when something the
     /// player can see (the [`status::StatusLine`] with its danger flag, animation, sleep, phase,
-    /// action) first changes, but never later than `MAX_SLEEP_TICKS`.
+    /// action, the background: sky and floor items) first changes, but never later than `MAX_SLEEP_TICKS`.
     ///
     /// The bisection is exact only while these hold, so keep them true:
     /// - inside one `segment` every mood term, level and rate is linear, so
     ///   "the view differs" cannot flip back (two linear terms cross once);
     /// - every line the view reads (the danger lines, the happy-mood line, the
-    ///   band edges) is a threshold edge or a `solver::sig` line, sharing one
+    ///   band edges, the floor lines) is a threshold edge or a `solver::sig`
+    ///   line (the sky switch is a `timer_bound` timer), sharing one
     ///   const with `status` and `display_anim` (`needs::*_PCT`), so no
     ///   segment steps over it unseen;
     /// - everything that ages is advanced by `advance` alone (needs do not
@@ -2560,7 +2582,7 @@ pub fn pick_save(v3: Option<&[u8]>, v2: Option<&[u8]>) -> Option<(GameState, boo
 pub const PET_NAME_MAX: usize = 12;
 
 /// Compact record of a past pet for the Unicorn Realm.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PetRecord {
     pub generation: u16,
     pub age_ticks: u32,

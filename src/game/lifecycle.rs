@@ -65,6 +65,35 @@ fn minute_of_day(unix: u32) -> u16 {
     local_min.rem_euclid(super::engine::demo::MINUTES_PER_DAY as i64) as u16
 }
 
+/// What the background shows now, without updating the pet; `None` without a
+/// game (or where no background is drawn).
+pub fn background_state() -> Option<super::engine::scene::BackgroundState> {
+    let s = unsafe { (*GAME.get()).as_ref() }?;
+    super::engine::scene::background_state(s)
+}
+
+/// Set the live pet's dirt (guide shots and tests only).
+#[cfg(any(test, feature = "simulator"))]
+pub fn debug_set_dirt_pct(pct: u8) {
+    if let Some(s) = unsafe { (*GAME.get()).as_mut() } {
+        s.dirt = (pct.min(100) as i32 * super::engine::needs::P) as u16;
+    }
+}
+
+/// A clock sync from `before` to `after` (local minutes of day) needs an
+/// immediate redraw: the sky differs, or the next switch moved earlier by
+/// more than a minute (a later switch waits for the planned wake).
+pub fn clock_sync_needs_redraw(before: Option<u16>, after: Option<u16>) -> bool {
+    use super::engine::scene::{minutes_to_switch, sky};
+    if sky(before) != sky(after) {
+        return true;
+    }
+    match (minutes_to_switch(before), minutes_to_switch(after)) {
+        (Some(was), Some(now)) => was > now + 1,
+        _ => false,
+    }
+}
+
 /// Advance the uptime tick by `delta` ticks (for tests/simulator only).
 pub fn advance_ticks(delta: u32) {
     UPTIME_TICKS.fetch_add(delta, Ordering::Relaxed);
@@ -312,11 +341,13 @@ pub fn on_wall_clock_set(now_unix: u32) {
         let uptime_s = (crate::platform::uptime_ms() / 1000) as u32;
         let saved = BOOT_SAVED_UNIX.load(Ordering::Relaxed);
         let applied = boot_catch_up_minutes(s, &CATCH_UP_DONE, saved, now_unix, uptime_s);
-        // The clock was unknown until now: the pet learns the time of day.
+        // The pet learns the time of day (or a re-sync moves it).
+        let before = s.day_min;
         s.sync_clock(now_tick(), Some(minute_of_day(now_unix)));
-        if applied.is_some_and(|m| m > 0) {
-            // The pet jumped ahead: wake the display loop so the screen, the
-            // status line show it now, not at the next scheduled wake.
+        // Wake the display loop now, not at the next scheduled wake: the pet
+        // jumped ahead (catch-up), or the sky differs or its next switch now
+        // comes before the planned wake. The loop plans the next wake again.
+        if applied.is_some_and(|m| m > 0) || clock_sync_needs_redraw(before, s.day_min) {
             crate::TOAST_SIGNAL.signal(());
         }
     }
@@ -1049,7 +1080,8 @@ pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mo
         let should_record = match s.phase {
             Phase::Hatching => false,
             Phase::Gone => s.realm_pending,
-            _ => true,
+            // A hidden Active pet was recorded by `retire_hidden_pet`.
+            _ => !is_hidden_kind(s.pet_kind),
         };
         let departing =
             should_record.then(|| PetRecord::from_game_state(s, pet_name_bytes_sync()));
@@ -1076,6 +1108,74 @@ pub fn new_generation(kind: super::engine::PetKind, money_enabled: bool, hard_mo
         }
     }
 }
+
+/// What [`retire_hidden_pet`] did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "embassy-core", derive(defmt::Format))]
+pub enum Retired {
+    Nothing,
+    ToRealm,
+    Egg,
+}
+
+/// A kind the badge cannot show: dropped from the roster for having no idle
+/// sprite, while the roster has other pets.  A kind that `PETS.CFG` merely
+/// omits is not hidden.
+pub fn is_hidden_kind(kind: super::engine::PetKind) -> bool {
+    super::pet_registry::is_hidden(kind)
+}
+
+/// Whether two records are the same pet.  Identity only: the age may differ
+/// between two boots (catch-up), so it is not compared.
+fn same_pet(a: &PetRecord, b: &PetRecord) -> bool {
+    a.generation == b.generation
+        && a.pet_kind == b.pet_kind
+        && a.vitality == b.vitality
+        && a.curiosity == b.curiosity
+        && a.resilience == b.resilience
+        && a.name[..a.name_len as usize] == b.name[..b.name_len as usize]
+}
+
+// retire_hidden_pet: begin
+/// At boot, after `drop_without_sprites` and `init`: a pet whose kind has no
+/// sprites on this badge moves to the Unicorn Realm (an egg goes back to pet
+/// selection).  Does nothing while the sprite catalogue is incomplete.
+pub fn retire_hidden_pet() -> Retired {
+    use super::engine::Phase;
+    if !super::sprite_loader::catalogue_complete() {
+        return Retired::Nothing;
+    }
+    let state = unsafe { (*GAME.get()).as_mut() };
+    let Some(s) = state else {
+        return Retired::Nothing;
+    };
+    if !is_hidden_kind(s.pet_kind) {
+        return Retired::Nothing;
+    }
+    match s.phase {
+        Phase::Gone => Retired::Nothing,
+        Phase::Hatching => {
+            // Freeze the egg: it must not hatch behind pet selection and ask
+            // for a name.  `new_generation` replaces the whole state.
+            s.hibernate();
+            super::pet_select::open_new_generation();
+            Retired::Egg
+        }
+        Phase::Active | Phase::Leaving => {
+            let record = PetRecord::from_game_state(s, pet_name_bytes_sync());
+            let realm = unsafe { &mut *REALM.get() };
+            // Newest first.  A power cut between the realm and state writes
+            // leaves the record in the realm with the pet still alive.
+            if realm.count == 0 || !same_pet(&realm.pets[0], &record) {
+                realm.push(record);
+            }
+            REALM_DIRTY.store(true, Ordering::Relaxed);
+            s.retire();
+            Retired::ToRealm
+        }
+    }
+}
+// retire_hidden_pet: end
 
 /// Get the current pet's kind (defaults to sprite prefix 0 if no game).
 pub fn pet_kind() -> super::engine::PetKind {
@@ -1803,5 +1903,246 @@ mod tests {
         set_state_for_test(None);
         assert_eq!(demo_care_label(), "Demo care: instant");
         assert!(!toggle_demo_care());
+    }
+
+    #[test]
+    fn a_clock_jump_redraws() {
+        use super::clock_sync_needs_redraw as r;
+        let m = |h: u16, mi: u16| Some(h * 60 + mi);
+        assert!(r(None, m(12, 0)));
+        assert!(!r(m(12, 0), m(12, 1)));
+        assert!(r(m(19, 0), m(20, 50)));
+        assert!(!r(m(20, 50), m(19, 0)));
+        assert!(r(m(20, 59), m(21, 0)));
+    }
+
+    #[test]
+    fn lock_test_state_pins_noon() {
+        let _guard = crate::game::lock_test_state();
+        assert_eq!(super::local_minute(), Some(720));
+    }
+}
+
+#[cfg(test)]
+mod retire_tests {
+    use super::*;
+    use crate::game::engine::{GameState, PetKind, Phase};
+    use crate::game::{pet_registry, pet_select, sprite_loader};
+
+    /// Roster 0, 1, 2 with kind 8 marked dropped; no pet, no pet selection.
+    fn setup() -> crate::game::TestState {
+        let guard = crate::game::lock_test_state();
+        pet_registry::install_test_roster();
+        pet_registry::set_dropped_for_test(1 << 8);
+        sprite_loader::set_incomplete_for_test(false);
+        pet_select::close();
+        set_state_for_test(None);
+        guard
+    }
+
+    fn teardown() {
+        pet_registry::set_dropped_for_test(0);
+        sprite_loader::set_incomplete_for_test(false);
+        pet_select::close();
+        set_state_for_test(None);
+    }
+
+    fn live(kind: u8) -> GameState {
+        let mut s = GameState::new_egg(7, PetKind(kind));
+        s.phase = Phase::Active;
+        s.age_ticks = 600 * 6;
+        // A fresh generation per pet: the dedupe must not see a record an
+        // earlier test left in the process-wide Realm.
+        static NEXT_GEN: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(100);
+        s.generation = NEXT_GEN.fetch_add(1, Ordering::Relaxed);
+        s
+    }
+
+    fn phase() -> Phase {
+        unsafe { (*GAME.get()).as_ref().unwrap().phase }
+    }
+
+    #[test]
+    fn a_hidden_pet_moves_to_the_realm() {
+        let _g = setup();
+        let pet = live(8);
+        let generation = pet.generation;
+        set_state_for_test(Some(pet));
+        set_pet_name(b"Jelly");
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), (n + 1).min(10));
+        let r = realm_pet(0).unwrap();
+        assert_eq!(r.pet_kind, PetKind(8));
+        assert_eq!(r.generation, generation);
+        assert_eq!(r.age_ticks, 600 * 6);
+        assert_eq!(&r.name[..r.name_len as usize], b"Jelly");
+        assert_eq!(display_anim(), DisplayAnim::Gone);
+        assert!(!can_use_station());
+        assert!(is_started(), "the Gone screen needs the game to draw");
+        assert!(!take_naming_pending());
+        teardown();
+    }
+
+    #[test]
+    fn the_new_egg_records_it_only_once() {
+        let _g = setup();
+        set_state_for_test(Some(live(8)));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        let n = realm_count();
+        new_generation(PetKind(0), true, false);
+        assert_eq!(realm_count(), n);
+        let s = unsafe { (*GAME.get()).as_ref().unwrap() };
+        assert_eq!(s.pet_kind, PetKind(0));
+        assert_eq!(s.phase, Phase::Hatching);
+        teardown();
+    }
+
+    #[test]
+    fn retiring_twice_records_once() {
+        let _g = setup();
+        // A non-empty Realm, so the newest-first dedupe is exercised.
+        unsafe { (*REALM.get()).push(PetRecord::from_game_state(&live(0), b"Old")) };
+        set_state_for_test(Some(live(8)));
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), (n + 1).min(10));
+        assert_eq!(retire_hidden_pet(), Retired::Nothing);
+        assert_eq!(realm_count(), (n + 1).min(10));
+        // Power cut between the realm and state writes: the record is already
+        // the newest, the pet is still alive.
+        let pet = live(8);
+        let rec = PetRecord::from_game_state(&pet, b"Jelly");
+        set_state_for_test(Some(pet));
+        set_pet_name(b"Jelly");
+        unsafe { (*REALM.get()).push(rec) };
+        let m = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), m, "no second record");
+        assert_eq!(phase(), Phase::Gone);
+        teardown();
+    }
+
+    #[test]
+    fn a_hidden_egg_goes_back_to_pet_selection() {
+        let _g = setup();
+        start_new_game(PetKind(8), true, false);
+        assert_eq!(phase(), Phase::Hatching);
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::Egg);
+        assert_eq!(realm_count(), n);
+        assert!(pet_select::is_active());
+        teardown();
+    }
+
+    #[test]
+    fn hibernating_and_demo_pets_move_too() {
+        let _g = setup();
+        let mut s = live(8);
+        s.hibernating = true;
+        set_state_for_test(Some(s));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert!(!unsafe { (*GAME.get()).as_ref().unwrap().hibernating });
+        let mut s = live(8);
+        s.demo.on = true;
+        set_state_for_test(Some(s));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(phase(), Phase::Gone);
+        teardown();
+    }
+
+    #[test]
+    fn a_known_pet_is_left_alone() {
+        let _g = setup();
+        set_state_for_test(Some(live(0)));
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::Nothing);
+        assert_eq!(phase(), Phase::Active);
+        assert_eq!(realm_count(), n);
+        teardown();
+    }
+
+    #[test]
+    fn a_kind_the_cfg_omits_is_not_hidden() {
+        let _g = setup();
+        assert!(!is_hidden_kind(PetKind(5)), "not in the roster, not dropped");
+        assert!(is_hidden_kind(PetKind(8)));
+        set_state_for_test(Some(live(5)));
+        assert_eq!(retire_hidden_pet(), Retired::Nothing);
+        teardown();
+    }
+
+    #[test]
+    fn an_incomplete_catalogue_retires_nothing() {
+        let _g = setup();
+        set_state_for_test(Some(live(8)));
+        sprite_loader::set_incomplete_for_test(true);
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::Nothing);
+        assert_eq!(phase(), Phase::Active);
+        assert_eq!(realm_count(), n);
+        teardown();
+    }
+
+    #[test]
+    fn nothing_happens_without_a_roster() {
+        // The global roster is install-once, so check the pure rule that
+        // `is_hidden_kind` uses, on an empty slice.
+        assert!(!pet_registry::hidden_in(&[], 1 << 8, PetKind(8)));
+    }
+
+    #[test]
+    fn retiring_uses_only_state_v3_and_realm() {
+        let _g = setup();
+        assert_eq!(crate::game::engine::SAVE_KEY, "state_v3");
+        set_state_for_test(Some(live(8)));
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), (n + 1).min(10));
+        assert!(REALM_DIRTY.load(Ordering::Relaxed));
+        assert!(unsafe { (*GAME.get()).as_ref().unwrap().needs_save() });
+        REALM_DIRTY.store(false, Ordering::Relaxed);
+        teardown();
+    }
+
+    #[test]
+    fn a_hidden_egg_stays_frozen_and_is_never_recorded() {
+        let _g = setup();
+        start_new_game(PetKind(8), true, false);
+        let n = realm_count();
+        assert_eq!(retire_hidden_pet(), Retired::Egg);
+        advance_ticks(10_000);
+        for _ in 0..3 {
+            cycle();
+        }
+        assert_eq!(phase(), Phase::Hatching, "the egg did not hatch");
+        assert!(!take_naming_pending(), "no naming prompt");
+        new_generation(PetKind(0), true, false);
+        assert_eq!(realm_count(), n);
+        let s = unsafe { (*GAME.get()).as_ref().unwrap() };
+        assert_eq!(s.pet_kind, PetKind(0));
+        assert_eq!(s.phase, Phase::Hatching);
+        assert!(!s.hibernating);
+        teardown();
+    }
+
+    #[test]
+    fn the_power_cut_dedupe_ignores_age_but_not_generation() {
+        let _g = setup();
+        let mut pet = live(8);
+        set_pet_name(b"Jelly");
+        let rec = PetRecord::from_game_state(&pet, b"Jelly");
+        unsafe { (*REALM.get()).push(rec) };
+        let n = realm_count();
+        pet.age_ticks += 500; // catch-up changed the age between boots
+        set_state_for_test(Some(pet.clone()));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), n, "same pet, no second record");
+        let mut other = live(8);
+        other.generation = pet.generation + 1000;
+        set_state_for_test(Some(other));
+        assert_eq!(retire_hidden_pet(), Retired::ToRealm);
+        assert_eq!(realm_count(), (n + 1).min(10), "another generation records");
+        teardown();
     }
 }

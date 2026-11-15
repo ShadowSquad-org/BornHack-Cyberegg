@@ -119,6 +119,14 @@ pub struct Outcome {
     /// first `Act::Battle`, from the pet as it stood then, averaged. 0 when
     /// the run never fought.
     pub win_pct_vs_reference: u8,
+    /// Times `scene::wake_view` changed (sky switch, floor item,
+    /// cross), per day. Counted from every segment snapshot against the last
+    /// one seen, so a change between updates (a wash, a player action) counts
+    /// too. One change is at most one background-caused refresh.
+    pub scene_changes_per_day: f32,
+    /// The scene changes where nothing else visible changed since the last
+    /// snapshot. Only these cost a refresh the pet screen would not make.
+    pub scene_only_changes_per_day: f32,
 }
 
 /// How a run starts. `run_full` is `run_with` and `Setup::default()`.
@@ -180,6 +188,10 @@ struct Probe {
     win_sum: u32,
     win_days: u32,
     win_day: u32,
+    /// The last `scene::wake_view` seen, and how often it changed.
+    last_scene: Option<(u8, Rest)>,
+    scene_changes: u32,
+    scene_only_changes: u32,
 }
 
 /// Seeded fights per day behind `win_pct_vs_reference`.
@@ -207,6 +219,9 @@ const PROBE_NEW: Probe = Probe {
     win_sum: 0,
     win_days: 0,
     win_day: u32::MAX,
+    last_scene: None,
+    scene_changes: 0,
+    scene_only_changes: 0,
 };
 
 /// The figures `note_segment` reads off the pet at one end of a segment.
@@ -219,7 +234,21 @@ pub(super) struct Snap {
     sleeping: bool,
     day_min: Option<u16>,
     phase: Phase,
+    /// The scene byte and the rest of the view; `None` on a muted look-ahead
+    /// clone, which `note_segment` never reads.
+    view: Option<(u8, Rest)>,
 }
+
+/// Everything in `Visible` but the scene byte.
+type Rest = (
+    super::status::StatusLine,
+    super::DisplayAnim,
+    bool,
+    Phase,
+    Option<super::Action>,
+    u8,
+    u8,
+);
 
 impl Snap {
     pub(super) fn of(s: &GameState) -> Self {
@@ -231,6 +260,10 @@ impl Snap {
             sleeping: s.is_sleeping,
             day_min: s.day_min,
             phase: s.phase,
+            view: (!muted()).then(|| {
+                let (a, b, c, d, e, f, g, _) = s.visible();
+                (super::scene::wake_view(s), (a, b, c, d, e, f, g))
+            }),
         }
     }
 }
@@ -346,6 +379,15 @@ pub(super) fn note_segment(before: Snap, after: Snap, dt: u32) {
         let mut v = p.get();
         v.mood_sum2 += (before.mood as i64 + after.mood as i64) * dt as i64;
         v.minutes += dt as u64;
+        for (scene, rest) in [before.view, after.view].into_iter().flatten() {
+            if let Some((last, last_rest)) = v.last_scene
+                && last != scene
+            {
+                v.scene_changes += 1;
+                v.scene_only_changes += (last_rest == rest) as u32;
+            }
+            v.last_scene = Some((scene, rest));
+        }
         v.min_health = v.min_health.min(before.health).min(after.health);
         for (acc, m) in v
             .band_min
@@ -697,6 +739,8 @@ pub fn run_with(routine: Routine, days: u32, driver: Driver, seed: u64, setup: S
             } else {
                 (probe.win_sum as f64 * 100.0 / (WIN_SAMPLE * probe.win_days) as f64).round() as u8
             },
+            scene_changes_per_day: probe.scene_changes as f32 / days_run,
+            scene_only_changes_per_day: probe.scene_only_changes as f32 / days_run,
         },
         wake_queries: queries,
         wake_calls_total: calls_total,

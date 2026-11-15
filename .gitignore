@@ -7,6 +7,7 @@ docs
 .claude
 CLAUDE.MD
 *.txt
+!assets/asset-changes.txt
 .rules
 MERGE_NOTES.md
 

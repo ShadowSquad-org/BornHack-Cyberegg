@@ -31,6 +31,10 @@ The **status line** under the pet names the one or two things that need you most
 
 If you're putting the badge away for more than a few hours, open the action menu and **Hibernate**. Stats freeze until you wake the pet. Forget to hibernate before storing the badge and the pet decays — by the time you find it again it may have starved.
 
+### Sky and floor
+
+The game screen has a background. By day the sky is white with a sun and a small cloud; at night it is a dark dither with a moon and stars, following the badge clock (the night hours are `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` in `BPETS_V3.CFG`). With no clock set the sky stays plain white. The night sky is only the hour, not the pet's bedtime. As dirt rises, items pile up on the floor, one more at each of the `FLOOR_*_DIRT_PCT` lines, and a wash clears them. A poorly pet gets a small red cross. A hibernating pet has no sky. The sky costs no extra screen flashes.
+
 ### Demo mode
 
 Demo mode turns the pet into a desk companion that looks after itself. It eats, drinks, washes, sleeps, plays and takes its medicine and insulin on its own, and it says what it did in a short note under the pet ("had an apple", "off to bed"). Its condition wanders but it never gets bad enough to leave, and it never exercises: that stays your job, so a demo pet that gets unfit says "I feel stiff." in the hint. It follows the badge clock for bedtime, or its own rhythm while the clock is not set. Demo pets keep a small black **D** under the battery bar on the game screen. HAX is paused while demo is on (hidden, not lost) and comes back when you turn demo off.
@@ -423,8 +427,15 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `BATTLE_PRIZE_BEACON_MIN` | 30 | 30 |
 | `BATTLE_DECLINE_MOOD_PCT` | 3 | 3 |
 | `BATTLE_DECLINE_MIN` | 60 | 60 |
+| `BG_NIGHT_FROM_MIN` | 1260 | 1260 |
+| `BG_NIGHT_TO_MIN` | 420 | 420 |
+| `FLOOR_CRUMBS_DIRT_PCT` | 40 | 40 |
+| `FLOOR_PEEL_DIRT_PCT` | 55 | 55 |
+| `FLOOR_CAN_DIRT_PCT` | 70 | 70 |
+| `FLOOR_SOCK_DIRT_PCT` | 85 | 85 |
+| `FLOOR_PIZZA_DIRT_PCT` | 95 | 95 |
 
-Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. Unknown keys are logged and skipped.
+Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. The five `FLOOR_*_DIRT_PCT` lines must rise in order, and `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` must differ: if not, all five floor lines (or both night minutes) fall back to the preset together. Unknown keys are logged and skipped.
 
 To go back to a preset, delete `BPETS_V3.CFG` from the drive and reboot.
 
@@ -467,7 +478,10 @@ The prefix (decimal) picks the sprite slot:
 | `0` `1` `2` | The built-ins (Bartholomeus, Cat, Slug) — listing one just **renames** it |
 | `3` `4` | Reserved (sponsor slides, menu icons) — ignored      |
 | `5` `6` `7` | **New pets** — appear in the hatchery roster     |
-| `8`+    | Out of range — ignored                               |
+| `8`     | Free pet slot (the Jellyfish used it; no shipped pet) |
+| `9`+    | Out of range — ignored                               |
+
+The Jellyfish (prefix `8`) has left the shipped roster. An old badge whose `PETS.CFG` still lists `8=Jellyfish` keeps that name for the Unicorn Realm. With no `08` sprites the Jellyfish cannot be picked, and a live one moves to the Realm.
 
 Names are ASCII only, max 16 characters (longer is truncated, a
 non-ASCII character truncates at that point). Malformed lines are

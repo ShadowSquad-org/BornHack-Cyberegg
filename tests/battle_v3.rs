@@ -1252,15 +1252,8 @@ mod decline {
         );
     }
 
-    fn obs(s: &GameState) -> impl PartialEq + use<> {
-        (
-            status_line(s),
-            s.display_anim(),
-            s.is_sleeping,
-            s.phase,
-            s.active_action,
-            s.onset_bits(),
-        )
+    fn obs(s: &GameState) -> String {
+        format!("{:?}", s.wake_view_for_test())
     }
 
     #[test]
