@@ -55,7 +55,7 @@ The game engine was rebuilt (the "v3" engine). Everything below is on `main`.
   triggers and a time-skip, so the multi-day arcs can be tested in seconds.
 
 The player's guide is the best description of how it plays:
-[build it](#players-guide) with `make guide`. [GAME.md](GAME.md) has the
+**[read the PDF](guide/bornpets-guide.pdf)**. [GAME.md](GAME.md) has the
 rules in markdown.
 
 ### Mesh social features
@@ -140,8 +140,8 @@ If you just got a badge, start here:
 | **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking |
 | **[USER_NFC.md](USER_NFC.md)** | NFC station taps via the BadgeCtl app |
 
-The BornPets player's guide is a PDF you build yourself, see
-[Player's guide](#players-guide). The rest of this README is developer-facing.
+**Playing BornPets? Read the [player's guide (PDF)](guide/bornpets-guide.pdf).**
+The rest of this README is developer-facing.
 
 ## Hardware
 
@@ -205,7 +205,10 @@ is the audit of the old rules that led to v3.
 ### Player's guide
 
 The BornPets player's guide is a booklet in [Typst](https://typst.app/) under
-`guide/`. No PDF is checked in; build it:
+`guide/`. A built copy is checked in at
+[`guide/bornpets-guide.pdf`](guide/bornpets-guide.pdf); copy a fresh
+`guide/out/bornpets-guide.pdf` over it when the game or the guide changes.
+To build it:
 
 ```bash
 make guide        # build all inputs, compile, check -> guide/out/bornpets-guide.pdf
@@ -771,8 +774,8 @@ Read the [`Makefile`](Makefile) for the full list. The main ones:
 
 ## Game engine
 
-> **Looking for how to play?** Build the [player's guide](#players-guide) or
-> read [GAME.md](GAME.md).
+> **Looking for how to play?** Read the [player's guide (PDF)](guide/bornpets-guide.pdf)
+> or [GAME.md](GAME.md).
 
 The BornPets game runs on the **v3 engine** in [`src/game/engine/`](src/game/engine/). It does not tick every 10 seconds. It advances the pet over any time span in closed form (`advance.rs`), and the solver (`solver.rs`) finds the next moment something visible changes, so the CPU can sleep until then (at most 2 hours, `MAX_SLEEP_TICKS`). The engine has no dependency on embassy or hardware: it is `no_std` Rust that runs the same on the badge and in host-side tests. `engine/sim.rs` holds a minute-stepping oracle that the tests compare the delta engine against.
 
