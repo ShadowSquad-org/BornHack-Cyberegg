@@ -568,8 +568,18 @@ async fn main(spawner: Spawner) {
     // ── Game engine + sprite loader ─────────────────────────────────────
     #[cfg(feature = "game")]
     {
-        bornhack_aegg::game::lifecycle::init().await;
         bornhack_aegg::game::sprite_loader::init().await;
+        bornhack_aegg::game::pet_registry::drop_without_sprites(|id| {
+            let idle = bornhack_aegg::game::engine::anim_files::anim_id_for(
+                bornhack_aegg::game::engine::DisplayAnim::Idle,
+            );
+            bornhack_aegg::game::sprite_loader::count_anim_frames(id, idle) > 0
+        });
+        bornhack_aegg::game::lifecycle::init().await;
+        defmt::info!(
+            "game: retire hidden pet: {}",
+            bornhack_aegg::game::lifecycle::retire_hidden_pet()
+        );
     }
 
     // ── Temperature ──────────────────────────────────────────────────────
@@ -903,7 +913,7 @@ async fn display_loop(
         // open and close; we consume it with `swap` so the redraw applies
         // once.  The expensive full refresh is now promoted automatically
         // inside `update_partial` once the cumulative changed-pixel counter
-        // reaches `full_after_screens` (5 screens) — see `should_force_full`.
+        // reaches `full_after_screens` (3 screens, the vendor default) — see `should_force_full`.
         // First iteration after boot (last_screen == 0xFF) skips since boot
         // already drove a clean frame.
         let screen_changed = last_screen != 0xFF && last_screen != active_screen;
@@ -1005,8 +1015,25 @@ async fn display_loop(
                         // `partial_idle` above keeps this from re-flashing once
                         // the message is drawn.
                         #[cfg(feature = "game")]
+                        // A change that leaves the red plane alone (sky switch,
+                        // floor pile under a red line) needs no red seating, so
+                        // it stays on the quiet delta path.
                         let game_status = active_screen == bornhack_aegg::SCREEN_GAME
-                            && bornhack_aegg::game::status_wants_full_refresh();
+                            && bornhack_aegg::game::status_wants_full_refresh()
+                            && partial_state.bbox_of_dirty().is_some_and(|b| {
+                                bornhack_aegg::refresh_decision::touches_red(
+                                    b.x,
+                                    b.y,
+                                    b.w,
+                                    b.h,
+                                    |x, y| {
+                                        partial_state.is_dirty(x, y)
+                                            && (partial_state.pending_color(x, y) == Some(Color::Red)
+                                                || partial_state.shadow_color(x, y)
+                                                    == Some(Color::Red))
+                                    },
+                                )
+                            });
                         #[cfg(not(feature = "game"))]
                         let game_status = false;
                         // Text-entry is a fast-changing overlay on top of

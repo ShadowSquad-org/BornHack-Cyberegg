@@ -90,3 +90,25 @@ fn sprites_cover_the_roster_without_sponsors() {
         assert!(!n.starts_with("03") && !n.starts_with("04"), "sponsor/icon art {n}");
     }
 }
+
+/// Run `guide shot NAME` and return its PNG bytes and non_white count.
+fn shot_png(name: &str, tag: &str) -> (Vec<u8>, usize) {
+    let dir = out_dir(tag);
+    let o = guide(&["shot", name, "--out", dir.to_str().unwrap()]);
+    assert!(o.status.success(), "shot {name}: {}", String::from_utf8_lossy(&o.stderr));
+    let line = text(&o);
+    let n: usize = line.trim().rsplit('=').next().unwrap().parse().expect("non_white");
+    (std::fs::read(dir.join(format!("{name}.png"))).unwrap(), n)
+}
+
+#[test]
+fn every_shot_is_drawn_at_noon_unless_it_says_night() {
+    let (a, na) = shot_png("content", "noon_a");
+    let (b, nb) = shot_png("content", "noon_b");
+    assert_eq!(na, nb);
+    assert!(a == b, "two runs of the same shot differ: the host clock leaks in");
+    let (_, night) = shot_png("night", "night");
+    assert!(night >= na + 3_000, "night {night} vs content {na}: no dithered sky");
+    let (_, day) = shot_png("day", "day");
+    assert_eq!(day, na, "day is a copy of content at noon");
+}

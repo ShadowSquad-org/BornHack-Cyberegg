@@ -383,6 +383,14 @@ thresholds_table! {
     DEMO_PICK_WATER_PCT: u8,
     DEMO_PICK_COLA_PCT: u8,
     DEMO_PICK_GAME_PCT: u8,
+    // Backgrounds (plan 7). Display lines, not balance.
+    BG_NIGHT_FROM_MIN: u16,
+    BG_NIGHT_TO_MIN: u16,
+    FLOOR_CRUMBS_DIRT_PCT: u8,
+    FLOOR_PEEL_DIRT_PCT: u8,
+    FLOOR_CAN_DIRT_PCT: u8,
+    FLOOR_SOCK_DIRT_PCT: u8,
+    FLOOR_PIZZA_DIRT_PCT: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +720,13 @@ impl Thresholds {
         DEMO_PICK_WATER_PCT: 70,
         DEMO_PICK_COLA_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
+        BG_NIGHT_FROM_MIN: 1260,
+        BG_NIGHT_TO_MIN: 420,
+        FLOOR_CRUMBS_DIRT_PCT: 40,
+        FLOOR_PEEL_DIRT_PCT: 55,
+        FLOOR_CAN_DIRT_PCT: 70,
+        FLOOR_SOCK_DIRT_PCT: 85,
+        FLOOR_PIZZA_DIRT_PCT: 95,
     };
 
     /// Half-speed decay, doubled lifetimes, more generous action relief.
@@ -1038,6 +1053,13 @@ impl Thresholds {
         DEMO_PICK_WATER_PCT: 70,
         DEMO_PICK_COLA_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
+        BG_NIGHT_FROM_MIN: 1260,
+        BG_NIGHT_TO_MIN: 420,
+        FLOOR_CRUMBS_DIRT_PCT: 40,
+        FLOOR_PEEL_DIRT_PCT: 55,
+        FLOOR_CAN_DIRT_PCT: 70,
+        FLOOR_SOCK_DIRT_PCT: 85,
+        FLOOR_PIZZA_DIRT_PCT: 95,
     };
 }
 
@@ -1903,6 +1925,27 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("DEMO_PICK_GAME_PCT", |t, v| {
         t.DEMO_PICK_GAME_PCT = v.min(100) as u8
     }),
+    ("BG_NIGHT_FROM_MIN", |t, v| {
+        t.BG_NIGHT_FROM_MIN = clamp_u16(v).min(DAY_LAST_MIN)
+    }),
+    ("BG_NIGHT_TO_MIN", |t, v| {
+        t.BG_NIGHT_TO_MIN = clamp_u16(v).min(DAY_LAST_MIN)
+    }),
+    ("FLOOR_CRUMBS_DIRT_PCT", |t, v| {
+        t.FLOOR_CRUMBS_DIRT_PCT = clamp_pct(v)
+    }),
+    ("FLOOR_PEEL_DIRT_PCT", |t, v| {
+        t.FLOOR_PEEL_DIRT_PCT = clamp_pct(v)
+    }),
+    ("FLOOR_CAN_DIRT_PCT", |t, v| {
+        t.FLOOR_CAN_DIRT_PCT = clamp_pct(v)
+    }),
+    ("FLOOR_SOCK_DIRT_PCT", |t, v| {
+        t.FLOOR_SOCK_DIRT_PCT = clamp_pct(v)
+    }),
+    ("FLOOR_PIZZA_DIRT_PCT", |t, v| {
+        t.FLOOR_PIZZA_DIRT_PCT = clamp_pct(v)
+    }),
 ];
 
 /// Last minute of the day, the most a bedtime or getting-up line can be.
@@ -2014,6 +2057,26 @@ pub fn validate(t: &Thresholds, preset: &Thresholds) -> Thresholds {
     ] {
         *base = (*base).min(max - 1);
         *spread = (*spread).min(max - *base).max(1);
+    }
+    // Backgrounds (plan 7): the floor lines rise, and the night window has
+    // a start and an end that differ.
+    let lines = [
+        r.FLOOR_CRUMBS_DIRT_PCT,
+        r.FLOOR_PEEL_DIRT_PCT,
+        r.FLOOR_CAN_DIRT_PCT,
+        r.FLOOR_SOCK_DIRT_PCT,
+        r.FLOOR_PIZZA_DIRT_PCT,
+    ];
+    if lines[0] < 1 || lines.windows(2).any(|w| w[0] >= w[1]) {
+        r.FLOOR_CRUMBS_DIRT_PCT = preset.FLOOR_CRUMBS_DIRT_PCT;
+        r.FLOOR_PEEL_DIRT_PCT = preset.FLOOR_PEEL_DIRT_PCT;
+        r.FLOOR_CAN_DIRT_PCT = preset.FLOOR_CAN_DIRT_PCT;
+        r.FLOOR_SOCK_DIRT_PCT = preset.FLOOR_SOCK_DIRT_PCT;
+        r.FLOOR_PIZZA_DIRT_PCT = preset.FLOOR_PIZZA_DIRT_PCT;
+    }
+    if r.BG_NIGHT_FROM_MIN == r.BG_NIGHT_TO_MIN {
+        r.BG_NIGHT_FROM_MIN = preset.BG_NIGHT_FROM_MIN;
+        r.BG_NIGHT_TO_MIN = preset.BG_NIGHT_TO_MIN;
     }
     r
 }

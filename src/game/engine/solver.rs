@@ -11,6 +11,7 @@ use super::advance::{LEAVING_SCALE, SLOW_SCALE};
 use super::demo;
 use super::needs::{self, MAX, NEEDS, Need, P};
 use super::regime::{energy_cap, health_ceiling, mood_penalty, rates};
+use super::scene;
 use super::thresholds as t;
 use super::{GameState, Phase};
 
@@ -66,7 +67,13 @@ fn extra_levels(s: &GameState, need: Need) -> ([i32; MAX_EXTRA], usize) {
         }
         Need::Dirt => {
             v[0] = lvl(t::DMG_DIRT_PCT());
-            1
+            // Each floor item appears on its own dirt line. Kept although no
+            // test fails without it: `next_wake_tick` invariant 2 (every line
+            // the view reads is a segment boundary).
+            for (slot, line) in scene::floor_lines().into_iter().enumerate() {
+                v[1 + slot] = lvl(line) - 1;
+            }
+            1 + scene::FLOOR_ITEMS
         }
         Need::Booze => {
             v[..6].copy_from_slice(&[
@@ -217,6 +224,10 @@ fn timer_bound(s: &GameState) -> u32 {
         for minutes in demo::timers(s) {
             plain(minutes as i64);
         }
+    }
+    // The sky switch only cuts segments: no regime term reads it.
+    if let Some(m) = scene::minutes_to_switch(s.day_min) {
+        plain(m as i64);
     }
     let asleep = s.is_sleeping;
     let at_cap = asleep && s.energy as i32 >= energy_cap(s);

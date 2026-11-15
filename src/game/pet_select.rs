@@ -320,21 +320,7 @@ mod tests {
     /// runs test functions on multiple threads by default, so without
     /// serialization these would race each other. Every test takes the shared
     /// game-wide test lock first and resets the statics it touches.
-    /// Stand in for the boot-time `PETS.CFG` load: with no built-in pets the
-    /// roster is empty until something installs one, and every test below
-    /// needs at least two rows to move a cursor over.  `install` is
-    /// once-only and idempotent, so calling it from each test is safe
-    /// whatever order they run in.
-    fn install_test_roster() {
-        use crate::game::pet_registry::{self, PetDef};
-        let mut defs: heapless::Vec<PetDef, 3> = heapless::Vec::new();
-        for (id, name) in [(0u8, "One"), (1, "Two"), (2, "Three")] {
-            let mut n = heapless::String::new();
-            let _ = n.push_str(name);
-            let _ = defs.push(PetDef { id, name: n });
-        }
-        pet_registry::install(&defs);
-    }
+    use crate::game::pet_registry::install_test_roster;
 
     /// Up at the top of the roster used to be a no-op; it should now wrap
     /// to the last pet, and Down at the bottom should wrap back to the

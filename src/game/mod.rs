@@ -14,6 +14,7 @@
 //! └───────────────────────────────────────┘  y = 152
 //! ```
 
+pub mod background;
 pub mod battle;
 pub mod battle_view;
 pub mod blackhole;
@@ -36,6 +37,7 @@ pub mod pacing;
 pub mod pet_registry;
 pub mod pets_cfg;
 pub mod pet_select;
+pub mod realm_picture;
 pub mod realm_view;
 pub mod settings;
 pub mod sprite_loader;
@@ -409,6 +411,9 @@ const ALERT_ALCOHOL_HINT: &str = "Give rehab soon";
 /// The gone screen: the farewell (when there is no farewell animation) and
 /// the two prompt lines.
 const GONE_LEFT: &str = "Your pet has left";
+/// Replaces `GONE_LEFT` for a pet moved to the Unicorn Realm because the badge
+/// has no sprites for its kind.
+const RETIRED_LINES: [&str; 2] = ["Moved to the", "Unicorn Realm"];
 const GONE_PROMPT: [&str; 2] = ["Press Fire", "for a new egg"];
 /// The pet area when the sprite files are missing.
 const NO_SPRITES: &str = "No sprites on flash";
@@ -432,7 +437,7 @@ pub fn screen_words() -> std::vec::Vec<(&'static str, &'static str)> {
     for text in [ALERT_DIABETES_HINT, ALERT_ALCOHOL_HINT, GONE_LEFT, NO_SPRITES] {
         out.push(("screen", text));
     }
-    for line in GONE_PROMPT {
+    for line in RETIRED_LINES.into_iter().chain(GONE_PROMPT) {
         out.push(("screen", line));
     }
     out.push(("screen", NAME_PROMPT));
@@ -676,6 +681,27 @@ where
         .draw(display)
 }
 
+/// The background behind the pet, when there is one and sprites exist
+/// (`frame_count() > 0`). Nothing while a full-screen view, a mini-game or a
+/// takeover alert is up: the screen returns early then, and the "No sprites
+/// on flash" text stays on white.
+pub(crate) fn draw_backdrop<D>(display: &mut D) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = TriColor>,
+{
+    if sprite_loader::frame_count() == 0
+        || full_screen_view_up()
+        || DIABETES_ALERT.is_active()
+        || ALCOHOLISM_ALERT.is_active()
+    {
+        return Ok(());
+    }
+    match lifecycle::background_state() {
+        Some(bg) => background::draw_background(display, &bg),
+        None => Ok(()),
+    }
+}
+
 /// Draw the status line at the bottom of the pet area: bottom-centred, bold
 /// black (bold red in danger), each line on a white backing of its own width
 /// plus [`STATUS_BACKING_PAD`] so it reads over the sprite. A second line sits
@@ -812,6 +838,12 @@ where
             
             use embedded_graphics::text::{Text};
             let style = crate::ui::TOP_LEFT;
+            // White backing per line, so red text reads on the night sky.
+            let pad = Point::new(STATUS_BACKING_PAD / 2, 0);
+            for (i, line) in msg.split('\n').enumerate() {
+                let at = TOAST_POS + Point::new(0, i as i32 * TOAST_LINE_DY);
+                draw_backing(display, at - pad, backing_width(line))?;
+            }
             Text::with_text_style(
                 msg,
                 TOAST_POS,
@@ -909,22 +941,6 @@ where
         crate::draw_battery_bar(display, x, BATTERY_Y, pct)?;
     }
 
-    // HAX balance — top-right, below the battery icon + menu icon row
-    // (y=33 clears the icons; y=16 overlapped them). Larger bold font.
-    // Hidden entirely when money mode is disabled for this pet.
-    if lifecycle::money_enabled() {
-        let right_style = crate::ui::TOP_RIGHT;
-        let mut money_buf: heapless::String<12> = heapless::String::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut money_buf,
-            format_args!("{} H", lifecycle::money()),
-        );
-        // Reuse the already-linked bold font (FONT_7X13_BOLD via `font`) —
-        // pulling in a second glyph table (9x15) overflowed FLASH by ~12 KB.
-        Text::with_text_style(money_buf.as_str(), HAX_POS, font, right_style)
-            .draw(display)?;
-    }
-
     // Sim-only sprite blit: in firmware the async `render()` blits sprites
     // from FAT12 between display refreshes; the simulator has no flash, so
     // we resolve PCX assets directly from `assets/to-badge/` here.  Drawn
@@ -934,6 +950,8 @@ where
     #[cfg(feature = "simulator")]
     {
         use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+        draw_backdrop(display)?;
 
         use engine::anim_files;
         // Per-animation start delta: when the anim id changes we pin
@@ -977,6 +995,25 @@ where
         }
     }
 
+    // HAX balance — top-right, below the battery icon + menu icon row
+    // (y=33 clears the icons; y=16 overlapped them). Larger bold font.
+    // Hidden entirely when money mode is disabled for this pet.
+    if lifecycle::money_enabled() {
+        let right_style = crate::ui::TOP_RIGHT;
+        let mut money_buf: heapless::String<12> = heapless::String::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut money_buf,
+            format_args!("{} H", lifecycle::money()),
+        );
+        // Reuse the already-linked bold font (FONT_7X13_BOLD via `font`) —
+        // pulling in a second glyph table (9x15) overflowed FLASH by ~12 KB.
+        // White backing, so the balance reads over the night sky.
+        let w = backing_width(money_buf.as_str());
+        draw_backing(display, Point::new(HAX_POS.x - w, HAX_POS.y), w)?;
+        Text::with_text_style(money_buf.as_str(), HAX_POS, font, right_style)
+            .draw(display)?;
+    }
+
     // ── Not started ──────────────────────────────────────────────────────
     if !lifecycle::is_started() {
         // Start screen graphic is blitted by render(); only battery shown here.
@@ -1007,12 +1044,25 @@ where
             modal::close();
         }
         // Farewell animation blitted by embassy.rs if available.
-        if sprite_loader::frame_count() == 0 {
-            Text::with_text_style(GONE_LEFT, Point::new(76, 50), font_red, centered)
-                .draw(display)?;
-        }
-        Text::with_text_style(GONE_PROMPT[0], Point::new(76, 90), font_red, centered).draw(display)?;
-        Text::with_text_style(GONE_PROMPT[1], Point::new(76, 106), font_red, centered)
+        // Where the prompt goes: a pet moved to the Realm gets the unicorn
+        // picture on top, so its lines sit lower.
+        let prompt_ys = if lifecycle::is_hidden_kind(lifecycle::pet_kind()) {
+            realm_picture::draw_realm_picture(display, Point::new(28, 4))?;
+            for (line, y) in RETIRED_LINES.into_iter().zip([84, 100]) {
+                Text::with_text_style(line, Point::new(76, y), font_red, centered)
+                    .draw(display)?;
+            }
+            [122, 138]
+        } else {
+            if sprite_loader::frame_count() == 0 {
+                Text::with_text_style(GONE_LEFT, Point::new(76, 50), font_red, centered)
+                    .draw(display)?;
+            }
+            [90, 106]
+        };
+        Text::with_text_style(GONE_PROMPT[0], Point::new(76, prompt_ys[0]), font_red, centered)
+            .draw(display)?;
+        Text::with_text_style(GONE_PROMPT[1], Point::new(76, prompt_ys[1]), font_red, centered)
             .draw(display)?;
         return Ok(());
     }
@@ -1102,6 +1152,15 @@ where
 
         // After hatching completes, prompt the player to name their pet.
         prompt_for_name();
+
+        // The background goes down first; the sprite blits on top. Drop an
+        // expired alert first (as `draw_screen_game` does), or the backdrop
+        // would skip this frame while the game screen is drawn anyway.
+        DIABETES_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
+        ALCOHOLISM_ALERT.clear_if_elapsed(DIABETES_ALERT_MIN_VISIBLE_MS);
+        if draw_backdrop(display).is_err() {
+            defmt::warn!("game: backdrop draw failed");
+        }
     }
 
     // Blit sprite from flash.
@@ -1147,11 +1206,12 @@ where
     }
 
     // Debug: show animation name when no artwork loaded.
-    if !has_sprite && lifecycle::is_started() {
+    if !has_sprite && lifecycle::is_started() && lifecycle::display_anim() != DisplayAnim::Gone {
         use embedded_graphics::text::{Text};
 
         let anim = lifecycle::display_anim();
         let anim_name: &str = match anim {
+            // Unreachable: the guard above excludes Gone; kept for exhaustiveness.
             DisplayAnim::Gone => "GONE",
             DisplayAnim::Hibernating => "HIBERNATE",
             DisplayAnim::Hatching { .. } => "HATCHING",
@@ -1247,7 +1307,10 @@ static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn lock_test_state() -> TestState {
-    TestState(TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    let guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Lib tests run at noon, whatever the hour of the build.
+    crate::platform::set_fake_unix(Some(crate::platform::GUIDE_NOON_UNIX));
+    TestState(guard)
 }
 
 /// Every full-screen view the lib.rs and game draw dispatch handles under the
@@ -1271,6 +1334,7 @@ const FULL_SCREEN_VIEWS: [(&str, fn(), fn()); 12] = [
 #[cfg(test)]
 impl Drop for TestState {
     fn drop(&mut self) {
+        crate::platform::set_fake_unix(None);
         TOAST.clear();
         DIABETES_ALERT.clear();
         ALCOHOLISM_ALERT.clear();
@@ -1518,7 +1582,7 @@ mod tests {
     use super::test_canvas::Canvas;
     use super::{SEP_BOT, draw_status_line};
     use crate::game::engine::status::{StatusLine, Word};
-    use crate::{BLACK, RED};
+    use crate::{BLACK, RED, WHITE};
     use embedded_graphics::prelude::*;
     use embedded_graphics::primitives::Rectangle;
 
@@ -1671,6 +1735,69 @@ mod tests {
         assert_eq!(super::next_ui_deadline_tick(), u32::MAX);
         super::modal::close();
         crate::game::lifecycle::set_state_for_test(None);
+    }
+
+    #[test]
+    fn the_gone_screen_says_where_it_went() {
+        use crate::game::engine::{GameState, PetKind, Phase};
+        use crate::game::pet_registry;
+        let _guard = super::lock_test_state();
+        let _clear = ClearPet;
+        pet_registry::install_test_roster();
+        pet_registry::set_dropped_for_test(1 << 8);
+        let nav = crate::game::nav::get_nav();
+        let draw = |kind: u8| {
+            let mut s = GameState::new_egg(7, PetKind(kind));
+            s.phase = Phase::Gone;
+            crate::game::lifecycle::set_state_for_test(Some(s));
+            let mut c = Canvas::new();
+            super::draw_screen_game(&mut c, nav).unwrap();
+            c
+        };
+        let retired = draw(8);
+        assert!(retired.any(rows(76, 88), RED), "first line");
+        assert!(retired.any(rows(92, 104), RED), "second line");
+        assert!(retired.any(rows(114, 128), RED), "Press Fire");
+        assert!(retired.any(rows(130, 144), RED), "for a new egg");
+        // frame_count() is u8::MAX on the simulator, so a farewell-less kind 0
+        // draws no text of its own in these rows.
+        let left = draw(0);
+        assert!(!left.any(rows(42, 70), RED), "no retired lines for a known kind");
+        // The normal gone screen is unchanged: no picture, prompt where it was.
+        assert!(left.any(rows(82, 96), RED), "Press Fire stays put");
+        assert!(left.any(rows(98, 112), RED), "for a new egg stays put");
+        assert!(!left.any(rows(114, 151), RED), "nothing lower");
+        // The retired screen carries the picture, and no text touches its box.
+        let (pw, ph) = (
+            crate::game::realm_picture::WIDTH as i32,
+            crate::game::realm_picture::HEIGHT as i32,
+        );
+        let mut want = Canvas::new();
+        crate::game::realm_picture::draw_realm_picture(&mut want, Point::new(28, 4)).unwrap();
+        // (The test canvas also draws the sky backdrop, which the picture sits on.)
+        let (mut ink, mut on_retired, mut on_left) = (0, 0, 0);
+        for y in 4..4 + ph {
+            for x in 28..28 + pw {
+                if want.get(x, y) != WHITE {
+                    ink += 1;
+                    on_retired += (retired.get(x, y) == want.get(x, y)) as u32;
+                    on_left += (left.get(x, y) == want.get(x, y)) as u32;
+                }
+            }
+        }
+        assert!(ink > 200, "the picture has ink");
+        assert_eq!(on_retired, ink, "every picture pixel is on the realm screen");
+        assert!(on_left < ink / 10, "the normal gone screen has no picture");
+        assert!(!retired.any(rows(68, 75), RED), "gap between picture and text");
+        assert!(want.any(rows(4, 67), RED), "the picture has red");
+        assert!(want.any(rows(4, 67), BLACK), "the picture has black");
+        // All text rows stay on the screen: the last row of ink is above 152.
+        assert!(retired.any(rows(140, 151), RED));
+        pet_registry::set_dropped_for_test(0);
+        for line in super::RETIRED_LINES {
+            assert!(line.len() <= 21, "{line}");
+            assert!(super::screen_words().iter().any(|(_, w)| *w == line), "{line}");
+        }
     }
 
     #[test]
@@ -1873,6 +2000,280 @@ mod tests {
             crate::draw_graphics(&mut c, "", &100).unwrap();
             assert!(!mark_drawn(&c), "{name} is up");
             close();
+        }
+    }
+
+    /// The background behind the pet, on the game screen (simulator draws it
+    /// in-line, the firmware in `render`).
+    #[cfg(feature = "simulator")]
+    mod backdrop {
+        use crate::BLACK;
+        use crate::game::engine::needs::P;
+        use crate::game::engine::{GameState, PetKind, Phase};
+        use crate::game::test_canvas::Canvas;
+        use crate::game::*;
+
+        struct ClearPet;
+        impl Drop for ClearPet {
+            fn drop(&mut self) {
+                lifecycle::set_state_for_test(None);
+            }
+        }
+
+        const NIGHT_MIN: Option<u16> = Some(23 * 60);
+
+        fn pet(day_min: Option<u16>) -> GameState {
+            let mut s = GameState::new_egg(7, PetKind(0));
+            s.phase = Phase::Active;
+            s.day_min = day_min;
+            s.money_enabled = true;
+            s.money = 120;
+            s
+        }
+
+        fn screen() -> Canvas {
+            let mut c = Canvas::new();
+            draw_screen_game(&mut c, nav::get_nav()).unwrap();
+            c
+        }
+
+        fn boxed(x: i32, y: i32, w: i32, h: i32) -> Rectangle {
+            Rectangle::new(Point::new(x, y), Size::new(w as u32, h as u32))
+        }
+
+        fn same_in(a: &Canvas, b: &Canvas, area: Rectangle, what: &str) {
+            for p in area.points() {
+                assert_eq!(a.get(p.x, p.y), b.get(p.x, p.y), "{what} differs at {p:?}");
+            }
+        }
+
+        fn differs_in(a: &Canvas, b: &Canvas, area: Rectangle) -> bool {
+            area.points().any(|p| a.get(p.x, p.y) != b.get(p.x, p.y))
+        }
+
+        #[test]
+        fn a_wake_with_an_unchanged_view_draws_the_same_screen() {
+            // A wake up to two minutes before a sky switch finds the same
+            // view. The firmware drives the panel only for pixels that differ
+            // (`partial_idle` on the SSD1675, `delta.build` on the SSD1680), so
+            // the whole screen (pet, status, scene) must be identical.
+            use crate::game::engine::TICKS_PER_MINUTE;
+            use crate::game::engine::scene::wake_view;
+
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let mut s = pet(Some(20 * 60 + 57)); // the switch is at 21:00
+            s.fullness = (60 * P) as u16;
+            s.hydration = (60 * P) as u16;
+            s.energy = (80 * P) as u16;
+            s.health = (95 * P) as u16;
+            s.mood = (90 * P) as u16;
+            s.fun = (60 * P) as u16;
+            s.dirt = 0;
+            s.booze = 0;
+            let t0 = s.last_update_tick;
+            lifecycle::set_state_for_test(Some(s.clone()));
+            let before = screen();
+            s.update(t0 + TICKS_PER_MINUTE);
+            let view = wake_view(&s);
+            lifecycle::set_state_for_test(Some(s.clone()));
+            let wake = screen();
+            let whole = boxed(0, 0, 152, 152);
+            same_in(&before, &wake, whole, "the screen at a same-view wake");
+            s.update(t0 + 3 * TICKS_PER_MINUTE);
+            assert_ne!(wake_view(&s), view, "21:00 switches the sky");
+            lifecycle::set_state_for_test(Some(s));
+            assert!(
+                differs_in(&wake, &screen(), boxed(0, 35, 152, 75)),
+                "the switch is on the screen"
+            );
+        }
+
+        #[test]
+        fn hax_reads_at_night() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let plain = screen();
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let night = screen();
+            let w = backing_width("120 H");
+            let hax = boxed(HAX_POS.x - w, 35, w, 11);
+            assert!(
+                differs_in(&night, &plain, boxed(0, 50, 100, 40)),
+                "the night dither is on the screen"
+            );
+            same_in(&night, &plain, hax, "HAX backing");
+            assert!(
+                !differs_in(&night, &plain, boxed(0, 0, 152, 34)),
+                "header untouched"
+            );
+        }
+
+        #[test]
+        fn ui_boxes_stay_clear() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let busy = || show_reason(engine::doses::Reason::Busy);
+            let cause = || show_cause(engine::causes::Cause::FoodComa);
+            for (name, raise) in [
+                ("reason toast", &busy as &dyn Fn()),
+                ("cause toast", &cause),
+            ] {
+                let mut shots = [None, None];
+                for (i, day_min) in [None, NIGHT_MIN].into_iter().enumerate() {
+                    let mut s = pet(day_min);
+                    s.dirt = (95 * P) as u16;
+                    s.health = (5 * P) as u16;
+                    s.demo.on = true;
+                    lifecycle::set_state_for_test(Some(s));
+                    raise();
+                    shots[i] = Some(screen());
+                }
+                let [Some(plain), Some(night)] = shots else {
+                    unreachable!()
+                };
+                assert!(
+                    differs_in(&night, &plain, boxed(0, 50, 100, 30)),
+                    "{name}: the night dither is on the screen"
+                );
+                // The demo mark is on screen (the check is not vacuous) and
+                // the whole header above the pet area is untouched.
+                let mark = boxed(DEMO_MARK_POS.x, DEMO_MARK_POS.y, 4, 5);
+                assert!(night.any(mark, BLACK), "{name}: demo mark drawn");
+                same_in(&night, &plain, boxed(0, 0, 152, 34), "header");
+                // Toast backings, one per line.
+                let lines: std::vec::Vec<std::string::String> = if name == "reason toast" {
+                    std::vec![engine::doses::Reason::Busy.text().as_str().into()]
+                } else {
+                    let c = engine::causes::Cause::FoodComa;
+                    std::vec![c.what().into(), c.why().into()]
+                };
+                for (i, line) in lines.iter().enumerate() {
+                    let y = TOAST_POS.y + i as i32 * TOAST_LINE_DY;
+                    let w = backing_width(line);
+                    same_in(
+                        &night,
+                        &plain,
+                        boxed(TOAST_POS.x - STATUS_BACKING_PAD / 2, y, w, STATUS_LINE_H),
+                        name,
+                    );
+                }
+                // Status backing, one per line.
+                lifecycle::set_state_for_test(Some({
+                    let mut s = pet(NIGHT_MIN);
+                    s.dirt = (95 * P) as u16;
+                    s.health = (5 * P) as u16;
+                    s.demo.on = true;
+                    s
+                }));
+                let text = match lifecycle::pet_line().unwrap() {
+                    engine::PetLine::Status(l) => l.text().as_str().into(),
+                    engine::PetLine::Note(n) => std::string::String::from(n.text()),
+                    engine::PetLine::Help => std::string::String::from(HELP_TEXT),
+                };
+                let count = text.split('\n').count() as i32;
+                for (i, row) in text.split('\n').enumerate() {
+                    let base = STATUS_BASE_Y - (count - 1 - i as i32) * STATUS_LINE_H;
+                    let w = backing_width(row);
+                    let area = boxed(
+                        STATUS_CENTER_X - w / 2,
+                        base - (STATUS_LINE_H - 1),
+                        w,
+                        STATUS_LINE_H,
+                    );
+                    same_in(&night, &plain, area, "status backing");
+                }
+            }
+        }
+
+        #[test]
+        fn backdrop_sits_under_the_sprite() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let night = screen();
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let plain = screen();
+            // The idle sprite alone, on white and on black: a pixel is opaque
+            // when it is not the canvas colour on at least one of them.
+            let name = engine::anim_files::anim_filename(
+                lifecycle::pet_kind(),
+                lifecycle::display_anim(),
+                0,
+            );
+            let (mut on_white, mut on_black) = (Canvas::new(), Canvas::new());
+            on_black.fill(BLACK);
+            sprite_loader::blit_pcx_sim(&mut on_white, &name, 0, PET_AREA_TOP as i32, false);
+            sprite_loader::blit_pcx_sim(&mut on_black, &name, 0, PET_AREA_TOP as i32, false);
+            let area = boxed(0, 35, 152, 49);
+            let (mut opaque, mut transparent_dither) = (0, 0);
+            for p in area.points() {
+                let (w, b) = (on_white.get(p.x, p.y), on_black.get(p.x, p.y));
+                if w != crate::WHITE || b != BLACK {
+                    // Opaque (black, red or white): the sprite colour, whatever
+                    // the sky. Skip pixels the UI overdraws on the plain screen.
+                    let colour = if w != crate::WHITE { w } else { b };
+                    if plain.get(p.x, p.y) == colour {
+                        opaque += 1;
+                        assert_eq!(
+                            night.get(p.x, p.y),
+                            colour,
+                            "dither over the sprite at {p:?}"
+                        );
+                    }
+                } else if night.get(p.x, p.y) != plain.get(p.x, p.y) {
+                    transparent_dither += 1;
+                }
+            }
+            assert!(opaque > 100, "the sprite has pixels to check ({opaque})");
+            assert!(
+                transparent_dither > 500,
+                "the dither shows round it ({transparent_dither})"
+            );
+        }
+
+        #[test]
+        fn hibernating_has_no_background() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            let mut s = pet(NIGHT_MIN);
+            s.hibernating = true;
+            lifecycle::set_state_for_test(Some(s));
+            let night = screen();
+            let mut s = pet(None);
+            s.hibernating = true;
+            lifecycle::set_state_for_test(Some(s));
+            let plain = screen();
+            same_in(&night, &plain, boxed(0, 35, 152, 75), "pet area");
+        }
+
+        #[test]
+        fn dirt_pct_shows_floor_items() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(None)));
+            let clean = screen();
+            lifecycle::debug_set_dirt_pct(95);
+            let dirty = screen();
+            assert!(differs_in(&clean, &dirty, boxed(0, 100, 152, 10)));
+        }
+
+        #[test]
+        fn backdrop_draws_nothing_for_a_takeover() {
+            let _guard = lock_test_state();
+            let _clear = ClearPet;
+            lifecycle::set_state_for_test(Some(pet(NIGHT_MIN)));
+            let mut c = Canvas::new();
+            draw_backdrop(&mut c).unwrap();
+            assert!(c.any(boxed(0, 35, 152, 65), BLACK), "the night sky");
+            DIABETES_ALERT.start();
+            let mut c = Canvas::new();
+            draw_backdrop(&mut c).unwrap();
+            assert!(
+                !c.any(boxed(0, 0, 152, 152), BLACK),
+                "no sky behind an alert"
+            );
         }
     }
 }

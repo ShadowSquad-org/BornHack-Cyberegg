@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::game::engine::doses::{Reason, Refusal};
 use crate::game::engine::sim;
+use crate::game::engine::scene::{FLOOR_ITEMS, Sky};
 use crate::game::engine::status::{Condition, Word};
 use crate::game::engine::thresholds::{HATCHING_TICKS, Mode, badge_preset};
 use crate::game::engine::{DebugPoke, DisplayAnim, FoodKind, PetKind, PetLine};
@@ -22,9 +23,21 @@ use crate::game::{
     reason_toast,
 };
 use crate::menu::{ButtonId, dispatch_press};
-use crate::platform::{fake_uptime_ms, set_fake_uptime_ms};
+use crate::platform::{GUIDE_NOON_UNIX, fake_uptime_ms, set_fake_unix, set_fake_uptime_ms};
 use crate::sim_support;
 use crate::text_entry;
+
+/// The instant every shot starts at: 12:00 local, so the sky is a day sky
+/// whatever the host's clock says (the same instant the lib tests use).
+pub const SHOT_NOON_UNIX: u32 = GUIDE_NOON_UNIX;
+/// 23:00 local the same day: a night sky.
+pub const SHOT_NIGHT_UNIX: u32 = GUIDE_NOON_UNIX + 11 * 3600;
+
+/// The name of the shot that mirrors an old badge (see `run`).
+const REALM_SHOT: &str = "to-the-realm";
+
+/// The pet kind the Jellyfish had, before its sprites were removed.
+const JELLYFISH: PetKind = PetKind(8);
 
 /// The pet's name in every shot (the hero is `PetKind::roster()[0]`).
 pub const HERO_NAME: &str = "Bob";
@@ -128,6 +141,35 @@ static DEBUG_MENU: &[Step] = &[
     Press(ButtonId::Right),
     Press(ButtonId::Fire),
 ];
+
+/// Night: the fake clock moves to 23:00 (the uptime keeps running on it).
+fn set_night() {
+    set_fake_unix(Some(SHOT_NIGHT_UNIX));
+}
+
+/// A filthy floor: every item lies there.
+fn very_dirty() {
+    lifecycle::debug_set_dirt_pct(96);
+}
+
+/// A new Jellyfish, hatched (the badge it lives on has lost its sprites).
+fn new_jellyfish() {
+    lifecycle::start_new_game(JELLYFISH, false, false);
+    lifecycle::set_pet_name(HERO_NAME.as_bytes());
+}
+
+/// What the badge does at boot for a pet whose sprites are gone.
+fn retire() {
+    assert_eq!(
+        lifecycle::retire_hidden_pet(),
+        lifecycle::Retired::ToRealm,
+        "the jellyfish did not move to the Realm"
+    );
+}
+
+fn bg() -> Option<crate::game::engine::scene::BackgroundState> {
+    lifecycle::background_state()
+}
 
 fn hatched() {
     play(HATCHED);
@@ -525,7 +567,31 @@ pub static SHOTS: &[Shot] = &[
     shot!("engine-info", [Do(debug_menu), Press(Fire)], || {
         toast_is(Toast::DebugInfo)
     }),
+    // The sky and the floor (chapter 3). `content` is already a noon shot.
+    shot!("day", [Do(content)], || {
+        bg().is_some_and(|b| b.sky == Sky::Day)
+    }),
+    shot!("night", [Do(content), Do(set_night)], || {
+        bg().is_some_and(|b| b.sky == Sky::Night)
+    }),
+    shot!("floor", [Do(content), Do(very_dirty)], || {
+        bg().is_some_and(|b| b.floor as usize == FLOOR_ITEMS)
+    }),
+    // An old badge: PETS.CFG still lists the Jellyfish, its sprites are gone.
+    shot!(
+        "to-the-realm",
+        [Do(new_jellyfish), Do(hatch), Do(retire)],
+        || is_gone() && lifecycle::is_hidden_kind(lifecycle::pet_kind())
+    ),
 ];
+
+/// The clock and the numbers every shot starts from.
+fn set_up() {
+    set_fake_uptime_ms(0);
+    set_fake_unix(Some(SHOT_NOON_UNIX));
+    // The badge's numbers, never the bare simulator preset.
+    sim::install_preset(badge_preset(Mode::Classic), Mode::Classic, false);
+}
 
 /// Play the shot `name` on a fresh game, check its expectation, save
 /// `<out_dir>/<name>.png`. One shot per process.
@@ -534,10 +600,15 @@ pub fn run(name: &str, out_dir: &Path) -> Result<Summary, String> {
         .iter()
         .find(|s| s.name == name)
         .ok_or_else(|| format!("no shot named {name}"))?;
-    set_fake_uptime_ms(0);
-    // The badge's numbers, never the bare simulator preset.
-    sim::install_preset(badge_preset(Mode::Classic), Mode::Classic, false);
-    sim_support::install_pets_from_repo_cfg();
+    set_up();
+    // The roster installs once per process, and a shot is a process. The
+    // Realm shot mirrors an old badge: its PETS.CFG was never edited, so it
+    // still lists the Jellyfish, while its sprites are gone.
+    if name == REALM_SHOT {
+        sim_support::install_pets_from_old_badge_cfg();
+    } else {
+        sim_support::install_pets_from_repo_cfg();
+    }
 
     catch_unwind(AssertUnwindSafe(|| play(shot.steps))).map_err(|e| {
         let why = e
@@ -565,4 +636,20 @@ pub fn run(name: &str, out_dir: &Path) -> Result<Summary, String> {
         h: size.height * sim_support::PNG_SCALE,
         non_white: sim_support::non_white(&display),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_up_pins_the_clock_to_noon() {
+        let _g = crate::game::lock_test_state();
+        set_fake_unix(None);
+        set_up();
+        assert_eq!(lifecycle::local_minute(), Some(720));
+        set_fake_unix(Some(SHOT_NIGHT_UNIX));
+        assert_eq!(lifecycle::local_minute(), Some(23 * 60));
+        set_fake_unix(Some(GUIDE_NOON_UNIX));
+    }
 }

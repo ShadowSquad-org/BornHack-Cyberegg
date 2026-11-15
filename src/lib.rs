@@ -102,6 +102,7 @@ pub mod cfg_text;
 pub mod display_flush;
 #[cfg(feature = "heapless")]
 pub mod evict_table;
+pub mod refresh_decision;
 #[cfg(feature = "simulator")]
 pub mod guide;
 pub mod hex;

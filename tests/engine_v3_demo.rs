@@ -1306,7 +1306,6 @@ mod policy {
 mod wake {
     use bornhack_aegg::game::engine::demo;
     use bornhack_aegg::game::engine::needs::{MAX, P};
-    use bornhack_aegg::game::engine::status::status_line;
     use bornhack_aegg::game::engine::thresholds::MAX_SLEEP_TICKS;
     use bornhack_aegg::game::engine::{GameState, PetKind, Phase, TICKS_PER_MINUTE};
 
@@ -1315,18 +1314,7 @@ mod wake {
     }
 
     fn obs(s: &GameState) -> String {
-        format!(
-            "{:?}",
-            (
-                status_line(s),
-                s.display_anim(),
-                s.is_sleeping,
-                s.phase,
-                s.active_action,
-                s.onset_bits(),
-                demo::wake_view(s),
-            )
-        )
+        format!("{:?}", s.wake_view_for_test())
     }
 
     #[test]

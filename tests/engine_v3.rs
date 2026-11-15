@@ -2148,9 +2148,7 @@ mod status_wake {
     use bornhack_aegg::game::engine::needs::P;
     use bornhack_aegg::game::engine::status::{INFO_WORDS, StatusLine, StatusWord, Word, status, status_line};
     use bornhack_aegg::game::engine::thresholds::{HATCHING_TICKS, MAX_SLEEP_TICKS};
-    use bornhack_aegg::game::engine::{
-        Action, DisplayAnim, GameState, MiniGame, PetKind, Phase, doses,
-    };
+    use bornhack_aegg::game::engine::{DisplayAnim, GameState, MiniGame, PetKind, Phase, doses};
 
     fn pct(v: i32) -> u16 {
         (v * P) as u16
@@ -2167,15 +2165,8 @@ mod status_wake {
     }
 
     /// What a wake-up would have to show: any change here is a visible event.
-    fn obs(s: &GameState) -> (StatusLine, DisplayAnim, bool, Phase, Option<Action>, u8) {
-        (
-            status_line(s),
-            s.display_anim(),
-            s.is_sleeping,
-            s.phase,
-            s.active_action,
-            s.onset_bits(),
-        )
+    fn obs(s: &GameState) -> String {
+        format!("{:?}", s.wake_view_for_test())
     }
 
     /// First minute (1..=120) at which `obs` differs, stepping a clone minute by minute.

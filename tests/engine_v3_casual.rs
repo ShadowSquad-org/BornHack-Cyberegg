@@ -2,6 +2,8 @@
 //! per process, so these tests live in a binary of their own, and every test
 //! installs the preset through the same guarded call.
 
+mod common;
+
 use bornhack_aegg::game::engine::sim::{self, Driver};
 use bornhack_aegg::game::engine::thresholds::{Mode, active_mode};
 
@@ -71,4 +73,15 @@ fn casual_demo_alone_for_10_days() {
     assert!(o.alive && !o.ever_leaving, "{o:?}");
     assert!(o.min_fitness_pct >= 40, "{o:?}");
     assert!(o.max_weight_pct <= 70, "{o:?}");
+}
+
+/// Casual's health danger line is not Classic's: the cross follows it too.
+mod scene {
+    use super::install_casual;
+
+    #[test]
+    fn the_cross_shows_whenever_the_pet_is_poorly_casual() {
+        install_casual();
+        super::common::the_cross_shows_whenever_the_pet_is_poorly();
+    }
 }
