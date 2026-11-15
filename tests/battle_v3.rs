@@ -2438,15 +2438,14 @@ mod protocol {
     #[test]
     fn a_sleeping_demo_target_names_its_reason() {
         let mut r = Rig::new();
-        let c = r.challenge();
+        // Both demo, so the league lets the challenge in: only the answer's
+        // own rule is under test, the demo pet fell asleep in the window.
+        r.a.demo.on = true;
         r.b.demo.on = true;
+        let c = r.challenge();
         let mb = r.mb(MS + 1000, 0x2222);
-        // The challenge was made against a player pet, so only the answer's
-        // own rule is under test: the demo pet fell asleep in the window.
         r.sb.on_challenge(&mb, &mut r.b, &c, None);
-        if r.sb.view().is_none() {
-            return; // refused on arrival (league): nothing to answer
-        }
+        assert!(r.sb.view().is_some(), "the demo target took the challenge");
         r.b.is_sleeping = true;
         let outs = r.sb.answer(&mb, &mut r.b, true);
         assert_eq!(refused_reason(&outs), Some(Reason::Refused(Refusal::Asleep)));
