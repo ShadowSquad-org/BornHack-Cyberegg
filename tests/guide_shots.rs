@@ -59,6 +59,31 @@ fn a_failed_expectation_names_the_shot() {
 }
 
 #[test]
+fn screen_saves_the_screen_after_the_keys() {
+    let dir = out_dir("screen");
+    let side = SCREEN * PNG_SCALE;
+    let mut pngs = Vec::new();
+    for keys in ["", "RRRRR"] {
+        let file = dir.join(format!("k{keys}.png"));
+        let o = guide(&["screen", keys, "--out", file.to_str().unwrap()]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        assert!(text(&o).contains(&format!(" {side}x{side} non_white=")), "{}", text(&o));
+        pngs.push(std::fs::read(&file).expect("png written"));
+    }
+    // The start screen and the watch (five screens to the right) differ.
+    assert_ne!(pngs[0], pngs[1]);
+}
+
+#[test]
+fn screen_rejects_an_unknown_key() {
+    let file = out_dir("screen-bad").join("x.png");
+    let o = guide(&["screen", "RQ", "--out", file.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("'Q'"));
+    assert!(!file.exists());
+}
+
+#[test]
 fn sprites_cover_the_roster_without_sponsors() {
     let dir = out_dir("sprites");
     let o = guide(&["sprites", "--out", dir.to_str().unwrap()]);

@@ -4,11 +4,12 @@
 //!   `guide shots`                      (one shot name per line)
 //!   `guide shot NAME --out DIR`        (writes DIR/NAME.png)
 //!   `guide sprites --out DIR`          (PNGs and DIR/roster.json)
+//!   `guide screen KEYS --out FILE`     (any screen after pressing KEYS, see shots::screen)
 use bornhack_aegg::game::engine::thresholds::Mode;
 use bornhack_aegg::guide::data::dump;
 use bornhack_aegg::guide::json::J;
 
-const USAGE: &str = "usage: guide data --preset classic|casual --out FILE\n       guide words --out FILE\n       guide shots\n       guide shot NAME --out DIR\n       guide sprites --out DIR";
+const USAGE: &str = "usage: guide data --preset classic|casual --out FILE\n       guide words --out FILE\n       guide shots\n       guide shot NAME --out DIR\n       guide sprites --out DIR\n       guide screen KEYS --out FILE";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -44,6 +45,17 @@ fn main() {
         ["shot", name, "--out", dir] => {
             match bornhack_aegg::guide::shots::run(name, std::path::Path::new(dir)) {
                 Ok(s) => println!("{name} {}x{} non_white={}", s.w, s.h, s.non_white),
+                Err(e) => {
+                    eprintln!("guide: {e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        ["screen", keys, "--out", file] => {
+            let file = std::path::Path::new(file);
+            match bornhack_aegg::guide::shots::screen(keys, file) {
+                Ok(s) => println!("{} {}x{} non_white={}", file.display(), s.w, s.h, s.non_white),
                 Err(e) => {
                     eprintln!("guide: {e}");
                     std::process::exit(1);

@@ -687,6 +687,45 @@ fn set_up() {
     sim::install_preset(badge_preset(Mode::Classic), Mode::Classic, false);
 }
 
+/// Any screen, not only the game's: a fresh badge at noon, the buttons in
+/// `keys` pressed in order (`U` `D` `L` `R` up/down/left/right, `F` fire,
+/// `C` cancel, `X` execute), then the screen saved to `out`. Used for the
+/// README's pictures of the badge's other apps. The badge's node name is
+/// [`HERO_NAME`], so the name tag screen is not empty. One per process.
+pub fn screen(keys: &str, out: &Path) -> Result<Summary, String> {
+    set_up();
+    sim_support::install_pets_from_repo_cfg();
+    crate::NODE_NAME.with_mut(|name| {
+        name.clear();
+        let _ = name.push_str(HERO_NAME);
+    });
+    for c in keys.chars() {
+        let button = match c {
+            'U' => ButtonId::Up,
+            'D' => ButtonId::Down,
+            'L' => ButtonId::Left,
+            'R' => ButtonId::Right,
+            'F' => ButtonId::Fire,
+            'C' => ButtonId::Cancel,
+            'X' => ButtonId::Execute,
+            _ => return Err(format!("unknown key {c:?} in {keys:?}")),
+        };
+        dispatch_press(button);
+    }
+    let display = sim_support::render();
+    if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    sim_support::save_png(&display, out)?;
+    let size = embedded_graphics::prelude::OriginDimensions::size(&display);
+    Ok(Summary {
+        w: size.width * sim_support::PNG_SCALE,
+        h: size.height * sim_support::PNG_SCALE,
+        non_white: sim_support::non_white(&display),
+    })
+}
+
 /// Play the shot `name` on a fresh game, check its expectation, save
 /// `<out_dir>/<name>.png`. One shot per process.
 pub fn run(name: &str, out_dir: &Path) -> Result<Summary, String> {
