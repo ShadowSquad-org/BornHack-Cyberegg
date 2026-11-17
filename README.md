@@ -8,6 +8,100 @@ on Codeberg. A public mirror on GitHub,
 [ranzbak/bornhack-firmware-2026-ce](https://github.com/ranzbak/bornhack-firmware-2026-ce),
 runs the tests (see [Tests and CI](#tests-and-ci)).
 
+## Screenshots
+
+These are real screens of this firmware, rendered by the simulator at four
+times the badge's 152×152 pixels. `make readme-shots` renders them again
+(see [Player's guide](#players-guide)).
+
+### BornPets
+
+Six pets to pick from, each with its own sprites.
+
+<img src="screenshots/pets.png" alt="The six BornPets: Bartholomeus, Cat, Slug, Panda, Badger and Seastar" width="720">
+
+An egg hatches and you give the pet a name with the joystick keyboard.
+
+<table>
+<tr>
+<td><img src="screenshots/egg.png" alt="An egg with a hatching countdown" width="220"></td>
+<td><img src="screenshots/naming.png" alt="Naming the pet with the on-screen keyboard" width="220"></td>
+<td><img src="screenshots/hatched.png" alt="The freshly hatched pet" width="220"></td>
+</tr>
+</table>
+
+The sky follows the badge clock, and the floor fills up with mess when the pet
+is not kept clean.
+
+<table>
+<tr>
+<td><img src="screenshots/day.png" alt="The game screen under a day sky" width="220"></td>
+<td><img src="screenshots/night.png" alt="The same pet under a night sky with the moon" width="220"></td>
+<td><img src="screenshots/floor.png" alt="A filthy pet with items piled on the floor" width="220"></td>
+</tr>
+<tr><td>Day</td><td>Night</td><td>Filthy</td></tr>
+</table>
+
+Reading the pet: every need has a band where the pet is content, the Diary
+keeps what happened, and a toast says why something went wrong.
+
+<table>
+<tr>
+<td><img src="screenshots/stats-needs.png" alt="The needs page with comfort bands" width="220"></td>
+<td><img src="screenshots/diary.png" alt="The Diary of recent events" width="220"></td>
+<td><img src="screenshots/cause-toast.png" alt="A food coma toast: ate too much" width="220"></td>
+</tr>
+<tr><td>Needs</td><td>Diary</td><td>Cause toast</td></tr>
+</table>
+
+The care menus warn before a choice does harm, refuse what makes no sense and,
+in Hard mode (US), charge US prices (a Hamburger in place of the Frikandel).
+
+<table>
+<tr>
+<td><img src="screenshots/risk-marker.png" alt="Feed menu with a food coma risk on top and ! marks" width="220"></td>
+<td><img src="screenshots/refusal-water.png" alt="Drink menu with Water greyed out: not thirsty" width="220"></td>
+<td><img src="screenshots/menu-feed-hard.png" alt="Hard mode Feed menu with Hamburger" width="220"></td>
+</tr>
+<tr><td>Risk marks</td><td>Refusal</td><td>Hard mode (US)</td></tr>
+</table>
+
+Conditions with their own pictures: a hangover, an injury, hunger.
+
+<table>
+<tr>
+<td><img src="screenshots/hung-over.png" alt="A hung over pet" width="220"></td>
+<td><img src="screenshots/injured.png" alt="An injured pet" width="220"></td>
+<td><img src="screenshots/starving.png" alt="A starving pet" width="220"></td>
+</tr>
+<tr><td>Hung over</td><td>Injured</td><td>Starving</td></tr>
+</table>
+
+Demo mode makes a desk companion that looks after itself. Friends on the mesh
+can be challenged to a Battle. A pet whose sprites are gone moves to the
+Unicorn Realm.
+
+<table>
+<tr>
+<td><img src="screenshots/demo-note.png" alt="Demo mode: the pet says it had some pizza" width="220"></td>
+<td><img src="screenshots/pre-battle.png" alt="Battle stats against a friend before the fight" width="220"></td>
+<td><img src="screenshots/to-the-realm.png" alt="Moved to the Unicorn Realm" width="220"></td>
+</tr>
+<tr><td>Demo mode</td><td>Battle</td><td>Unicorn Realm</td></tr>
+</table>
+
+### The rest of the badge
+
+<table>
+<tr>
+<td><img src="screenshots/boot.png" alt="The CE start screen" width="165"></td>
+<td><img src="screenshots/clock.png" alt="The digital watch face" width="165"></td>
+<td><img src="screenshots/calendar.png" alt="The calendar" width="165"></td>
+<td><img src="screenshots/name-tag.png" alt="Hello my name is name tag" width="165"></td>
+</tr>
+<tr><td>Start screen</td><td>Watch</td><td>Calendar</td><td>Name tag</td></tr>
+</table>
+
 ## What's different in this fork
 
 This fork extends the upstream CyberÆgg firmware,
@@ -220,6 +314,11 @@ prints an install command if it is missing. The guide's numbers, on-screen
 words and screen pictures are generated from the engine and the simulator
 (`guide` binary and the `guide_*` tests), so they follow the code. The build
 script is [`scripts/build_guide.py`](scripts/build_guide.py).
+
+The README's [screenshots](#screenshots) come from the same `guide` binary:
+`make readme-shots` writes them to `screenshots/`
+([`scripts/readme_shots.py`](scripts/readme_shots.py)). Run it after a change
+that alters one of the screens shown.
 
 Vendor library documentation (the `vendor/` submodules must be checked out, see [Clone](#clone)):
 

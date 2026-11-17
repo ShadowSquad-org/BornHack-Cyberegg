@@ -25,7 +25,7 @@ BL_ELF = bootloader/target/thumbv7em-none-eabihf/release/nrf-aegg-bootloader
         flash-game flash-mesh \
         monitor monitor-release-debug bl flash-bl dfu-flash dfu-flash-release \
         fw-watch flash-watch fw-bin-release bl-bin \
-        guide guide-pdf
+        guide guide-pdf readme-shots
 
 # ---------- Full build (game + mesh) ----------
 
@@ -304,3 +304,6 @@ fw-bin-release:
 guide: ; python3 scripts/build_guide.py
 
 guide-pdf: ; python3 scripts/build_guide.py --pdf-only
+
+# README screenshots (screenshots/, see scripts/readme_shots.py)
+readme-shots: ; python3 scripts/readme_shots.py
