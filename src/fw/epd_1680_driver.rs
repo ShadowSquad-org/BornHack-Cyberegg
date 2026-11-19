@@ -13,6 +13,18 @@
 //! Red and Yellow are dropped to white on the plane mapping where the panel
 //! cannot show them.
 //!
+//! ## Preview, settle and charge correction
+//!
+//! A [`RefreshMode::Fast`] that drives only a few B/W pixels (menu cursor,
+//! small sprite step) runs the short preview pulse instead of the 1.16 s
+//! delta; [`PreviewScheduler`] makes the call (size, red, run limit) and
+//! remembers the previewed pixels. They are settled by the next normal delta
+//! or, once the screen is idle for `SETTLE_MS`, by [`EpdDriver::settle`]
+//! (also run before [`EpdDriver::deep_sleep`]). After every update the signed
+//! [`ChargeLedger`] books the waveform's V·t per pixel and pulses pixels that
+//! carry clearly more than one image's worth with the opposite rail. All of it
+//! is tunable from `EPD.CFG` (see `fw::epd_cfg`).
+//!
 //! ## Upscaling
 //!
 //! With [`set_scale_fill(true)`](Driver::set_scale_fill) the 152×152
@@ -23,7 +35,11 @@
 
 use crate::color::EpdColor;
 use crate::epd_driver::{EpdDriver, PlaneAccess, RefreshMode};
-use ssd1680::{BoundingBox, DeltaState, Display, Interface, TopUpConfig, TopUpLedger};
+use ssd1680::display::Waveform;
+use ssd1680::{
+    BoundingBox, ChargeLedger, DeltaState, Display, EpdTuning, Interface, LedgerConfig,
+    PreviewScheduler, UpdateKind,
+};
 use ssd1680::interface::DisplayInterface;
 use embassy_nrf::gpio::{Input, Output};
 use embassy_nrf::spim::Spim;
@@ -77,10 +93,13 @@ pub struct Driver<'a, const N: usize> {
     /// ledger only on a completed drive, so they are re-driven to the latest
     /// target instead.
     delta: DeltaState,
-    /// Per-pixel hold counters: schedules a short same-polarity top-up for
-    /// black/white pixels that sat unchanged through several deltas. See
-    /// `ssd1680::topup`.
-    topup: TopUpLedger,
+    /// Signed per-pixel V·t ledger; schedules short opposite-rail correction
+    /// pulses for pixels carrying excess charge. See `ssd1680::ledger`.
+    ledger: ChargeLedger,
+    /// Preview-vs-delta decision and the previewed-but-unsettled bitmap.
+    preview: PreviewScheduler,
+    /// Runtime knobs (from `EPD.CFG`), already clamped by the driver crate.
+    tuning: EpdTuning,
     /// Scratch B/W code plane (`0x24` delta codes) for [`build_code_planes`].
     code_bw: &'a mut [u8; N],
     /// Scratch Red code plane (`0x26` delta codes) for [`build_code_planes`].
@@ -104,9 +123,10 @@ impl<'a, const N: usize> Driver<'a, N> {
     /// * `dirty`                 - Damage bitmap, 1 bit per panel pixel, so
     ///   also `N` bytes. Zeroed here: nothing has been driven yet.
     /// * `code_bw`/`code_red`    - Delta code-plane scratch, each `N` bytes.
-    ///   Reused for the top-up planes once the delta has run.
-    /// * `topup_counts`          - Top-up ledger, half a byte per panel pixel
-    ///   ([`TopUpLedger::bytes_for`]); zeroed here.
+    ///   Reused for the correction planes once the update has run.
+    /// * `charge`                - Charge ledger, one `i8` per panel pixel
+    ///   ([`ChargeLedger::bytes_for`]); zeroed here.
+    /// * `unsettled`             - Previewed-pixel bitmap, `N` bytes; zeroed.
     /// * `scale_fill`            - Upscale to fill (true) or centre 1:1 (false).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -122,7 +142,8 @@ impl<'a, const N: usize> Driver<'a, N> {
         dirty: &'static mut [u8; N],
         code_bw: &'a mut [u8; N],
         code_red: &'a mut [u8; N],
-        topup_counts: &'static mut [u8],
+        charge: &'static mut [i8],
+        unsettled: &'static mut [u8; N],
         scale_fill: bool,
     ) -> Self {
         canvas_bw.fill(0xFF);
@@ -133,9 +154,10 @@ impl<'a, const N: usize> Driver<'a, N> {
         shadow_red.fill(0x00);
         dirty.fill(0x00);
         let delta = DeltaState::new(shadow_bw, shadow_red, dirty, width, height);
-        let topup = TopUpLedger::new(topup_counts, width, height, TopUpConfig::default());
+        let ledger = ChargeLedger::new(charge, width, height, LedgerConfig::default());
+        let preview = PreviewScheduler::new(unsettled, width, height);
         // Keep the analog rails up between back-to-back updates (a delta and
-        // its top-up, or a burst of button presses). The display loop calls
+        // its correction pulse, or a burst of button presses). The display loop calls
         // `deep_sleep` once updates stop, which drops them.
         let mut display = display;
         display.set_analog_hold(true);
@@ -148,7 +170,9 @@ impl<'a, const N: usize> Driver<'a, N> {
             panel_bw,
             panel_red,
             delta,
-            topup,
+            ledger,
+            preview,
+            tuning: EpdTuning::default(),
             code_bw,
             code_red,
             scale_fill,
@@ -159,6 +183,18 @@ impl<'a, const N: usize> Driver<'a, N> {
     /// panel. Takes effect on the next [`refresh`](EpdDriver::refresh).
     pub fn set_scale_fill(&mut self, on: bool) {
         self.scale_fill = on;
+    }
+
+    /// Install runtime tuning (normally from `EPD.CFG`). The driver crate
+    /// clamps every field; takes effect on the next update.
+    pub fn set_tuning(&mut self, t: EpdTuning) {
+        self.display.set_tuning(t);
+        self.tuning = self.display.tuning();
+        self.ledger.set_config(LedgerConfig {
+            pos: self.tuning.ledger_pos,
+            neg: self.tuning.ledger_neg,
+            decay_shift: self.tuning.ledger_decay,
+        });
     }
 
     /// Panel plane byte length (`ceil(width/8) * height`).
@@ -275,6 +311,197 @@ impl<'a, const N: usize> Driver<'a, N> {
     }
 }
 
+impl<'a, const N: usize> Driver<'a, N> {
+    /// [`EpdDriver::refresh`] with preview allowed or not.
+    async fn refresh_with(
+        &mut self,
+        mode: RefreshMode,
+        allow_preview: bool,
+    ) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        let n = self.plane_len();
+        // Compose the 152 canvas into the panel planes (scaled or centred).
+        self.compose_panel();
+        match mode {
+            RefreshMode::Full => {
+                // Panel planes are already wire-convention (red = `(R=1,
+                // BW=0)` → LUT2/row 3; see `compose_panel`) — send raw.
+                self.display
+                    .full(&self.panel_bw[..n], &self.panel_red[..n])
+                    .await?;
+                // Past the await, so the waveform ran to completion. A full
+                // drives every pixel unconditionally: the shadow advances to
+                // the live frame, the damage and unsettled sets clear, and the
+                // charge ledger restarts from zero (the full is the backstop).
+                self.delta
+                    .commit_full(&self.panel_bw[..n], &self.panel_red[..n]);
+                self.preview.on_full();
+                self.ledger.reset();
+            }
+            RefreshMode::Fast => {
+                // `build` drives the union of (changed vs shadow) and (still
+                // damaged from an interrupted drive), and ORs that union into
+                // the damage bitmap. `None` = nothing to drive.
+                if self
+                    .delta
+                    .build(
+                        &self.panel_bw[..n],
+                        &self.panel_red[..n],
+                        &mut self.code_bw[..n],
+                        &mut self.code_red[..n],
+                    )
+                    .is_none()
+                {
+                    return Ok(());
+                }
+                let kind = if allow_preview {
+                    self.preview.choose(
+                        &self.tuning,
+                        self.delta.last_driven_px(),
+                        self.delta.last_red_involved(),
+                    )
+                } else {
+                    UpdateKind::Delta
+                };
+                match kind {
+                    UpdateKind::Preview => self.run_preview().await?,
+                    UpdateKind::Delta => self.run_delta().await?,
+                }
+                self.run_correction().await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Short B/W preview over the code planes `build` just wrote. The pixels
+    /// are marked unsettled *before* the await, so a cancelled preview still
+    /// gets its settle.
+    async fn run_preview(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        let n = self.plane_len();
+        self.preview
+            .on_preview(&self.code_bw[..n], &self.code_red[..n]);
+        defmt::info!(
+            "1680 preview: {} px, run {}",
+            self.delta.last_driven_px(),
+            self.preview.run()
+        );
+        self.display
+            .update_preview(&self.code_bw[..n], &self.code_red[..n])
+            .await?;
+        // Completed: the shadow advances (the image is on glass, if not fully
+        // saturated); the unsettled bitmap keeps these pixels for the settle.
+        self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
+        let w = self.display.weights(Waveform::Preview);
+        self.ledger
+            .after_update(&self.code_bw[..n], &self.code_red[..n], w);
+        Ok(())
+    }
+
+    /// Normal delta. Every unsettled (previewed) pixel is folded into the
+    /// drive set first, so this delta settles them too.
+    async fn run_delta(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        let n = self.plane_len();
+        if self.preview.pending() {
+            self.delta.mark_dirty(self.preview.unsettled());
+            let _ = self.delta.build(
+                &self.panel_bw[..n],
+                &self.panel_red[..n],
+                &mut self.code_bw[..n],
+                &mut self.code_red[..n],
+            );
+        }
+        // The delta path never windows — the box is log-only.
+        let bbox = BoundingBox {
+            x0: 0,
+            y0: 0,
+            x1: self.width - 1,
+            y1: self.height - 1,
+        };
+        // Skip the red drive phase entirely when no pixel this build actually
+        // drives is red. Asking `DeltaState` rather than diffing the red plane
+        // matters once damage is in play: a red pixel left half-driven by a
+        // cancelled waveform is re-driven even though the plane compares
+        // equal, and skipping its phase would strand it.
+        let skip_red = !self.delta.last_had_red();
+        self.display
+            .update_delta(&self.code_bw[..n], &self.code_red[..n], bbox, skip_red)
+            .await?;
+        // Only reached when the waveform completed. If the refresh future is
+        // dropped mid-drive the commit never runs, so the shadow stays stale
+        // and every pixel this build touched stays in the damage bitmap (and
+        // the unsettled ones stay unsettled) for the next one.
+        self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
+        self.preview
+            .on_delta(&self.code_bw[..n], &self.code_red[..n]);
+        let w = self.display.weights(if skip_red {
+            Waveform::DeltaBw
+        } else {
+            Waveform::DeltaRed
+        });
+        self.ledger
+            .after_update(&self.code_bw[..n], &self.code_red[..n], w);
+        Ok(())
+    }
+
+    /// Opposite-rail correction pulse for pixels the ledger flags, on the
+    /// still-powered rails. Rewrites the code planes in place. If cancelled,
+    /// nothing is lost: the image is committed, the ledger is only debited
+    /// after the pulse ran, and the next refresh resets the controller.
+    async fn run_correction(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        if !self.tuning.ledger {
+            return Ok(());
+        }
+        let n = self.plane_len();
+        let plan = self.ledger.plan_correction(
+            &self.panel_red[..n],
+            &mut self.code_bw[..n],
+            &mut self.code_red[..n],
+        );
+        if plan.is_empty() {
+            return Ok(());
+        }
+        defmt::info!(
+            "1680 correct: vsl={} vsh1={} max|c|={}",
+            plan.vsl,
+            plan.vsh1,
+            self.ledger.max_abs()
+        );
+        self.display
+            .correct(&self.code_bw[..n], &self.code_red[..n])
+            .await?;
+        let w = self.display.weights(Waveform::Correction);
+        self.ledger
+            .after_correction(&self.code_bw[..n], &self.code_red[..n], w);
+        Ok(())
+    }
+
+    /// Settle every previewed pixel with the normal delta. Uses the panel
+    /// planes of the last refresh (not the canvas), so only unsettled pixels
+    /// (and any damage left by a cancelled drive) are driven. No-op when
+    /// nothing is pending.
+    async fn settle_unsettled(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        if !self.preview.pending() {
+            return Ok(());
+        }
+        let n = self.plane_len();
+        defmt::info!("1680 settle: {} px", self.preview.unsettled_px());
+        self.delta.mark_dirty(self.preview.unsettled());
+        if self
+            .delta
+            .build(
+                &self.panel_bw[..n],
+                &self.panel_red[..n],
+                &mut self.code_bw[..n],
+                &mut self.code_red[..n],
+            )
+            .is_none()
+        {
+            return Ok(());
+        }
+        self.run_delta().await?;
+        self.run_correction().await
+    }
+}
+
 impl<const N: usize> OriginDimensions for Driver<'_, N> {
     /// The UI draws on the fixed 152×152 canvas; the panel size stays internal.
     fn size(&self) -> Size {
@@ -326,101 +553,11 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
     }
 
     async fn refresh(&mut self, mode: RefreshMode) -> Result<(), <Self as EpdDriver>::Error> {
-        let n = self.plane_len();
-        // Compose the 152 canvas into the 200 panel planes (scaled or centred).
-        self.compose_panel();
-        // No Fast→Full promotion on red change any more: the fast delta seats
-        // red itself via the DELTA_LUT G3 white→neutral→red sort. A B/W-only
-        // frame skips that group entirely (DELTA_LUT_NO_RED, selected by
-        // `skip_red` below), so red changes stay on the fast path — slower than
-        // a pure B/W delta, but no full-screen flash.
-        match mode {
-            RefreshMode::Full => {
-                // Panel planes are already wire-convention (red = `(R=1,
-                // BW=0)` → LUT2/row 3; see `compose_panel`) — send raw.
-                self.display
-                    .full(&self.panel_bw[..n], &self.panel_red[..n])
-                    .await?;
-                // Past the await, so the waveform ran to completion. A full
-                // drives every pixel unconditionally, so the shadow advances to
-                // the live frame and the damage ledger clears wholesale —
-                // there are no half-driven pixels left to carry forward.
-                self.delta
-                    .commit_full(&self.panel_bw[..n], &self.panel_red[..n]);
-                self.topup.reset();
-            }
-            RefreshMode::Fast => {
-                // Encode per-pixel delta codes: changed pixels get their target
-                // colour's drive group, unchanged pixels the all-zero ignore
-                // group (L3) — no voltage, no flash, no red re-drive. The
-                // custom DELTA_LUT runs every group at the 200 Hz frame rate
-                // (FR = 7, datasheet §6.6).
-                // `build` drives the union of (changed vs shadow) and (still
-                // damaged from an interrupted drive), and ORs that union into
-                // the damage bitmap. Returns `None` when there is nothing to
-                // drive at all.
-                let built = self
-                    .delta
-                    .build(
-                        &self.panel_bw[..n],
-                        &self.panel_red[..n],
-                        &mut self.code_bw[..n],
-                        &mut self.code_red[..n],
-                    )
-                    .is_some();
-                if built {
-                    // The delta path never windows — the box is log-only.
-                    let bbox = BoundingBox {
-                        x0: 0,
-                        y0: 0,
-                        x1: self.width - 1,
-                        y1: self.height - 1,
-                    };
-                    // Skip the red drive phase entirely when no pixel this
-                    // build actually drives is red. Asking `DeltaState` rather
-                    // than diffing the red plane matters once damage is in
-                    // play: a red pixel left half-driven by a cancelled
-                    // waveform is re-driven even though the plane compares
-                    // equal, and skipping its phase would strand it.
-                    let skip_red = !self.delta.last_had_red();
-                    self.display
-                        .update_delta(&self.code_bw[..n], &self.code_red[..n], bbox, skip_red)
-                        .await?;
-                    // Only reached when the waveform completed. If the refresh
-                    // future is dropped mid-drive the commit never runs, so the
-                    // shadow stays stale and every pixel this build touched
-                    // stays in the damage bitmap for the next one.
-                    self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
-
-                    // Second pass on the still-powered rails: top up black and
-                    // white pixels that have sat unchanged through enough
-                    // deltas. `after_delta` reads which pixels this delta drove
-                    // from the code planes and rewrites them in place as top-up
-                    // codes. A red delta runs ~2× the frames, so it counts
-                    // double. If this pass is cancelled, nothing is lost: the
-                    // image is already committed, and the next refresh resets
-                    // the controller.
-                    let weight = if skip_red { 1 } else { 2 };
-                    let plan = self.topup.after_delta(
-                        &self.panel_bw[..n],
-                        &self.panel_red[..n],
-                        &mut self.code_bw[..n],
-                        &mut self.code_red[..n],
-                        weight,
-                    );
-                    if !plan.is_empty() {
-                        defmt::info!("1680 top-up: black={} white={}", plan.black, plan.white);
-                        self.display
-                            .topup(&self.code_bw[..n], &self.code_red[..n])
-                            .await?;
-                    }
-                }
-            }
-        }
-        Ok(())
+        self.refresh_with(mode, true).await
     }
 
-    /// Drops the analog rails the held delta/top-up path leaves on; does not
+    /// Settles any previewed pixels, then drops the analog rails the held
+    /// delta/preview/correction path leaves on; does not
     /// enter the controller's deep-sleep mode.
     ///
     /// Deep-sleep mode 1 only exits via a hardware reset, which clears the
@@ -431,7 +568,17 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
     /// (`0x22 = 0x03`) is the lowest state that keeps RAM, and is a no-op when
     /// they are already off.
     async fn deep_sleep(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
+        // Never park with previewed pixels short of saturation.
+        self.settle_unsettled().await?;
         self.display.power_off().await
+    }
+
+    fn settle_due_in_ms(&self) -> Option<u32> {
+        self.preview.settle_due_in_ms(&self.tuning)
+    }
+
+    async fn settle(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
+        self.settle_unsettled().await
     }
 }
 
@@ -444,6 +591,8 @@ impl<const N: usize> crate::fw::factory_test::FactoryDisplay for Driver<'_, N> {
     }
 
     async fn refresh_fast(&mut self) {
-        let _ = EpdDriver::refresh(self, RefreshMode::Fast).await;
+        // No preview: the factory test can halt on its last frame, and a
+        // previewed pixel must never be the final state.
+        let _ = self.refresh_with(RefreshMode::Fast, false).await;
     }
 }

@@ -319,11 +319,13 @@ async fn main(spawner: Spawner) {
         static DIRTY_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
         static CODE_BW_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
         static CODE_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        // Top-up ledger: a 4-bit hold counter per panel pixel (152·152/2 =
-        // 11552 bytes). Schedules short re-saturation pulses for pixels that
-        // stay unchanged across deltas; see `ssd1680::topup`.
-        const TOPUP_N: usize = ssd1680::TopUpLedger::bytes_for(152, 152);
-        static TOPUP_1680: StaticCell<[u8; TOPUP_N]> = StaticCell::new();
+        // Charge ledger: one signed byte of V·t per panel pixel (152·152 =
+        // 23104 bytes). Schedules short opposite-rail correction pulses for
+        // pixels carrying excess charge; see `ssd1680::ledger`.
+        const LEDGER_N: usize = ssd1680::ChargeLedger::bytes_for(152, 152);
+        static LEDGER_1680: StaticCell<[i8; LEDGER_N]> = StaticCell::new();
+        // Previewed-but-not-settled pixels, 1 bit per panel pixel.
+        static UNSETTLED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
         // 152×152 UI canvas planes (the driver scales these into the panel).
         use bornhack_aegg::fw::epd_1680_driver::CANVAS_BYTES;
         static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
@@ -372,10 +374,17 @@ async fn main(spawner: Spawner) {
             DIRTY_1680.init([0x00; PLANE_N]),
             CODE_BW_1680.init([0xFF; PLANE_N]),
             CODE_RED_1680.init([0xFF; PLANE_N]),
-            TOPUP_1680.init([0x00; TOPUP_N]),
+            LEDGER_1680.init([0; LEDGER_N]),
+            UNSETTLED_1680.init([0x00; PLANE_N]),
             false, // scale_fill: canvas matches the 152×152 panel 1:1
         )
     };
+
+    // Waveform tuning from `EPD.CFG` on the badge volume (FAT12 is formatted
+    // at the top of `main`); no file = built-in defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1680-driver")]
+    driver.set_tuning(bornhack_aegg::fw::epd_cfg::load().await);
 
     // Boot paint on the unified driver (SSD1680 only — the SSD1675 boot clear
     // already ran on the raw panel above so the factory-test forensic trail and
@@ -1230,9 +1239,19 @@ async fn display_loop_1680<D>(
             // it) so the sprite timer inside `wait_display_event` keeps its
             // original deadline. An event during the power-off drops it
             // mid-command; the next refresh then resets the controller.
+            //
+            // A preview leaves pixels short of saturation: when one is
+            // pending, the settle pass runs first, after `SETTLE_MS` of idle
+            // (rails still up), then the usual power-off delay follows. An
+            // event during the settle cancels it like any refresh; the pixels
+            // stay unsettled and the next refresh or idle settles them.
             Either::First(_) => {
                 const ANALOG_IDLE_MS: u64 = 1000;
                 let idle_power_off = async {
+                    if let Some(ms) = display.settle_due_in_ms() {
+                        Timer::after_millis(ms as u64).await;
+                        let _ = display.settle().await;
+                    }
                     Timer::after_millis(ANALOG_IDLE_MS).await;
                     let _ = display.deep_sleep().await;
                     core::future::pending::<core::convert::Infallible>().await
