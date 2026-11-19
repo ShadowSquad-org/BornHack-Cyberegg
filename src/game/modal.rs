@@ -119,7 +119,7 @@ impl ModalKind {
             Self::Debug => &DEBUG_ITEMS,
             Self::Drink => &[
                 Item::DrinkChoice(super::engine::DrinkKind::Water),
-                Item::DrinkChoice(super::engine::DrinkKind::Cola),
+                Item::DrinkChoice(super::engine::DrinkKind::Coffee),
                 Item::DrinkChoice(super::engine::DrinkKind::Beer),
                 Item::DrinkChoice(super::engine::DrinkKind::Wine),
                 Item::DrinkChoice(super::engine::DrinkKind::Whiskey),

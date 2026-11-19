@@ -251,11 +251,11 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DOSE_WATER_BOOZE_PCT` | 5 | 5 |
 | `DOSE_WATER_HANGOVER_MIN` | 60 | 60 |
 | `DOSE_WATER_GROGGY_MIN` | 30 | 30 |
-| `DOSE_COLA_WATER_PCT` | 20 | 20 |
-| `DOSE_COLA_FULL_PCT` | 2 | 2 |
-| `DOSE_COLA_ENERGY_PCT` | 8 | 8 |
-| `DOSE_COLA_MOOD_PCT` | 3 | 3 |
-| `DOSE_COLA_WEIGHT_PCT` | 1 | 1 |
+| `DOSE_COFFEE_WATER_PCT` | 20 | 20 |
+| `DOSE_COFFEE_FULL_PCT` | 2 | 2 |
+| `DOSE_COFFEE_ENERGY_PCT` | 8 | 8 |
+| `DOSE_COFFEE_MOOD_PCT` | 3 | 3 |
+| `DOSE_COFFEE_WEIGHT_PCT` | 1 | 1 |
 | `DOSE_BEER_WATER_PCT` | 20 | 20 |
 | `DOSE_BEER_BELLY_PCT` | 2 | 2 |
 | `DOSE_BEER_BOOZE_PCT` | 15 | 15 |
@@ -376,7 +376,7 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DEMO_PICK_PIZZA_PCT` | 25 | 25 |
 | `DEMO_PICK_FRIK_PCT` | 12 | 12 |
 | `DEMO_PICK_WATER_PCT` | 70 | 70 |
-| `DEMO_PICK_COLA_PCT` | 20 | 20 |
+| `DEMO_PICK_COFFEE_PCT` | 20 | 20 |
 | `DEMO_PICK_GAME_PCT` | 30 | 30 |
 | `BATTLE_POWER_BASE_PTS` | 22 | 22 |
 | `BATTLE_POWER_WEIGHT_PCT` | 28 | 28 |
@@ -435,7 +435,7 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `FLOOR_SOCK_DIRT_PCT` | 85 | 85 |
 | `FLOOR_PIZZA_DIRT_PCT` | 95 | 95 |
 
-Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. The five `FLOOR_*_DIRT_PCT` lines must rise in order, and `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` must differ: if not, all five floor lines (or both night minutes) fall back to the preset together. Unknown keys are logged and skipped.
+Stat scale: `655 ≈ 1 %`, `65535 = 100 %`. Time scale: `1 tick = 10 seconds` (so 360 ticks = 1 hour). Values are clamped to sensible ranges. If a pair of band edges ends up in the wrong order, that pair falls back to the preset. The five `FLOOR_*_DIRT_PCT` lines must rise in order, and `BG_NIGHT_FROM_MIN` and `BG_NIGHT_TO_MIN` must differ: if not, all five floor lines (or both night minutes) fall back to the preset together. Unknown keys are logged and skipped. The old cola keys (`DOSE_COLA_*`, `DEMO_PICK_COLA_PCT`) from before cola became coffee still work: they set the matching `DOSE_COFFEE_*` / `DEMO_PICK_COFFEE_PCT` value.
 
 To go back to a preset, delete `BPETS_V3.CFG` from the drive and reboot.
 

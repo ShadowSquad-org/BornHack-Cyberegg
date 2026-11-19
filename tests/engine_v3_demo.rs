@@ -295,7 +295,7 @@ mod tunables {
     fn bad_orders_and_sums_fall_back() {
         let mut t = Thresholds::CLASSIC;
         t.DEMO_PICK_APPLE_PCT = 90;
-        t.DEMO_PICK_COLA_PCT = 90;
+        t.DEMO_PICK_COFFEE_PCT = 90;
         t.DEMO_HELP_HEALTH_PCT = 20;
         t.DEMO_RICH_FOOD_PCT = 70;
         assert_eq!(validate(&t, &Thresholds::CLASSIC), Thresholds::CLASSIC);
@@ -1486,8 +1486,8 @@ mod acts {
         }
         let mut a = quiet();
         let mut b = a.clone();
-        demo::act(&mut a, Choice::Drink(DrinkKind::Cola));
-        assert!(b.drink(DrinkKind::Cola));
+        demo::act(&mut a, Choice::Drink(DrinkKind::Coffee));
+        assert!(b.drink(DrinkKind::Coffee));
         finish(&mut b);
         assert_eq!(
             (a.hydration, a.energy, a.mood),

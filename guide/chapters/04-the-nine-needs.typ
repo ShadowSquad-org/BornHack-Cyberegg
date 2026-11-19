@@ -156,7 +156,7 @@ belly's.
 #dose-table((auto, 1fr, 1fr),
   table.header([*Drink*], [*Water*], [*Full*]),
   [#w("Water")], dose-pct("Water", "water"), dose-pct("Water", "full"),
-  [#w("Cola")], dose-pct("Cola", "water"), dose-pct("Cola", "full"),
+  [#w("Coffee")], dose-pct("Coffee", "water"), dose-pct("Coffee", "full"),
   [#w("Beer")], dose-pct("Beer", "water"), dose-pct("Beer", "full"),
   [#w("Wine")], dose-pct("Wine", "water"), dose-pct("Wine", "full"),
   [#w("Whiskey")], dose-pct-or("Whiskey", "water", [none]), dose-pct-or("Whiskey", "full", [none]),
@@ -202,7 +202,7 @@ edge. A pet with plenty of energy is never in trouble for it.
     #v("ENERGY_MULT_WEIGHT_PCT"). A fit pet, from #v("ENERGY_FIT_GOOD_PCT")
     fitness up, burns it at #v("ENERGY_MULT_FIT_PCT").
 
-    *Up.* Sleep refills it. Cola gives #dose-pct("Cola", "energy") and
+    *Up.* Sleep refills it. Coffee gives #dose-pct("Coffee", "energy") and
     relaxing gives #dose-pct("Relax", "energy").
   ],
   hero-pic("tired"))
@@ -368,8 +368,8 @@ Both cost mood and energy.
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
-    *Up.* Food adds weight, as the food table showed. Cola and beer add
-    #dose-pct("Cola", "weight"). A belly over #v("FULL_HI_PCT") pushes weight
+    *Up.* Food adds weight, as the food table showed. Beer adds
+    #dose-pct("Beer", "weight"). A belly over #v("FULL_HI_PCT") pushes weight
     up all the time, and so does a food coma.
 
     *Down.* Exercise takes off #dose-pct("Exercise", "weight"). An empty belly,

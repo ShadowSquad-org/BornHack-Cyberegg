@@ -44,7 +44,7 @@ pub enum DisplayAnim {
     Sleeping,
     Exercising,
     Medicating,
-    /// Drinking a beverage (Beer / Wine / Whiskey / Water / Cola).
+    /// Drinking a beverage (Beer / Wine / Whiskey / Water / Coffee).
     Drinking,
     /// Receiving an Ozempic injection.
     Ozempic,

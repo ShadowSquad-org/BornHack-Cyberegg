@@ -84,6 +84,28 @@ fn custom_flag_only_when_values_differ() {
     assert!(is_custom_set(&t, Mode::Classic));
 }
 
+/// Cola became coffee: a BPETS_V3.CFG edited before the rename keeps
+/// working, but the template only shows the new names.
+#[test]
+fn old_cola_cfg_keys_set_the_coffee_fields() {
+    let mut t = Thresholds::CLASSIC;
+    let n = apply_overrides(
+        &mut t,
+        b"DOSE_COLA_WATER_PCT=31\ndose_cola_full_pct=4\nDOSE_COLA_ENERGY_PCT=9\n\
+          DOSE_COLA_MOOD_PCT=5\nDOSE_COLA_WEIGHT_PCT=6\nDEMO_PICK_COLA_PCT=7\n",
+    );
+    assert_eq!(n, 6);
+    assert_eq!(t.DOSE_COFFEE_WATER_PCT, 31);
+    assert_eq!(t.DOSE_COFFEE_FULL_PCT, 4);
+    assert_eq!(t.DOSE_COFFEE_ENERGY_PCT, 9);
+    assert_eq!(t.DOSE_COFFEE_MOOD_PCT, 5);
+    assert_eq!(t.DOSE_COFFEE_WEIGHT_PCT, 6);
+    assert_eq!(t.DEMO_PICK_COFFEE_PCT, 7);
+    let template = cfg_template();
+    assert!(template.contains("DOSE_COFFEE_WATER_PCT="));
+    assert!(!template.contains("COLA"), "template shows only the new names");
+}
+
 #[test]
 fn new_egg_starts_inside_every_band() {
     use bornhack_aegg::game::engine::needs::{
@@ -1623,7 +1645,7 @@ mod doses_food_drink {
     fn cola_is_a_sugar_rush() {
         let mut s = pet();
         s.energy = pct(60) as u16;
-        sip(&mut s, DrinkKind::Cola);
+        sip(&mut s, DrinkKind::Coffee);
         assert_eq!(s.hydration as i32, pct(70));
         assert_eq!(s.fullness as i32, pct(52));
         assert_eq!(s.energy as i32, pct(68));
@@ -2916,7 +2938,7 @@ mod fix_round_1 {
             s.refusal_for(Action::Drink, Some(DrinkKind::Water)),
             Some(Reason::Refused(Refusal::NotThirsty))
         );
-        assert_eq!(s.refusal_for(Action::Drink, Some(DrinkKind::Cola)), None);
+        assert_eq!(s.refusal_for(Action::Drink, Some(DrinkKind::Coffee)), None);
         s.injured_min = 30;
         assert_eq!(
             s.refusal_for(Action::Play, None),
@@ -5220,7 +5242,7 @@ mod hint {
             for f in FoodKind::ALL {
                 assert_eq!(doses::price(Action::Feed, Some(f), None, hard), Some(old_food(f, hard)), "{f:?} hard={hard}");
             }
-            for d in [DrinkKind::Water, DrinkKind::Cola, DrinkKind::Beer, DrinkKind::Wine, DrinkKind::Whiskey] {
+            for d in [DrinkKind::Water, DrinkKind::Coffee, DrinkKind::Beer, DrinkKind::Wine, DrinkKind::Whiskey] {
                 assert_eq!(doses::price(Action::Drink, None, Some(d), hard), Some(old_drink(d)), "{d:?}");
             }
             assert_eq!(doses::price(Action::Heal, None, None, hard), Some(1));

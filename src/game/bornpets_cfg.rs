@@ -17,7 +17,7 @@
 
 #[cfg(feature = "embassy-core")]
 use crate::game::engine::thresholds;
-use crate::game::engine::thresholds::{BORNPETS_CFG_KEYS, Mode, Thresholds};
+use crate::game::engine::thresholds::{Mode, Thresholds};
 
 /// The v3 balance file.  The old firmware keeps its own `BORNPETS.CFG`,
 /// which v3 never reads, writes or deletes.  The defmt log literals below
@@ -119,11 +119,9 @@ pub fn apply_line(values: &mut Thresholds, line: &[u8]) -> bool {
         return false;
     };
 
-    for (name, setter) in BORNPETS_CFG_KEYS {
-        if key_str.eq_ignore_ascii_case(name) {
-            setter(values, value_num);
-            return true;
-        }
+    if let Some(setter) = crate::game::engine::thresholds::cfg_setter(key_str) {
+        setter(values, value_num);
+        return true;
     }
     #[cfg(feature = "embassy-core")]
     defmt::info!("BPETS_V3.CFG: unknown key, ignored");

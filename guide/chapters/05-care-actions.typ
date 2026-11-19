@@ -105,13 +105,13 @@ menu has no word for "no more cake". It only has the warning mark.]
 
 #grid(columns: (1fr, auto), column-gutter: 5mm, align: top,
   [
-    The Drink menu has five rows: water, cola and three alcohols. Each takes
+    The Drink menu has five rows: water, coffee and three alcohols. Each takes
     #v("DRINK_DURATION").
 
     *Water.* A glass gives up to #v("DOSE_WATER_MAX_PCT") of water, but never
     lifts the pet past #v("WATER_CAP_PCT"). Only a glass of at least
     #v("DOSE_WATER_BELLY_MIN_PCT") also fills the belly a little. Its toast is
-    #w("refreshed!"), the same as cola.
+    #w("refreshed!"), the same as coffee.
   ],
   stack(spacing: gap-s,
     screen("menu-drink", width: shot-s, caption: [The Drink menu.]),
@@ -121,7 +121,7 @@ menu has no word for "no more cake". It only has the warning mark.]
     #tbl((auto, auto, auto, 1fr),
       table.header([*Drink*], [*Price*], [*Water*], [*Else*]),
       [#w("Water")], pr("Water"), [up to #v("DOSE_WATER_MAX_PCT")], [Booze -#v("DOSE_WATER_BOOZE_PCT").],
-      [#w("Cola")], pr("Cola"), sg("Cola", "water"), [Energy #sg("Cola", "energy"), mood #sg("Cola", "mood").],
+      [#w("Coffee")], pr("Coffee"), sg("Coffee", "water"), [Energy #sg("Coffee", "energy"), mood #sg("Coffee", "mood").],
       [#w("Beer")], pr("Beer"), sg("Beer", "water"), [Booze #sg("Beer", "booze"), mood #sg("Beer", "mood").],
       [#w("Wine")], pr("Wine"), sg("Wine", "water"), [Booze #sg("Wine", "booze"), mood #sg("Wine", "mood").],
       [#w("Whiskey")], pr("Whiskey"), sgn("Whiskey", "water"), [Booze #sg("Whiskey", "booze"), mood #sg("Whiskey", "mood").],
@@ -551,7 +551,7 @@ The row shows the wait in place of its price.
 #tbl((auto, 1fr),
   table.header([*Toast*], [*When, and what it means*]),
   [#w("+full")], [A food was accepted.],
-  [#w("refreshed!")], [Water or cola was accepted.],
+  [#w("refreshed!")], [Water or coffee was accepted.],
   [#w("+drunk")], [An alcohol was accepted.],
   [#w("sleeping")], [Sleep.],
   [#w("waking up")], [Wake up, or Defrost.],

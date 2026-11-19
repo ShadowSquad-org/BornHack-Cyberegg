@@ -918,14 +918,14 @@ fn sporty_plan(m: u32, s: &GameState) -> Plan {
     }
 }
 
-/// Sleeps late, lives on pizza, cake and cola. No weight habit.
+/// Sleeps late, lives on pizza, cake and coffee. No weight habit.
 pub fn lazy_treats(d: u32, m: u32, s: &GameState) -> Plan {
     use Act::*;
     use FoodKind::*;
     let p = if at(m, 10, 0) {
         plan(&[Wake, Eat(Pizza)])
     } else if at(m, 14, 0) {
-        plan(&[Eat(Cake), Drink(DrinkKind::Cola)])
+        plan(&[Eat(Cake), Drink(DrinkKind::Coffee)])
     } else if at(m, 16, 0) {
         if d % 2 == 0 {
             plan(&[Sport])
@@ -1136,7 +1136,7 @@ pub fn fighter_six(_d: u32, m: u32, s: &GameState) -> Plan {
 }
 
 /// The prototype's brawler: no sport, rich food while under 76 % weight,
-/// cake or cola, two beers at 19:30 for the fight. No weight habit.
+/// cake or coffee, two beers at 19:30 for the fight. No weight habit.
 fn brawler_plan(d: u32, m: u32, s: &GameState) -> Plan {
     use Act::*;
     use FoodKind::*;
@@ -1152,7 +1152,7 @@ fn brawler_plan(d: u32, m: u32, s: &GameState) -> Plan {
         if d % 2 == 0 && s.weight < pct_lvl(76) {
             plan(&[Eat(Cake)])
         } else {
-            plan(&[Drink(DrinkKind::Cola)])
+            plan(&[Drink(DrinkKind::Coffee)])
         }
     } else if at(m, 17, 0) {
         plan(&[Play])

@@ -305,11 +305,11 @@ thresholds_table! {
     DOSE_WATER_BOOZE_PCT: u8,
     DOSE_WATER_HANGOVER_MIN: u16,
     DOSE_WATER_GROGGY_MIN: u16,
-    DOSE_COLA_WATER_PCT: u8,
-    DOSE_COLA_FULL_PCT: u8,
-    DOSE_COLA_ENERGY_PCT: u8,
-    DOSE_COLA_MOOD_PCT: u8,
-    DOSE_COLA_WEIGHT_PCT: u8,
+    DOSE_COFFEE_WATER_PCT: u8,
+    DOSE_COFFEE_FULL_PCT: u8,
+    DOSE_COFFEE_ENERGY_PCT: u8,
+    DOSE_COFFEE_MOOD_PCT: u8,
+    DOSE_COFFEE_WEIGHT_PCT: u8,
     DOSE_BEER_WATER_PCT: u8,
     DOSE_BEER_BELLY_PCT: u8,
     DOSE_BEER_BOOZE_PCT: u8,
@@ -430,7 +430,7 @@ thresholds_table! {
     DEMO_PICK_PIZZA_PCT: u8,
     DEMO_PICK_FRIK_PCT: u8,
     DEMO_PICK_WATER_PCT: u8,
-    DEMO_PICK_COLA_PCT: u8,
+    DEMO_PICK_COFFEE_PCT: u8,
     DEMO_PICK_GAME_PCT: u8,
     // Backgrounds (plan 7). Display lines, not balance.
     BG_NIGHT_FROM_MIN: u16,
@@ -690,11 +690,11 @@ impl Thresholds {
         DOSE_WATER_BOOZE_PCT: 5,
         DOSE_WATER_HANGOVER_MIN: 60,
         DOSE_WATER_GROGGY_MIN: 30,
-        DOSE_COLA_WATER_PCT: 20,
-        DOSE_COLA_FULL_PCT: 2,
-        DOSE_COLA_ENERGY_PCT: 8,
-        DOSE_COLA_MOOD_PCT: 3,
-        DOSE_COLA_WEIGHT_PCT: 1,
+        DOSE_COFFEE_WATER_PCT: 20,
+        DOSE_COFFEE_FULL_PCT: 2,
+        DOSE_COFFEE_ENERGY_PCT: 8,
+        DOSE_COFFEE_MOOD_PCT: 3,
+        DOSE_COFFEE_WEIGHT_PCT: 1,
         DOSE_BEER_WATER_PCT: 20,
         DOSE_BEER_BELLY_PCT: 2,
         DOSE_BEER_BOOZE_PCT: 15,
@@ -815,7 +815,7 @@ impl Thresholds {
         DEMO_PICK_PIZZA_PCT: 25,
         DEMO_PICK_FRIK_PCT: 12,
         DEMO_PICK_WATER_PCT: 70,
-        DEMO_PICK_COLA_PCT: 20,
+        DEMO_PICK_COFFEE_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
         BG_NIGHT_FROM_MIN: 1260,
         BG_NIGHT_TO_MIN: 420,
@@ -1071,11 +1071,11 @@ impl Thresholds {
         DOSE_WATER_BOOZE_PCT: 5,
         DOSE_WATER_HANGOVER_MIN: 60,
         DOSE_WATER_GROGGY_MIN: 30,
-        DOSE_COLA_WATER_PCT: 20,
-        DOSE_COLA_FULL_PCT: 2,
-        DOSE_COLA_ENERGY_PCT: 8,
-        DOSE_COLA_MOOD_PCT: 3,
-        DOSE_COLA_WEIGHT_PCT: 1,
+        DOSE_COFFEE_WATER_PCT: 20,
+        DOSE_COFFEE_FULL_PCT: 2,
+        DOSE_COFFEE_ENERGY_PCT: 8,
+        DOSE_COFFEE_MOOD_PCT: 3,
+        DOSE_COFFEE_WEIGHT_PCT: 1,
         DOSE_BEER_WATER_PCT: 20,
         DOSE_BEER_BELLY_PCT: 2,
         DOSE_BEER_BOOZE_PCT: 15,
@@ -1196,7 +1196,7 @@ impl Thresholds {
         DEMO_PICK_PIZZA_PCT: 25,
         DEMO_PICK_FRIK_PCT: 12,
         DEMO_PICK_WATER_PCT: 70,
-        DEMO_PICK_COLA_PCT: 20,
+        DEMO_PICK_COFFEE_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
         BG_NIGHT_FROM_MIN: 1260,
         BG_NIGHT_TO_MIN: 420,
@@ -1699,20 +1699,20 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("DOSE_WATER_GROGGY_MIN", |t, v| {
         t.DOSE_WATER_GROGGY_MIN = clamp_u16(v)
     }),
-    ("DOSE_COLA_WATER_PCT", |t, v| {
-        t.DOSE_COLA_WATER_PCT = v.min(100) as u8
+    ("DOSE_COFFEE_WATER_PCT", |t, v| {
+        t.DOSE_COFFEE_WATER_PCT = v.min(100) as u8
     }),
-    ("DOSE_COLA_FULL_PCT", |t, v| {
-        t.DOSE_COLA_FULL_PCT = v.min(100) as u8
+    ("DOSE_COFFEE_FULL_PCT", |t, v| {
+        t.DOSE_COFFEE_FULL_PCT = v.min(100) as u8
     }),
-    ("DOSE_COLA_ENERGY_PCT", |t, v| {
-        t.DOSE_COLA_ENERGY_PCT = v.min(100) as u8
+    ("DOSE_COFFEE_ENERGY_PCT", |t, v| {
+        t.DOSE_COFFEE_ENERGY_PCT = v.min(100) as u8
     }),
-    ("DOSE_COLA_MOOD_PCT", |t, v| {
-        t.DOSE_COLA_MOOD_PCT = v.min(100) as u8
+    ("DOSE_COFFEE_MOOD_PCT", |t, v| {
+        t.DOSE_COFFEE_MOOD_PCT = v.min(100) as u8
     }),
-    ("DOSE_COLA_WEIGHT_PCT", |t, v| {
-        t.DOSE_COLA_WEIGHT_PCT = v.min(100) as u8
+    ("DOSE_COFFEE_WEIGHT_PCT", |t, v| {
+        t.DOSE_COFFEE_WEIGHT_PCT = v.min(100) as u8
     }),
     ("DOSE_BEER_WATER_PCT", |t, v| {
         t.DOSE_BEER_WATER_PCT = v.min(100) as u8
@@ -2064,8 +2064,8 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("DEMO_PICK_WATER_PCT", |t, v| {
         t.DEMO_PICK_WATER_PCT = v.min(100) as u8
     }),
-    ("DEMO_PICK_COLA_PCT", |t, v| {
-        t.DEMO_PICK_COLA_PCT = v.min(100) as u8
+    ("DEMO_PICK_COFFEE_PCT", |t, v| {
+        t.DEMO_PICK_COFFEE_PCT = v.min(100) as u8
     }),
     ("DEMO_PICK_GAME_PCT", |t, v| {
         t.DEMO_PICK_GAME_PCT = v.min(100) as u8
@@ -2141,6 +2141,30 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
         t.FLOOR_PIZZA_DIRT_PCT = clamp_pct(v)
     }),
 ];
+
+/// Old key names still read from a `BPETS_V3.CFG`, as `(old, new)`: a file
+/// edited before a rename keeps working. The template shows only the new
+/// names (`BORNPETS_CFG_KEYS`). Cola became coffee.
+pub const BORNPETS_CFG_ALIASES: &[(&str, &str)] = &[
+    ("DOSE_COLA_WATER_PCT", "DOSE_COFFEE_WATER_PCT"),
+    ("DOSE_COLA_FULL_PCT", "DOSE_COFFEE_FULL_PCT"),
+    ("DOSE_COLA_ENERGY_PCT", "DOSE_COFFEE_ENERGY_PCT"),
+    ("DOSE_COLA_MOOD_PCT", "DOSE_COFFEE_MOOD_PCT"),
+    ("DOSE_COLA_WEIGHT_PCT", "DOSE_COFFEE_WEIGHT_PCT"),
+    ("DEMO_PICK_COLA_PCT", "DEMO_PICK_COFFEE_PCT"),
+];
+
+/// The setter for a config key (any case), through an old name too.
+pub fn cfg_setter(key: &str) -> Option<Setter> {
+    let key = BORNPETS_CFG_ALIASES
+        .iter()
+        .find(|(old, _)| key.eq_ignore_ascii_case(old))
+        .map_or(key, |&(_, new)| new);
+    BORNPETS_CFG_KEYS
+        .iter()
+        .find(|(name, _)| key.eq_ignore_ascii_case(name))
+        .map(|&(_, setter)| setter)
+}
 
 /// Last minute of the day, the most a bedtime or getting-up line can be.
 const DAY_LAST_MIN: u16 = super::demo::MINUTES_PER_DAY - 1;
@@ -2228,9 +2252,9 @@ pub fn validate(t: &Thresholds, preset: &Thresholds) -> Thresholds {
         r.DEMO_PICK_PIZZA_PCT = preset.DEMO_PICK_PIZZA_PCT;
         r.DEMO_PICK_FRIK_PCT = preset.DEMO_PICK_FRIK_PCT;
     }
-    if r.DEMO_PICK_WATER_PCT as u16 + r.DEMO_PICK_COLA_PCT as u16 > 100 {
+    if r.DEMO_PICK_WATER_PCT as u16 + r.DEMO_PICK_COFFEE_PCT as u16 > 100 {
         r.DEMO_PICK_WATER_PCT = preset.DEMO_PICK_WATER_PCT;
-        r.DEMO_PICK_COLA_PCT = preset.DEMO_PICK_COLA_PCT;
+        r.DEMO_PICK_COFFEE_PCT = preset.DEMO_PICK_COFFEE_PCT;
     }
     if !(r.DEMO_HEALTH_FLOOR_PCT < r.DEMO_HELP_HEALTH_PCT
         && r.DEMO_HELP_HEALTH_PCT < r.DEMO_ON_HEALTH_PCT

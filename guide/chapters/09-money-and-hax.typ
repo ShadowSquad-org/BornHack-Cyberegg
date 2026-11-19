@@ -54,7 +54,7 @@ Without money, every row is free.
     ..prow(w("Pizza"), "Pizza"),
     ..prow(w("Cake"), "Cake"),
     ..prow(w("Water"), "Water"),
-    ..prow(w("Cola"), "Cola"),
+    ..prow(w("Coffee"), "Coffee"),
     ..prow(w("Beer"), "Beer"),
     ..prow(w("Wine"), "Wine"),
     ..prow(w("Whiskey"), "Whiskey"),

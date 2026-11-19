@@ -205,6 +205,22 @@ fn v3_keeps_running_action_food_and_drink() {
     }
 }
 
+/// Cola became coffee in the same slot: a save made mid-Cola (drink byte 1)
+/// loads as a coffee, and a coffee saves as byte 1.
+#[test]
+fn old_cola_drink_byte_loads_as_coffee() {
+    let mut s = v3_state();
+    s.active_action = Some(Action::Drink);
+    s.active_food = None;
+    s.active_drink = Some(DrinkKind::Coffee);
+    let mut bytes = s.to_bytes();
+    assert_eq!(bytes[V3_DRINK_OFS], 1);
+    bytes[V3_DRINK_OFS] = 1;
+    let back = GameState::from_bytes(&bytes).unwrap();
+    assert_eq!(back.active_drink, Some(DrinkKind::Coffee));
+    assert_eq!(DrinkKind::ALL[1], DrinkKind::Coffee);
+}
+
 #[test]
 fn action_bytes_round_trip_and_2_is_unused() {
     let all = [

@@ -127,7 +127,7 @@ The game engine was rebuilt (the "v3" engine). Everything below is on `main`.
   neglect triggers diabetes. **Insulin** manages it. **Ozempic** is a
   stronger weight-loss treatment with a long cooldown.
 - **Food and drinks** — Feed offers Salad, Apple, Frikandel speciaal, Pizza
-  and Cake. Drink offers Water, Cola, Beer, Wine and Whiskey. Heavy drinking
+  and Cake. Drink offers Water, Coffee, Beer, Wine and Whiskey. Heavy drinking
   leads to dependence, cleared by a **Rehab** course. Exercise, Relax and
   Wash are separate actions.
 - **Demo mode** — a self-caring desk-companion pet that looks after itself

@@ -376,7 +376,7 @@ adds four things to it.
   table.header([*The note*], [*What the pet did*]),
   [#w("had an apple") #w("had a salad") #w("had some pizza")
    #w("had a Frikandel spec") #w("had some cake")], [It ate that food.],
-  [#w("had some water") #w("had a cola") #w("fancied a beer")], [It drank.
+  [#w("had some water") #w("had a coffee") #w("fancied a beer")], [It drank.
     Any beer reads #w("fancied a beer"), a thirsty one too.],
   [#w("had some wine") #w("had a whiskey")], [The badge can word them. The pet
     never reaches for them by itself, so you will not meet them.],

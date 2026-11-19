@@ -341,11 +341,11 @@ fn food_draw(s: &GameState) -> FoodKind {
 fn drink_draw(s: &GameState) -> DrinkKind {
     let v = roll(s);
     let water = t::DEMO_PICK_WATER_PCT() as u32;
-    let cola = water + t::DEMO_PICK_COLA_PCT() as u32;
+    let coffee = water + t::DEMO_PICK_COFFEE_PCT() as u32;
     if v < water {
         DrinkKind::Water
-    } else if v < cola || s.booze as i32 > lines(s).whim_lo {
-        DrinkKind::Cola
+    } else if v < coffee || s.booze as i32 > lines(s).whim_lo {
+        DrinkKind::Coffee
     } else {
         DrinkKind::Beer
     }
@@ -570,7 +570,7 @@ impl Note {
         Note::Ate(FoodKind::Frikandel),
         Note::Ate(FoodKind::Cake),
         Note::Drank(DrinkKind::Water),
-        Note::Drank(DrinkKind::Cola),
+        Note::Drank(DrinkKind::Coffee),
         Note::Drank(DrinkKind::Beer),
         Note::Drank(DrinkKind::Wine),
         Note::Drank(DrinkKind::Whiskey),
@@ -595,7 +595,7 @@ impl Note {
             Note::Ate(FoodKind::Frikandel) => "had a Frikandel spec",
             Note::Ate(FoodKind::Cake) => "had some cake",
             Note::Drank(DrinkKind::Water) => "had some water",
-            Note::Drank(DrinkKind::Cola) => "had a cola",
+            Note::Drank(DrinkKind::Coffee) => "had a coffee",
             Note::Drank(DrinkKind::Beer) => "fancied a beer",
             Note::Drank(DrinkKind::Wine) => "had some wine",
             Note::Drank(DrinkKind::Whiskey) => "had a whiskey",

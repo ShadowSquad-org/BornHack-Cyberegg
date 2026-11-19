@@ -2974,7 +2974,7 @@ mod overweight_diabetes_tests {
     }
 
     /// Drinking charges by the drink's health tier — healthy (Water) costs
-    /// more than unhealthy (Cola), mirroring `doses::price`.
+    /// more than unhealthy (Coffee), mirroring `doses::price`.
     #[test]
     fn drink_charges_by_health() {
         let mut state = GameState::new_egg(42, PetKind::DEFAULT);
@@ -2990,8 +2990,8 @@ mod overweight_diabetes_tests {
         state.money_enabled = true;
         state.money = 100;
 
-        assert!(state.drink(DrinkKind::Cola));
-        assert_eq!(state.money, 90, "unhealthy drink (Cola) should cost 10 HAX");
+        assert!(state.drink(DrinkKind::Coffee));
+        assert_eq!(state.money, 90, "unhealthy drink (Coffee) should cost 10 HAX");
     }
 
     /// The basic Play action costs a flat `PLAY_HAX_COST` (10 HAX).

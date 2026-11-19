@@ -161,7 +161,7 @@ pub fn price(
         }),
         Action::Drink => drink.map(|d| match d {
             DrinkKind::Water => 15,
-            DrinkKind::Cola | DrinkKind::Beer | DrinkKind::Wine | DrinkKind::Whiskey => 10,
+            DrinkKind::Coffee | DrinkKind::Beer | DrinkKind::Wine | DrinkKind::Whiskey => 10,
         }),
         Action::Heal => Some(super::ASPIRINE_HAX_COST),
         Action::Play => Some(super::PLAY_HAX_COST),
@@ -616,14 +616,14 @@ fn pour(drink: DrinkKind) -> Pour {
         weight,
     };
     match drink {
-        DrinkKind::Cola => Pour {
-            water: t::DOSE_COLA_WATER_PCT(),
-            belly: t::DOSE_COLA_FULL_PCT(),
+        DrinkKind::Coffee => Pour {
+            water: t::DOSE_COFFEE_WATER_PCT(),
+            belly: t::DOSE_COFFEE_FULL_PCT(),
             booze: 0,
-            mood: t::DOSE_COLA_MOOD_PCT(),
-            energy: t::DOSE_COLA_ENERGY_PCT(),
+            mood: t::DOSE_COFFEE_MOOD_PCT(),
+            energy: t::DOSE_COFFEE_ENERGY_PCT(),
             fun: 0,
-            weight: t::DOSE_COLA_WEIGHT_PCT(),
+            weight: t::DOSE_COFFEE_WEIGHT_PCT(),
         },
         DrinkKind::Beer => alcohol(
             t::DOSE_BEER_WATER_PCT(),

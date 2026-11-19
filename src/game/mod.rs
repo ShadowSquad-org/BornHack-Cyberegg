@@ -96,9 +96,9 @@ pub enum Toast {
     /// challenge and it resolved in our favor — see `game::battle`.
     BattleWon = 22,
     BattleLost = 23,
-    /// Drank something non-alcoholic (Water/Cola) — never touches
+    /// Drank something non-alcoholic (Water/Coffee) — never touches
     /// `drunk`, unlike `Drink`. Kept as its own variant so the toast
-    /// after picking Water/Cola doesn't misleadingly say "+drunk".
+    /// after picking Water/Coffee doesn't misleadingly say "+drunk".
     Refreshed = 24,
     /// Sent the pet to "Only pets" — see `game::engine::Action::OnlyPets`.
     OnlyPets = 25,

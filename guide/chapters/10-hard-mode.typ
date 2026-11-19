@@ -55,7 +55,7 @@ nothing. The #w("can't afford") rule is the same too (@ch-money).
   ..prow(w("Pizza"), "Pizza", hard: true),
   ..prow(w("Cake"), "Cake", hard: true),
   ..prow(w("Water"), "Water", hard: true),
-  ..prow(w("Cola"), "Cola", hard: true),
+  ..prow(w("Coffee"), "Coffee", hard: true),
   ..prow(w("Beer"), "Beer", hard: true),
   ..prow(w("Wine"), "Wine", hard: true),
   ..prow(w("Whiskey"), "Whiskey", hard: true),
