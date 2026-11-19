@@ -1561,6 +1561,8 @@ Demo mode: no money, so none of this applies; a demo pet cannot be evicted.
 
 Answers to the open questions of sections 11 and 12.8. These override earlier text. **Applied and re-simulated: see 18.1 for the status of every row** (applied or design only, and whether its target held).
 
+> **Owner decision, 2026-11-19 (supersedes "HAX frozen in demo" in sections 8, 12 and plan 3):** HAX stays live in demo mode. The balance and the prices show, the demo pet pays for its own care and the player's actions cost what they cost, and mini-games, Only pets and battle prizes pay. The demo pet works (Only pets) when its balance is under `DEMO_HAX_TARGET` (100) and falls back on it when broke; above the target the balance drifts down 1 HAX every `DEMO_HAX_DRIFT_MIN` (10) minutes. Turning demo off keeps the balance. Money-off pets stay moneyless.
+
 ### Core rules
 
 | # | Question | Decision |

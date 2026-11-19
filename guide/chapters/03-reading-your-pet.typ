@@ -389,6 +389,8 @@ adds four things to it.
   [#w("had a play")], [It played, or finished a mini-game by itself.],
   [#w("had a rest")], [It relaxed.],
   [#w("took medicine")], [It healed itself.],
+  [#w("did a shift")], [It went to work (#w("Only pets")) for HAX, when HAX is on
+    and the balance was low.],
   [#w("took insulin") #w("went to rehab")], [A diabetic pet took its insulin,
     and a dependent one went to rehab.],
 )
@@ -399,8 +401,8 @@ acts do not go in it.]
 
 === When you step in
 
-The pet does not mind help. Anything you do for it costs no HAX in demo mode, and
-the pet then leaves it alone for #v("DEMO_PAUSE_MIN"), so it does not undo
+The pet does not mind help. Anything you do for it costs the usual HAX (the
+pet pays for its own care too, @ch-money), and the pet then leaves it alone for #v("DEMO_PAUSE_MIN"), so it does not undo
 what you did. Your action also wipes the note.
 
 If your care made things better, nothing went wrong with it, and it did not

@@ -33,9 +33,14 @@ pet's life, and a new egg lets you pick again. The #w("Mode:") row in the
 A new egg always starts with #v("START_HAX"). The balance belongs to the pet,
 so it goes with the pet. It never carries over.
 
-*Demo mode pauses HAX.* A pet in demo mode (@ch-care) hides the balance, and
-nothing costs or pays while demo is on. #w("Only pets") stays in the Play menu
-and pays nothing. The balance is kept, and shows again when demo goes off.
+*Demo mode keeps HAX running.* A pet in demo mode (@ch-care) shows the balance
+and the prices like any other, and pays for its own meals and medicine. It earns
+the money back itself: it plays its mini-games, goes to work (#w("Only pets"))
+when the balance is under #v("DEMO_HAX_TARGET") HAX, and takes a battle prize
+like any pet. Above that line the balance slowly drains, one HAX every
+#v("DEMO_HAX_DRIFT_MIN") minutes, until it is back at the target, so a demo pet
+stays near #v("DEMO_HAX_TARGET") HAX. Turning demo off keeps whatever balance
+there is.
 
 == The price list
 

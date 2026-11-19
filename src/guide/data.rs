@@ -70,6 +70,8 @@ const UNIT_OVERRIDES: &[(&str, Unit)] = &[
     ("HANGOVER_ASLEEP_MULT", Unit::Count),
     // doses.rs: a number of cups of coffee.
     ("COFFEE_WIRED_CUPS", Unit::Count),
+    // demo.rs: the balance the demo pet works up to, a HAX amount.
+    ("DEMO_HAX_TARGET", Unit::Hax),
 ];
 
 /// The unit of a `Thresholds` field. An override wins over a suffix rule;
