@@ -121,7 +121,7 @@ menu has no word for "no more cake". It only has the warning mark.]
     #tbl((auto, auto, auto, 1fr),
       table.header([*Drink*], [*Price*], [*Water*], [*Else*]),
       [#w("Water")], pr("Water"), [up to #v("DOSE_WATER_MAX_PCT")], [Booze -#v("DOSE_WATER_BOOZE_PCT").],
-      [#w("Coffee")], pr("Coffee"), sg("Coffee", "water"), [Energy #sg("Coffee", "energy"), mood #sg("Coffee", "mood").],
+      [#w("Coffee")], pr("Coffee"), sg("Coffee", "water"), [Energy #sg("Coffee", "energy"), mood #sg("Coffee", "mood"). Ends a groggy spell.],
       [#w("Beer")], pr("Beer"), sg("Beer", "water"), [Booze #sg("Beer", "booze"), mood #sg("Beer", "mood").],
       [#w("Wine")], pr("Wine"), sg("Wine", "water"), [Booze #sg("Wine", "booze"), mood #sg("Wine", "mood").],
       [#w("Whiskey")], pr("Whiskey"), sgn("Whiskey", "water"), [Booze #sg("Whiskey", "booze"), mood #sg("Whiskey", "mood").],
@@ -131,6 +131,9 @@ menu has no word for "no more cake". It only has the warning mark.]
 *More about water.* It takes #v("DOSE_WATER_BOOZE_PCT") off the booze, and
 shortens a hangover by #v("DOSE_WATER_HANGOVER_MIN") and a groggy spell by
 #v("DOSE_WATER_GROGGY_MIN").
+
+*Coffee* has no sugar, so no weight. It cures a groggy morning, but too
+much wires the pet (@ch-conditions).
 
 *Alcohol.* Every alcohol also gives fun, and some energy.
 Its toast reads #w("+drunk"). A drunk pet feels less of the mood, a dependent
@@ -460,7 +463,8 @@ accept wins. It never takes a row the menu would refuse.
   #v("DEMO_NAP_SPREAD_MIN").
 
 A heavy pet picks light food, and a thin one picks rich food, so the pet
-does not run to fat or to bones. A pet over #v("DEMO_EDGE_BOOZE_PCT") booze is drunk. Past the edge
+does not run to fat or to bones. A groggy pet has a coffee, never the one
+that wires it. A pet over #v("DEMO_EDGE_BOOZE_PCT") booze is drunk. Past the edge
 rows above, which still come first, a drunk pet does nothing but drink water,
 after only #v("DEMO_DRY_BASE_MIN") plus up to #v("DEMO_DRY_SPREAD_MIN"). It
 skips bedtime by the clock, relaxing, the soft wants and the whims until its booze is back under that line. Casual

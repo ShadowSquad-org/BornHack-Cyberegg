@@ -202,8 +202,8 @@ edge. A pet with plenty of energy is never in trouble for it.
     #v("ENERGY_MULT_WEIGHT_PCT"). A fit pet, from #v("ENERGY_FIT_GOOD_PCT")
     fitness up, burns it at #v("ENERGY_MULT_FIT_PCT").
 
-    *Up.* Sleep refills it. Coffee gives #dose-pct("Coffee", "energy") and
-    relaxing gives #dose-pct("Relax", "energy").
+    *Up.* Sleep refills it. Coffee gives #dose-pct("Coffee", "energy") (more
+    to a groggy pet) and relaxing gives #dose-pct("Relax", "energy").
   ],
   hero-pic("tired"))
 
@@ -270,7 +270,8 @@ as hard to live with.
   danger word. A bored pet is only unhappy.
 - Over #v("FUN_HI_PCT") it is #w("wired"). Each point over pulls a point and
   a half off the mood. A wired pet burns energy faster and sleeps badly. This
-  pull works while the pet sleeps too.
+  pull works while the pet sleeps too. Too much coffee wires a pet as well,
+  see @ch-care.
 - Relax too hard and the toast says #w("too much relax"): the pet ended up
   #w("bored").
 

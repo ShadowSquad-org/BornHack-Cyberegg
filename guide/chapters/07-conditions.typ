@@ -63,9 +63,19 @@ goes back to bed keeps its count.
 *What it does.* The mood target loses #v("MOOD_PEN_GROGGY_PCT"). As the first word it buzzes.
 
 *How to get rid of it.* Water takes #v("DOSE_WATER_GROGGY_MIN") off, play
-#v("DOSE_PLAY_GROGGY_MIN"). A session of exercise ends it on the spot. The
+#v("DOSE_PLAY_GROGGY_MIN"). A session of exercise ends it on the spot, and so
+does a coffee, which also gives the lost energy back. The
 best cure is to wake the pet before it oversleeps. The #w("Sleep") row in the
 #w("Rest") menu warns when the sleep ahead would end that way.
+
+*Coffee, and too much of it.* A coffee ends the spell on the spot and gives
+back the #v("GROGGY_ENERGY_PCT") energy it took: the toast is
+#w("perked up") with #w("had a coffee"). Every cup also adds caffeine that
+takes #v("COFFEE_WINDOW_MIN") to wear off. Cup number #v("COFFEE_WIRED_CUPS")
+inside that time wires the pet: its fun goes over #v("FUN_HI_PCT"), enough to
+stay #w("wired") for #v("COFFEE_WIRED_MIN"), with the toast #w("wired") and
+#w("too much coffee"). An older cup still counts for what is left of it, so a
+steady drip of coffee gets there too.
 
 *Grumpy is not groggy.* Wake a pet by hand while its energy is under
 #v("GRUMPY_ENERGY_PCT") and it wakes #w("grumpy"), with #w("woken too early").
@@ -264,7 +274,9 @@ last ones (@ch-reading). This is every one:
   [#w("torn muscle") #linebreak() sport reason], [Strain over #v("STRAIN_INJ_PCT") after exercise. The reason is the first handicap in the list above, else #w("sport: too much").], [Rest. Aspirine helps.],
   [#w("strained") #linebreak() sport reason], [A session with one of those handicaps, but no tear.], [Fix the handicap first.],
   [#w("grumpy") #linebreak() #w("woken too early")], [Wake up by hand with energy under #v("GRUMPY_ENERGY_PCT").], [Let it sleep.],
-  [#w("groggy") #linebreak() #w("overslept")], [Woke after more than #v("GROGGY_LINE_MIN") of oversleeping.], [Water or play.],
+  [#w("groggy") #linebreak() #w("overslept")], [Woke after more than #v("GROGGY_LINE_MIN") of oversleeping.], [Coffee, water or play.],
+  [#w("perked up") #linebreak() #w("had a coffee")], [A coffee ended a groggy spell.], [Nothing. Enjoy.],
+  [#w("wired") #linebreak() #w("too much coffee")], [Cup number #v("COFFEE_WIRED_CUPS") inside #v("COFFEE_WINDOW_MIN").], [Relax. No more coffee for a while.],
   [#w("worn out") #linebreak() #w("short nights")], [The short-night run reached #v("DEPRIVED_NIGHTS").], [Sleep long.],
   [#w("hung over") #linebreak() #w("needs water")], [Woke while the hangover still runs.], [Water.],
   [#w("bad night") #linebreak() a reason], [At least #v("RESTLESS_MIN") of poor sleep, and more than half the night. Why: see below.], [Fix the reason before bed.],
