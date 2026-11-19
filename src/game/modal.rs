@@ -1850,6 +1850,7 @@ mod tests {
 
     #[test]
     fn only_pets_row_stays_in_demo_mode() {
+        // HAX stays live in demo, so the row earns there too.
         let _guard = crate::game::lock_test_state();
         let _stats = menu_pet(true, false, |_| {});
         assert!(ModalKind::Play.items().contains(&Item::OnlyPets));
@@ -1857,7 +1858,7 @@ mod tests {
             s.demo.on = true;
             true
         });
-        assert!(!lifecycle::money_enabled());
+        assert!(lifecycle::money_enabled());
         assert!(ModalKind::Play.items().contains(&Item::OnlyPets));
         lifecycle::set_state_for_test(None);
     }

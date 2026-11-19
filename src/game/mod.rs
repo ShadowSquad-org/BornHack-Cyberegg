@@ -1965,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn demo_hides_hax() {
+    fn demo_shows_hax() {
         let _guard = super::lock_test_state();
         let _clear = ClearPet;
         let nav = crate::game::nav::get_nav();
@@ -1987,7 +1987,8 @@ mod tests {
         };
         let none = draw(false, false);
         assert_ne!(draw(false, true), none, "HAX shows when live");
-        assert_eq!(draw(true, true), none, "demo hides it");
+        assert_ne!(draw(true, true), none, "demo shows it too");
+        assert_eq!(draw(true, false), none, "no money layer, no HAX in demo");
     }
 
     #[test]

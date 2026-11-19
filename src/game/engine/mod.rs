@@ -1428,9 +1428,10 @@ impl GameState {
         self.demo.on
     }
 
-    /// HAX is live: the pet has money and demo mode is not freezing it.
+    /// HAX is live: the pet has money. Demo mode keeps it live (the demo
+    /// pet pays its way and earns, `demo::drift_hax` pulls a surplus down).
     pub fn money_live(&self) -> bool {
-        self.money_enabled && !self.demo.on
+        self.money_enabled
     }
 
     /// A quarter or more of the pet's life was lived in demo mode.
@@ -1663,16 +1664,16 @@ pub struct PetStats {
     pub losses: u16,
 
     /// Current HAX balance. Only meaningful (displayed/priced) when
-    /// `money_enabled` (which is false in demo mode).
+    /// `money_enabled`.
     pub money: u32,
-    /// Whether HAX is live for this pet: the money layer is on and demo mode
-    /// is not freezing it (`GameState::money_live`). Gates HAX display,
+    /// Whether HAX is live for this pet: the money layer is on, in demo too
+    /// (`GameState::money_live`). Gates HAX display,
     /// pricing, and menu affordability checks.
     pub money_enabled: bool,
     /// Whether Hard (US) prices are in effect. Only meaningful when
     /// `money_enabled` is true — see `GameState::hard_mode`.
     pub hard_mode: bool,
-    /// Demo mode is on (HAX frozen).
+    /// Demo mode is on.
     pub demo: bool,
     /// A quarter or more of the pet's life was lived in demo.
     pub self_raised: bool,
@@ -2027,9 +2028,6 @@ impl GameState {
     /// pet name / hibernate, since a HAX balance is worth protecting from
     /// an unlucky reboot right after being earned.
     pub fn add_money(&mut self, delta: u32) {
-        if self.demo.on {
-            return;
-        }
         self.money = self.money.saturating_add(delta);
         self.request_save();
     }
@@ -2880,7 +2878,7 @@ mod overweight_diabetes_tests {
     }
 
     /// Every finished mini-game pays by result and starts its cooldown;
-    /// money off or demo on pays nothing.
+    /// money off pays nothing; demo on pays like any other pet.
     #[test]
     fn minigame_pays_by_result() {
         for (grade, hax) in [
@@ -2914,7 +2912,7 @@ mod overweight_diabetes_tests {
         state.demo.on = true;
         state.cooldown_blackhole = 0;
         state.award_inspiration(MiniGame::BlackHole, GRADE_LOSS);
-        assert_eq!(state.money, 0, "demo pays nothing");
+        assert_eq!(state.money, MINIGAME_HAX_LOSS, "demo pays like any pet");
     }
 
     /// A paid mesh Battle win credits HAX; a loss grants nothing. With

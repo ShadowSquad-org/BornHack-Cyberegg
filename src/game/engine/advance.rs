@@ -255,7 +255,9 @@ pub fn advance(s: &mut GameState, dt: u32) {
 
     // Care counters. Demo time is not care time.
     if s.demo.on {
-        s.demo.demo_min = s.demo.demo_min.saturating_add(dt);
+        let before = s.demo.demo_min;
+        s.demo.demo_min = before.saturating_add(dt);
+        super::demo::drift_hax(s, before);
     } else if !asleep {
         s.care_awake_min = s.care_awake_min.saturating_add(dt);
         if s.mood as i32 >= lvl(t::CARE_GOOD_MOOD_PCT()) {

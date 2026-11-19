@@ -263,12 +263,15 @@ pub enum Choice {
     Medicine,
     Insulin,
     Rehab,
+    /// "Only pets": the pet works for HAX.
+    Work,
 }
 
 /// Whether the starter behind `c` would take it now. The pet never takes a
 /// choice its starter would refuse: the row falls through to the next.
 fn allowed(s: &GameState, c: Choice) -> bool {
-    match c {
+    affordable(s, c)
+        && match c {
         Choice::Eat(_) => s.refusal_for(Action::Feed, None).is_none(),
         Choice::Drink(d) => s.refusal_for(Action::Drink, Some(d)).is_none(),
         Choice::Sleep | Choice::Nap => s.sleep_refusal().is_none(),
@@ -280,6 +283,75 @@ fn allowed(s: &GameState, c: Choice) -> bool {
         Choice::Medicine => s.refusal_for(Action::Heal, None).is_none(),
         Choice::Insulin => s.refusal_for(Action::Medicate, None).is_none(),
         Choice::Rehab => s.refusal_for(Action::Rehab, None).is_none(),
+        Choice::Work => s.refusal_for(Action::OnlyPets, None).is_none(),
+    }
+}
+
+/// The pet pays its own way while HAX is live: a choice it cannot afford
+/// falls through to the next row (its health floors hold meanwhile).
+fn affordable(s: &GameState, c: Choice) -> bool {
+    let Some((a, food, drink)) = action_of(c) else {
+        return true;
+    };
+    !s.money_live()
+        || super::doses::price(a, food, drink, s.hard_mode).is_none_or(|p| s.can_afford(p))
+}
+
+/// The balance the pet works up to and no more (`DEMO_HAX_TARGET`).
+fn hax_target() -> u32 {
+    t::DEMO_HAX_TARGET() as u32
+}
+
+/// HAX is live and below the target: the pet has a reason to work.
+fn wants_pay(s: &GameState) -> bool {
+    s.money_live() && s.money < hax_target()
+}
+
+/// The food the urgent hunger row takes.
+fn urgent_food(s: &GameState) -> FoodKind {
+    if s.weight as i32 > lines(s).light_food {
+        FoodKind::Apple
+    } else {
+        FoodKind::Pizza
+    }
+}
+
+/// HAX is live and below the reserve (half the target, never less than the
+/// urgent meal or water): the pet is about to be unable to look after itself
+/// and goes to work, after the urgent care it can still pay for. It is also
+/// the escape hatch of a broke pet: work is never gated on money.
+fn broke(s: &GameState) -> bool {
+    let meal = super::doses::price(Action::Feed, Some(urgent_food(s)), None, s.hard_mode);
+    let water = super::doses::price(Action::Drink, None, Some(DrinkKind::Water), s.hard_mode);
+    let cheapest = meal.into_iter().chain(water).min().unwrap_or(0);
+    s.money_live() && s.money < cheapest.max(hax_target() / 2)
+}
+
+/// A sleeper that wakes up hungry has to be able to do something about it:
+/// pay for the meal, or work for it (rested enough). Else it stays in bed
+/// and recovers (a broke, starving, exhausted pet would otherwise wake and
+/// fall asleep again, over and over).
+fn can_feed_itself(s: &GameState) -> bool {
+    let meal = super::doses::price(Action::Feed, Some(urgent_food(s)), None, s.hard_mode);
+    !s.money_live()
+        || meal.is_none_or(|p| s.can_afford(p))
+        || (s.injured_min == 0 && (s.energy as i32) >= super::needs::energy_lo())
+}
+
+/// Demo keeps the balance near `DEMO_HAX_TARGET`: above it the balance falls
+/// by 1 HAX every `DEMO_HAX_DRIFT_MIN` minutes of demo time, never below the
+/// target; below it nothing tops it up. The steps are the crossings of
+/// `demo_min` between `before` and now, so one long update and many short
+/// ones give the same balance. Called by `advance` after `demo_min` moved.
+pub fn drift_hax(s: &mut GameState, before: u32) {
+    if !s.money_live() || s.money <= hax_target() {
+        return;
+    }
+    let every = t::DEMO_HAX_DRIFT_MIN().max(1) as u32;
+    let steps = s.demo.demo_min / every - before / every;
+    if steps > 0 {
+        s.money = hax_target().max(s.money.saturating_sub(steps));
+        s.request_save();
     }
 }
 
@@ -375,6 +447,10 @@ fn play_or_game(s: &GameState) -> Choice {
             return Choice::Game(g, (s.demo_rng % GRADES as u32) as u8);
         }
     }
+    // Below the target a shift is the better play: it pays instead of costing.
+    if wants_pay(s) && allowed(s, Choice::Work) {
+        return Choice::Work;
+    }
     Choice::Play
 }
 
@@ -407,6 +483,11 @@ fn soft_pick(s: &GameState) -> Option<Choice> {
         (
             (s.fun as i32) < l.soft_fun && s.energy as i32 > l.play_energy && s.injured_min == 0,
             play_or_game(s),
+        ),
+        // Last: below the target the pet works, when nothing else is due.
+        (
+            wants_pay(s) && s.energy as i32 > l.play_energy,
+            Choice::Work,
         ),
     ];
     first(s, &rows)
@@ -487,14 +568,10 @@ fn decide_row(s: &GameState) -> Option<(Choice, Row)> {
     let l = lines(s);
     let clock_due = d.clock_armed && d.clock_min == 0;
     if s.is_sleeping {
-        let wake = clock_due || (s.fullness as i32) < l.wake_full;
+        let wake = clock_due || ((s.fullness as i32) < l.wake_full && can_feed_itself(s));
         return wake.then_some((Choice::Wake, Row::Urgent));
     }
-    let food = if s.weight as i32 > l.light_food {
-        FoodKind::Apple
-    } else {
-        FoodKind::Pizza
-    };
+    let food = urgent_food(s);
     let rows = [
         (s.is_diabetic_unmedicated(), Choice::Insulin),
         (s.is_alcoholic_untreated(), Choice::Rehab),
@@ -522,6 +599,8 @@ fn decide_row(s: &GameState) -> Option<(Choice, Row)> {
     if let Some(c) = first(
         s,
         &[
+            // Too poor for care: work now (urgent care came first above).
+            (broke(s), Choice::Work),
             (clock_due, Choice::Sleep),
             (s.fun as i32 > l.wired_fun, Choice::Relax),
         ],
@@ -575,12 +654,13 @@ pub enum Note {
     Medicine,
     Insulin,
     Rehab,
+    Worked,
 }
 
 impl Note {
     /// Every note once (host-only, for the guide's word list).
     #[cfg(any(test, feature = "simulator"))]
-    pub const ALL: [Note; 20] = [
+    pub const ALL: [Note; 21] = [
         Note::Ate(FoodKind::Apple),
         Note::Ate(FoodKind::Salad),
         Note::Ate(FoodKind::Pizza),
@@ -601,6 +681,7 @@ impl Note {
         Note::Medicine,
         Note::Insulin,
         Note::Rehab,
+        Note::Worked,
     ];
 
     /// The words (at most 21 columns).
@@ -626,6 +707,7 @@ impl Note {
             Note::Medicine => "took medicine",
             Note::Insulin => "took insulin",
             Note::Rehab => "went to rehab",
+            Note::Worked => "did a shift",
         }
     }
 }
@@ -648,6 +730,7 @@ fn note_for(c: Choice) -> Note {
         Choice::Medicine => Note::Medicine,
         Choice::Insulin => Note::Insulin,
         Choice::Rehab => Note::Rehab,
+        Choice::Work => Note::Worked,
     }
 }
 
@@ -662,6 +745,7 @@ fn action_of(c: Choice) -> Option<(Action, Option<FoodKind>, Option<DrinkKind>)>
         Choice::Medicine => (Action::Heal, None, None),
         Choice::Insulin => (Action::Medicate, None, None),
         Choice::Rehab => (Action::Rehab, None, None),
+        Choice::Work => (Action::OnlyPets, None, None),
         Choice::Sleep | Choice::Nap | Choice::Wake | Choice::Game(..) => return None,
     })
 }
@@ -714,7 +798,8 @@ pub(super) fn note_own_act(s: &mut GameState, action: Action, queued: &CauseQueu
         Action::Heal => Some(Note::Medicine),
         Action::Medicate => Some(Note::Insulin),
         Action::Rehab => Some(Note::Rehab),
-        Action::Exercise | Action::Ozempic | Action::OnlyPets => None,
+        Action::OnlyPets => Some(Note::Worked),
+        Action::Exercise | Action::Ozempic => None,
     };
     let too_many = queued.iter().any(|&q| q == Cause::OneTooMany);
     let note = if too_many {

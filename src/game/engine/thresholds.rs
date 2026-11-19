@@ -438,6 +438,8 @@ thresholds_table! {
     DEMO_PICK_WATER_PCT: u8,
     DEMO_PICK_COFFEE_PCT: u8,
     DEMO_PICK_GAME_PCT: u8,
+    DEMO_HAX_TARGET: u16,
+    DEMO_HAX_DRIFT_MIN: u16,
     // Backgrounds (plan 7). Display lines, not balance.
     BG_NIGHT_FROM_MIN: u16,
     BG_NIGHT_TO_MIN: u16,
@@ -826,6 +828,8 @@ impl Thresholds {
         DEMO_PICK_WATER_PCT: 70,
         DEMO_PICK_COFFEE_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
+        DEMO_HAX_TARGET: 100,
+        DEMO_HAX_DRIFT_MIN: 10,
         BG_NIGHT_FROM_MIN: 1260,
         BG_NIGHT_TO_MIN: 420,
         FLOOR_CRUMBS_DIRT_PCT: 40,
@@ -1210,6 +1214,8 @@ impl Thresholds {
         DEMO_PICK_WATER_PCT: 70,
         DEMO_PICK_COFFEE_PCT: 20,
         DEMO_PICK_GAME_PCT: 30,
+        DEMO_HAX_TARGET: 100,
+        DEMO_HAX_DRIFT_MIN: 10,
         BG_NIGHT_FROM_MIN: 1260,
         BG_NIGHT_TO_MIN: 420,
         FLOOR_CRUMBS_DIRT_PCT: 40,
@@ -2084,6 +2090,12 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     }),
     ("DEMO_PICK_GAME_PCT", |t, v| {
         t.DEMO_PICK_GAME_PCT = v.min(100) as u8
+    }),
+    ("DEMO_HAX_TARGET", |t, v| {
+        t.DEMO_HAX_TARGET = clamp_u16(v)
+    }),
+    ("DEMO_HAX_DRIFT_MIN", |t, v| {
+        t.DEMO_HAX_DRIFT_MIN = clamp_u16(v).max(1)
     }),
     ("BATTLE_POWER_BASE_PTS", |t, v| t.BATTLE_POWER_BASE_PTS = v.min(100) as u8),
     ("BATTLE_POWER_WEIGHT_PCT", |t, v| t.BATTLE_POWER_WEIGHT_PCT = clamp_pct(v)),

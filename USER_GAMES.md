@@ -381,6 +381,8 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DEMO_PICK_WATER_PCT` | 70 | 70 |
 | `DEMO_PICK_COFFEE_PCT` | 20 | 20 |
 | `DEMO_PICK_GAME_PCT` | 30 | 30 |
+| `DEMO_HAX_TARGET` | 100 | 100 |
+| `DEMO_HAX_DRIFT_MIN` | 10 | 10 |
 | `BATTLE_POWER_BASE_PTS` | 22 | 22 |
 | `BATTLE_POWER_WEIGHT_PCT` | 28 | 28 |
 | `BATTLE_COURAGE_PEAK_PTS` | 8 | 8 |

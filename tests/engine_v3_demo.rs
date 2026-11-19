@@ -166,54 +166,66 @@ mod state {
     }
 
     #[test]
-    fn demo_work_reward_pays_nothing() {
-        use bornhack_aegg::game::engine::{Action, doses};
-        let mut o = active();
-        o.money_enabled = true;
-        o.money = 50;
-        doses::apply(&mut o, Action::OnlyPets).unwrap();
-        assert!(o.money > 50);
-
+    fn demo_work_reward_pays() {
+        use bornhack_aegg::game::engine::{Action, ONLYPETS_HOBBY_REWARD, doses};
         let mut s = active();
         s.money_enabled = true;
         s.money = 50;
         s.demo.on = true;
         doses::apply(&mut s, Action::OnlyPets).unwrap();
-        assert_eq!(s.money, 50);
+        assert_eq!(s.money, 50 + ONLYPETS_HOBBY_REWARD);
+
+        let mut off = active();
+        off.money_enabled = false;
+        off.money = 50;
+        off.demo.on = true;
+        doses::apply(&mut off, Action::OnlyPets).unwrap();
+        assert_eq!(off.money, 50, "no money layer, no pay");
     }
 
     #[test]
-    fn demo_freezes_hax() {
+    fn demo_keeps_hax_live() {
+        use bornhack_aegg::game::engine::MINIGAME_HAX_REWARD;
+        use bornhack_aegg::game::engine::thresholds::BATTLE_PRIZE_FIRST_HAX;
         let mut s = active();
         s.money_enabled = true;
         s.money = 50;
         s.demo.on = true;
         assert!(s.feed(FoodKind::Pizza));
-        assert_eq!(s.money, 50);
+        assert_eq!(s.money, 40, "the price is charged in demo");
         s.award_inspiration(MiniGame::BlackHole, GRADE_WIN);
-        assert_eq!(s.money, 50);
+        assert_eq!(s.money, 40 + MINIGAME_HAX_REWARD);
+        let before = s.money;
         s.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: true });
-        assert_eq!(s.money, 50);
+        assert_eq!(s.money, before + BATTLE_PRIZE_FIRST_HAX() as u32);
         s.add_money(10);
-        assert_eq!(s.money, 50);
-        assert!(!s.stats(0).money_enabled);
+        assert_eq!(s.money, before + BATTLE_PRIZE_FIRST_HAX() as u32 + 10);
+        assert!(s.stats(0).money_enabled);
         assert!(s.stats(0).demo);
-
-        let mut o = active();
-        o.money_enabled = true;
-        o.money = 50;
-        assert!(o.feed(FoodKind::Pizza));
-        assert!(o.money < 50);
     }
 
     #[test]
-    fn broke_demo_pet_is_not_told_cant_afford() {
+    fn demo_without_the_money_layer_stays_moneyless() {
+        let mut s = active();
+        s.money_enabled = false;
+        s.money = 50;
+        s.demo.on = true;
+        assert!(s.feed(FoodKind::Pizza));
+        assert_eq!(s.money, 50);
+        s.award_inspiration(MiniGame::BlackHole, GRADE_WIN);
+        s.fight_over(Fought { won: true, hp_left_pct: 50, costs: true, paid: true });
+        assert_eq!(s.money, 50);
+        assert!(!s.stats(0).money_enabled);
+    }
+
+    #[test]
+    fn broke_demo_pet_is_told_cant_afford() {
         let mut s = active();
         s.money_enabled = true;
         s.money = 0;
         s.fullness = (10 * P) as u16;
         s.demo.on = true;
-        assert_ne!(s.remedy_reason(Remedy::Feed), Some(Reason::CantAfford));
+        assert_eq!(s.remedy_reason(Remedy::Feed), Some(Reason::CantAfford));
         s.demo.on = false;
         assert_eq!(s.remedy_reason(Remedy::Feed), Some(Reason::CantAfford));
     }
@@ -1019,6 +1031,7 @@ mod policy {
                 Choice::Medicine => c.heal(),
                 Choice::Insulin => c.medicate(),
                 Choice::Rehab => c.rehab(),
+                Choice::Work => c.only_pets(),
             };
             assert!(ok, "state {i}: {choice:?} would be refused");
         }
@@ -1505,7 +1518,7 @@ mod acts {
         let (money, age) = (s.money, s.age_ticks);
         minutes(&mut s, 1);
         assert!(s.fullness > pct(19), "fullness {}", s.fullness);
-        assert_eq!(s.money, money);
+        assert_eq!(s.money, money - 10, "the pet pays for its pizza");
         assert_eq!(s.active_action, None);
         assert!(
             matches!(s.note(), Some((Note::Ate(FoodKind::Pizza), _))),
@@ -1524,7 +1537,14 @@ mod acts {
             a.fullness = pct(30);
             let mut b = a.clone();
             demo::act(&mut a, Choice::Eat(food));
-            assert_eq!(a.money, 100, "the pet's care is free: {food:?}");
+            let price = bornhack_aegg::game::engine::doses::price(
+                bornhack_aegg::game::engine::Action::Feed,
+                Some(food),
+                None,
+                a.hard_mode,
+            )
+            .unwrap();
+            assert_eq!(a.money, 100 - price, "the pet pays its own care: {food:?}");
             assert!(b.feed(food));
             finish(&mut b);
             let needs = |s: &GameState| {
@@ -1829,6 +1849,7 @@ mod acts {
             Note::Medicine,
             Note::Insulin,
             Note::Rehab,
+            Note::Worked,
         ];
         notes.extend(FoodKind::ALL.map(Note::Ate));
         notes.extend(DrinkKind::ALL.map(Note::Drank));
@@ -2033,7 +2054,7 @@ mod animated {
         );
         assert_eq!(s.demo.pause_min, 0);
         assert!(!s.take_causes().iter().any(|&c| c == Cause::Thanks));
-        assert_eq!(s.money, money);
+        assert_eq!(s.money, money - 10, "the pet paid for its pizza");
     }
 
     #[test]
@@ -2343,6 +2364,7 @@ mod calm {
             Note::Medicine,
             Note::Insulin,
             Note::Rehab,
+            Note::Worked,
         ];
         all.extend(FoodKind::ALL.map(Note::Ate));
         all.extend(DrinkKind::ALL.map(Note::Drank));
@@ -2350,6 +2372,222 @@ mod calm {
             assert!(n.text().len() <= 21, "{:?}: {}", n, n.text());
         }
         assert!(Note::OneTooMany.text().ends_with("..."));
+    }
+}
+
+/// HAX in demo mode: the pet pays, earns, and the balance is held near
+/// `DEMO_HAX_TARGET`.
+mod hax {
+    use super::policy::{pct, quiet, soft};
+    use bornhack_aegg::game::engine::advance::advance;
+    use bornhack_aegg::game::engine::demo::{self, Choice, Note};
+    use bornhack_aegg::game::engine::thresholds as t;
+    use bornhack_aegg::game::engine::{GameState, MINIGAME_HAX_REWARD, MiniGame, ONLYPETS_HOBBY_REWARD};
+
+    fn rich(money: u32) -> GameState {
+        let mut s = quiet();
+        s.money_enabled = true;
+        s.money = money;
+        s
+    }
+
+    fn target() -> u32 {
+        t::DEMO_HAX_TARGET() as u32
+    }
+
+    #[test]
+    fn the_pet_works_below_the_target_and_not_at_it() {
+        let mut s = rich(target() - 1);
+        soft(&mut s);
+        assert_eq!(demo::decide(&s), Some(Choice::Work));
+        s.money = target();
+        assert_eq!(demo::decide(&s), None);
+        s.money = target() + 40;
+        assert_eq!(demo::decide(&s), None);
+    }
+
+    #[test]
+    fn a_pet_without_the_money_layer_never_works() {
+        let mut s = quiet();
+        s.money = 0;
+        soft(&mut s);
+        assert_eq!(demo::decide(&s), None);
+    }
+
+    #[test]
+    fn working_waits_for_the_soft_delay_and_for_urgent_care() {
+        let mut s = rich(60);
+        assert_eq!(demo::decide(&s), None, "no soft delay running");
+        soft(&mut s);
+        s.fullness = pct(5);
+        assert!(matches!(demo::decide(&s), Some(Choice::Eat(_))), "care first");
+    }
+
+    #[test]
+    fn work_respects_the_starters_gate() {
+        let mut s = rich(60);
+        soft(&mut s);
+        s.energy = pct(t::DEMO_PLAY_ENERGY_PCT() as i32 - 1);
+        assert_ne!(demo::decide(&s), Some(Choice::Work), "too tired");
+        let mut hurt = rich(60);
+        soft(&mut hurt);
+        hurt.injured_min = 30;
+        assert_ne!(demo::decide(&hurt), Some(Choice::Work), "injured");
+    }
+
+    #[test]
+    fn a_broke_pet_goes_to_work_at_once_and_is_paid() {
+        let mut s = rich(0);
+        assert_eq!(demo::decide(&s), Some(Choice::Work), "no delay needed");
+        let mut h = s.clone();
+        demo::run(&mut s);
+        // It works until it is out of the red zone (half the target).
+        assert!(
+            (target() / 2..target() / 2 + ONLYPETS_HOBBY_REWARD).contains(&s.money),
+            "money {}",
+            s.money
+        );
+        let mut one = rich(0);
+        demo::act(&mut one, Choice::Work);
+        assert_eq!(one.note().map(|(n, _)| n), Some(Note::Worked));
+        assert_eq!(one.money, ONLYPETS_HOBBY_REWARD);
+        // Hungry but cannot pay: the unaffordable meal is skipped, it works
+        // first and eats on the pay.
+        h.fullness = pct(5);
+        assert_eq!(demo::decide(&h), Some(Choice::Work));
+        demo::run(&mut h);
+        assert!(h.fullness > pct(5), "it ate after working");
+        assert!(h.money < s.money, "and paid for it");
+    }
+
+    #[test]
+    fn the_pet_pays_for_its_own_care() {
+        let mut s = rich(50);
+        s.fullness = pct(5);
+        s.set_demo_rng(10);
+        let Some(Choice::Eat(food)) = demo::decide(&s) else {
+            panic!("hungry pet should eat");
+        };
+        let price = bornhack_aegg::game::engine::doses::price(
+            bornhack_aegg::game::engine::Action::Feed,
+            Some(food),
+            None,
+            s.hard_mode,
+        )
+        .unwrap();
+        demo::act(&mut s, Choice::Eat(food));
+        assert_eq!(s.money, 50 - price);
+    }
+
+    #[test]
+    fn a_simulated_mini_game_pays_like_a_real_one() {
+        let mut s = rich(10);
+        demo::act(&mut s, Choice::Game(MiniGame::BlackHole, 2));
+        assert_eq!(s.money, 10 + MINIGAME_HAX_REWARD);
+        assert!(s.cooldown_blackhole > 0);
+    }
+
+    fn drift(start: u32, demo_min: u32, chunks: &[u32]) -> u32 {
+        let mut s = rich(start);
+        s.demo.demo_min = demo_min;
+        for &dt in chunks {
+            advance(&mut s, dt);
+        }
+        s.money
+    }
+
+    #[test]
+    fn above_the_target_the_balance_drifts_down_to_it_and_stops() {
+        let every = t::DEMO_HAX_DRIFT_MIN() as u32;
+        assert_eq!(drift(150, 0, &[every - 1]), 150);
+        assert_eq!(drift(150, 0, &[every]), 149);
+        assert_eq!(drift(150, 0, &[every * 5]), 145);
+        assert_eq!(drift(target() + 3, 0, &[every * 50]), target());
+        assert_eq!(drift(target(), 0, &[every * 50]), target());
+    }
+
+    #[test]
+    fn below_the_target_there_is_no_free_top_up() {
+        assert_eq!(drift(40, 0, &[1000]), 40);
+        assert_eq!(drift(0, 0, &[1000]), 0);
+    }
+
+    #[test]
+    fn drift_is_the_same_for_one_update_or_many() {
+        let whole = drift(150, 7, &[60]);
+        assert_eq!(whole, 144, "67 / 10 - 7 / 10 = 6 steps");
+        assert_eq!(drift(150, 7, &[1; 60]), whole);
+        assert_eq!(drift(150, 7, &[3, 11, 1, 25, 20]), whole);
+        assert_eq!(drift(150, 7, &[59, 1]), whole);
+    }
+
+    #[test]
+    fn drift_needs_demo_and_the_money_layer() {
+        let mut s = rich(150);
+        s.demo.on = false;
+        advance(&mut s, 600);
+        assert_eq!(s.money, 150);
+        assert_eq!(drift_off_layer(), 150);
+    }
+
+    fn drift_off_layer() -> u32 {
+        let mut s = rich(150);
+        s.money_enabled = false;
+        advance(&mut s, 600);
+        s.money
+    }
+
+    /// Days of the pet looking after itself on its own pay, polled every
+    /// half hour: (lowest balance, highest balance, least health pct).
+    fn live(money: u32, days: u32, clock: bool) -> (u32, u32, u8) {
+        let mut s = rich(money);
+        if clock {
+            super::policy::at(&mut s, 8 * 60);
+        }
+        let (mut lo, mut hi, mut health) = (money, money, 100u8);
+        for _ in 0..(days * 48) {
+            s.update(s.last_update_tick + 30 * bornhack_aegg::game::engine::TICKS_PER_MINUTE);
+            lo = lo.min(s.money);
+            hi = hi.max(s.money);
+            health = health.min((s.health as i32 * 100 / 65535) as u8);
+        }
+        (lo, hi, health)
+    }
+
+    /// The pet pays for its care and earns the money back (shifts, games):
+    /// it is never left without the price of a meal, stays about as healthy
+    /// as without the money layer (53 and up in the same run), and never
+    /// climbs above the target plus one pay.
+    #[test]
+    fn a_demo_pet_lives_on_its_own_pay_for_20_days() {
+        for clock in [true, false] {
+            for start in [0, target()] {
+                let (lo, hi, health) = live(start, 20, clock);
+                let what = format!("start {start} clock {clock}: lo {lo} hi {hi} health {health}");
+                assert!(health >= 40, "{what}");
+                assert!(hi <= target() + ONLYPETS_HOBBY_REWARD * 2, "{what}");
+                if start > 0 {
+                    assert!(lo >= 10, "{what}");
+                }
+            }
+        }
+    }
+
+    /// A pet far above the target spends down on its own and then earns:
+    /// it does not sit on the surplus, and it is not left broke.
+    #[test]
+    fn a_rich_demo_pet_spends_down_to_the_target() {
+        let (lo, hi, health) = live(500, 20, true);
+        assert_eq!(hi, 500);
+        assert!(lo >= 10 && health >= 40, "lo {lo} health {health}");
+    }
+
+    #[test]
+    fn turning_demo_off_keeps_the_balance() {
+        let mut s = rich(130);
+        s.demo.on = true;
+        assert_eq!(s.set_demo(false), Ok(()));
+        assert_eq!(s.money, 130);
     }
 }
 
@@ -2409,9 +2647,9 @@ mod hint {
 
     #[test]
     fn a_broke_stiff_demo_pet_still_asks_for_exercise_and_food() {
-        // Demo hides the prices, so money never refuses a hint.
+        // No money layer: money never refuses a hint.
         let mut s = quiet();
-        s.money_enabled = true;
+        s.money_enabled = false;
         s.money = 0;
         s.fitness = pct(50);
         assert_eq!(hint(&s).ask, Ask::Do(Remedy::Exercise));

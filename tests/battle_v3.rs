@@ -1039,7 +1039,10 @@ mod rules {
         s.demo.on = true;
         s.health = pct(26);
         let paid = Fought { paid: true, ..won(0) };
-        assert_eq!(s.fight_over(paid), 0);
+        s.money = 0;
+        // HAX stays live in demo: a paid win pays like any other.
+        assert_eq!(s.fight_over(paid), 100);
+        assert_eq!(s.money, 100);
         assert_eq!((s.demo_wins, s.demo_losses), (1, 0));
         assert_eq!((s.wins, s.losses), (0, 0));
         assert_eq!(s.battle_record(), (1, 0));
