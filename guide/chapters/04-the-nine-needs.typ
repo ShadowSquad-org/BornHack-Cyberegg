@@ -271,7 +271,7 @@ as hard to live with.
 - Over #v("FUN_HI_PCT") it is #w("wired"). Each point over pulls a point and
   a half off the mood. A wired pet burns energy faster and sleeps badly. This
   pull works while the pet sleeps too. Too much coffee wires a pet as well,
-  see @ch-care.
+  see @ch-conditions.
 - Relax too hard and the toast says #w("too much relax"): the pet ended up
   #w("bored").
 
