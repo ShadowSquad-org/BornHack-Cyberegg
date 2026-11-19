@@ -351,12 +351,19 @@ impl<'a, const N: usize> Driver<'a, N> {
                 } else {
                     UpdateKind::Delta
                 };
-                let drove = match kind {
-                    UpdateKind::Preview => self.run_preview().await?,
-                    UpdateKind::Delta => self.run_delta().await?,
-                };
-                if drove {
-                    self.run_correction().await?;
+                // A correction only ever follows a full-length drive, and
+                // only for the pixels that drive moved (see
+                // `ChargeLedger::plan_correction`). Never after a preview: its
+                // pixels are short of saturation and get their settle first.
+                match kind {
+                    UpdateKind::Preview => {
+                        self.run_preview().await?;
+                    }
+                    UpdateKind::Delta => {
+                        if self.run_delta().await? {
+                            self.run_correction().await?;
+                        }
+                    }
                 }
             }
         }
@@ -457,7 +464,10 @@ impl<'a, const N: usize> Driver<'a, N> {
     }
 
     /// Opposite-rail correction pulse for pixels the ledger flags, on the
-    /// still-powered rails. Rewrites the code planes in place. If cancelled,
+    /// still-powered rails. Must run straight after a completed delta/settle:
+    /// the code planes still hold that drive's codes, and only the pixels it
+    /// drove are candidates (at most one pulse per drive, so a held pixel is
+    /// never kicked over and over). Rewrites the code planes in place. If cancelled,
     /// nothing is lost: the image is committed, the ledger is only debited
     /// after the pulse ran, and the next refresh resets the controller.
     async fn run_correction(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {

@@ -15,8 +15,9 @@
 //!
 //! Keys (defaults): `PREVIEW=1`, `PREVIEW_FRAMES=20`, `PREVIEW_MAX_PX=4000`,
 //! `PREVIEW_MAX_RUN=8`, `SETTLE_MS=1500`, `SHORT_DELTA=0`, `VCOM=0x40`,
-//! `LEDGER=1`, `LEDGER_POS=72`, `LEDGER_NEG=65`, `LEDGER_DECAY=3`,
-//! `CORR_FRAMES=2`.
+//! `LEDGER=0`, `LEDGER_POS=72`, `LEDGER_NEG=65`, `LEDGER_DECAY=3`,
+//! `CORR_FRAMES=1`. `LEDGER` only gates the correction pulses (the charge
+//! booking always runs); set `LEDGER=1` to try them.
 
 use ssd1680::{EpdTuning, KvResult};
 
