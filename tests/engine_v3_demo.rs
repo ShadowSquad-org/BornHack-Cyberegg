@@ -936,6 +936,66 @@ mod policy {
         s
     }
 
+    /// `random_demo`, some groggy, some with caffeine (a separate draw, so
+    /// the older tests keep their pets).
+    pub(super) fn random_coffee_demo(next: &mut impl FnMut(u64) -> u64) -> GameState {
+        let mut s = random_demo(next);
+        s.groggy_min = if next(3) == 0 { next(120) as u16 } else { 0 };
+        s.caffeine_min = if next(1) == 1 { 0 } else { next(600) as u16 };
+        s
+    }
+
+    /// Coffee perks a groggy pet up, but the pet never takes the cup that
+    /// would wire it: not for grogginess, not for thirst.
+    #[test]
+    fn a_groggy_pet_has_a_coffee_but_never_the_one_that_wires_it() {
+        use bornhack_aegg::game::engine::doses::caffeine_safe_min;
+        let safe = caffeine_safe_min() as u16;
+        let mut s = quiet();
+        s.groggy_min = 60;
+        assert_eq!(demo::decide(&s), Some(Choice::Drink(DrinkKind::Coffee)));
+        s.caffeine_min = safe;
+        assert_eq!(demo::decide(&s), Some(Choice::Drink(DrinkKind::Coffee)));
+        s.caffeine_min = safe + 1;
+        assert_eq!(demo::decide(&s), None, "one more cup would wire it");
+
+        // Thirsty and tipsy (rng 80): the draw is coffee, or water over the line.
+        let mut s = quiet();
+        s.hydration = pct(t::DEMO_SOFT_WATER_PCT() as i32 - 3);
+        soft(&mut s);
+        s.set_demo_rng(80);
+        assert_eq!(demo::decide(&s), Some(Choice::Drink(DrinkKind::Coffee)));
+        s.caffeine_min = safe + 1;
+        assert_eq!(demo::decide(&s), Some(Choice::Drink(DrinkKind::Water)));
+    }
+
+    /// Demo pets left alone for days, woken at every engine wake: caffeine
+    /// never goes past the wired line and no cup wires a pet, though they do
+    /// drink coffee.
+    #[test]
+    fn a_demo_pet_never_wires_itself_on_coffee() {
+        use bornhack_aegg::game::engine::causes::Cause;
+        use bornhack_aegg::game::engine::doses::caffeine_safe_min;
+        let line = caffeine_safe_min() as u16 + t::COFFEE_WINDOW_MIN();
+        let mut next = lcg(77);
+        let mut cups = 0;
+        for _ in 0..40 {
+            let mut s = random_coffee_demo(&mut next);
+            let end = s.last_update_tick + 3 * 1440 * TICKS_PER_MINUTE;
+            while s.last_update_tick < end {
+                let before = s.caffeine_min;
+                let to = s.next_wake_tick().max(s.last_update_tick + 1).min(end);
+                s.update(to);
+                if s.caffeine_min > before {
+                    cups += 1;
+                }
+                assert!(s.caffeine_min <= line.max(before), "caffeine {}", s.caffeine_min);
+                assert!(!s.take_causes().iter().any(|&c| c == Cause::CoffeeWired));
+            }
+        }
+        assert!(cups > 10, "only {cups} cups of coffee");
+    }
+
     #[test]
     fn demo_never_takes_a_refused_choice() {
         let mut next = lcg(11);
@@ -1782,7 +1842,7 @@ mod acts {
 }
 
 mod split {
-    use super::policy::{lcg, random_demo};
+    use super::policy::{lcg, random_coffee_demo, random_demo};
     use bornhack_aegg::game::engine::sim;
     use bornhack_aegg::game::engine::thresholds as t;
     use bornhack_aegg::game::engine::{DrinkKind, GameState, TICKS_PER_MINUTE};
@@ -1879,6 +1939,30 @@ mod split {
         }
         assert!(acted > 100, "only {acted} of 200 pets acted");
         assert!(cut_at_acts > 500, "only {cut_at_acts} act points were cut");
+    }
+
+    /// The same with groggy and caffeinated pets: the coffee row and the
+    /// caffeine line are events of the engine too.
+    #[test]
+    fn demo_update_with_coffee_is_split_invariant() {
+        let mut coffee = 0;
+        for seed in 0..120u64 {
+            let mut next = lcg(5000 + seed);
+            let start = random_coffee_demo(&mut next);
+            let span = 2 * DAY_TICKS;
+            let mut cuts: Vec<u32> = (0..40).map(|_| next(span as u64 - 1) as u32 + 1).collect();
+            for tick in act_ticks(&start, span, None) {
+                cuts.extend([tick.saturating_sub(1), tick, tick + 1]);
+            }
+            cuts.retain(|&c| c > 0 && c < span);
+            cuts.sort_unstable();
+            cuts.dedup();
+            let whole = drive(&start, span, &[], None);
+            let split = drive(&start, span, &cuts, None);
+            assert_eq!(snapshot(&whole), snapshot(&split), "seed {seed}");
+            coffee += (start.caffeine_min > 0 || start.groggy_min > 0) as u32;
+        }
+        assert!(coffee > 40, "only {coffee} pets started groggy or caffeinated");
     }
 }
 

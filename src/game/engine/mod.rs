@@ -281,6 +281,10 @@ pub struct GameState {
     pub insulin_min: u16,
     pub ozempic_cd_min: u16,
     pub reversal_min: u16,
+    /// Caffeine from coffee, in minutes: each cup adds `COFFEE_WINDOW_MIN`,
+    /// one wears off a minute. A cup that takes it past the wired line wires
+    /// the pet (`doses::coffee_would_wire`).
+    pub caffeine_min: u16,
 
     // Flags and small counters.
     pub booze_peak: bool,
@@ -483,6 +487,7 @@ impl GameState {
             insulin_min: 0,
             ozempic_cd_min: 0,
             reversal_min: 0,
+            caffeine_min: 0,
 
             booze_peak: false,
             deprived: false,
@@ -2079,6 +2084,11 @@ const SELF_RAISED_DIV: u32 = 4;
 
 pub const SAVE_SIZE: usize = 177;
 
+/// Where `caffeine_min` sits: the reserved tail right after the demo block.
+/// An older save has zeros there, which reads as no caffeine, so the format
+/// stays 3 (like the demo block and the battle slots before it).
+const CAFFEINE_AT: usize = demo::BLOCK_AT + demo::BLOCK_LEN;
+
 /// Size of a format-2 save, read only by the upgrade path.
 pub const SAVE_SIZE_V2: usize = 97;
 
@@ -2299,6 +2309,7 @@ impl GameState {
         let mut block = [0u8; demo::BLOCK_LEN];
         self.demo.write(&mut block);
         b[demo::BLOCK_AT..demo::BLOCK_AT + demo::BLOCK_LEN].copy_from_slice(&block);
+        b[CAFFEINE_AT..CAFFEINE_AT + 2].copy_from_slice(&self.caffeine_min.to_le_bytes());
         b
     }
 
@@ -2367,6 +2378,7 @@ impl GameState {
             .try_into()
             .expect("length checked above");
         s.demo = demo::Demo::read(block);
+        s.caffeine_min = u16::from_le_bytes([b[CAFFEINE_AT], b[CAFFEINE_AT + 1]]);
         Some(s)
     }
 

@@ -310,6 +310,12 @@ thresholds_table! {
     DOSE_COFFEE_ENERGY_PCT: u8,
     DOSE_COFFEE_MOOD_PCT: u8,
     DOSE_COFFEE_WEIGHT_PCT: u8,
+    // Coffee's caffeine: each cup adds COFFEE_WINDOW_MIN minutes, which wear
+    // off one a minute; COFFEE_WIRED_CUPS cups within COFFEE_WINDOW_MIN wire
+    // the pet for COFFEE_WIRED_MIN minutes.
+    COFFEE_WINDOW_MIN: u16,
+    COFFEE_WIRED_CUPS: u8,
+    COFFEE_WIRED_MIN: u16,
     DOSE_BEER_WATER_PCT: u8,
     DOSE_BEER_BELLY_PCT: u8,
     DOSE_BEER_BOOZE_PCT: u8,
@@ -694,7 +700,10 @@ impl Thresholds {
         DOSE_COFFEE_FULL_PCT: 2,
         DOSE_COFFEE_ENERGY_PCT: 8,
         DOSE_COFFEE_MOOD_PCT: 3,
-        DOSE_COFFEE_WEIGHT_PCT: 1,
+        DOSE_COFFEE_WEIGHT_PCT: 0,
+        COFFEE_WINDOW_MIN: 240,
+        COFFEE_WIRED_CUPS: 3,
+        COFFEE_WIRED_MIN: 120,
         DOSE_BEER_WATER_PCT: 20,
         DOSE_BEER_BELLY_PCT: 2,
         DOSE_BEER_BOOZE_PCT: 15,
@@ -1075,7 +1084,10 @@ impl Thresholds {
         DOSE_COFFEE_FULL_PCT: 2,
         DOSE_COFFEE_ENERGY_PCT: 8,
         DOSE_COFFEE_MOOD_PCT: 3,
-        DOSE_COFFEE_WEIGHT_PCT: 1,
+        DOSE_COFFEE_WEIGHT_PCT: 0,
+        COFFEE_WINDOW_MIN: 240,
+        COFFEE_WIRED_CUPS: 3,
+        COFFEE_WIRED_MIN: 120,
         DOSE_BEER_WATER_PCT: 20,
         DOSE_BEER_BELLY_PCT: 2,
         DOSE_BEER_BOOZE_PCT: 15,
@@ -1714,6 +1726,9 @@ pub const BORNPETS_CFG_KEYS: &[(&str, Setter)] = &[
     ("DOSE_COFFEE_WEIGHT_PCT", |t, v| {
         t.DOSE_COFFEE_WEIGHT_PCT = v.min(100) as u8
     }),
+    ("COFFEE_WINDOW_MIN", |t, v| t.COFFEE_WINDOW_MIN = clamp_u16(v)),
+    ("COFFEE_WIRED_CUPS", |t, v| t.COFFEE_WIRED_CUPS = v.min(u8::MAX as u32) as u8),
+    ("COFFEE_WIRED_MIN", |t, v| t.COFFEE_WIRED_MIN = clamp_u16(v)),
     ("DOSE_BEER_WATER_PCT", |t, v| {
         t.DOSE_BEER_WATER_PCT = v.min(100) as u8
     }),

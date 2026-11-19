@@ -877,6 +877,22 @@ mod update_minutes {
         );
     }
 
+    /// Caffeine wears off by the minute, exactly: one long update and many
+    /// short ones agree, across the line where a cup stops wiring the pet.
+    #[test]
+    fn caffeine_wear_off_is_chunk_independent() {
+        let mut a = hatched();
+        a.caffeine_min = 400;
+        a.fun = (60 * P) as u16;
+        let mut b = a.clone();
+        for t in 1..=3600 {
+            a.update(t);
+        }
+        b.update(3600);
+        assert_eq!(a, b);
+        assert_eq!(b.caffeine_min, 0);
+    }
+
     #[test]
     fn sub_minute_time_is_carried_not_lost() {
         let mut s = hatched();
@@ -948,6 +964,21 @@ mod solver {
             6,
             "injured feeds mood: one minute early (R20)"
         );
+    }
+
+    /// Caffeine bounds a segment where a cup stops wiring the pet (the line
+    /// the drink preview and the demo pet read), and nowhere else.
+    #[test]
+    fn caffeine_bounds_the_segment_at_the_safe_line() {
+        use bornhack_aegg::game::engine::doses::caffeine_safe_min;
+        let mut s = calm();
+        s.fullness = pct(60);
+        let free = seg_len(&s, 10_000);
+        let safe = caffeine_safe_min() as u16;
+        s.caffeine_min = safe + 7;
+        assert_eq!(seg_len(&s, 10_000), 7.min(free));
+        s.caffeine_min = safe;
+        assert_eq!(seg_len(&s, 10_000), free, "under the line nothing reads it");
     }
 
     #[test]
@@ -1481,9 +1512,16 @@ mod rounding_margin {
 }
 
 mod doses_food_drink {
-    use bornhack_aegg::game::engine::needs::P;
-    use bornhack_aegg::game::engine::thresholds::{DRINK_DURATION, FEED_DURATION, HATCHING_TICKS};
-    use bornhack_aegg::game::engine::{Action, DrinkKind, FoodKind, GameState, PetKind, Phase};
+    use bornhack_aegg::game::engine::causes::Cause;
+    use bornhack_aegg::game::engine::needs::{P, fun_hi};
+    use bornhack_aegg::game::engine::status::{StatusWord, status};
+    use bornhack_aegg::game::engine::thresholds::{
+        COFFEE_WINDOW_MIN, COFFEE_WIRED_MIN, DRINK_DURATION, FEED_DURATION, FUN_DRAIN_PM,
+        GROGGY_ENERGY_PCT, HATCHING_TICKS,
+    };
+    use bornhack_aegg::game::engine::{
+        Action, DrinkKind, FoodKind, GameState, PetKind, Phase, TICKS_PER_MINUTE,
+    };
 
     fn pct(v: i32) -> i32 {
         v * P
@@ -1642,7 +1680,7 @@ mod doses_food_drink {
     }
 
     #[test]
-    fn cola_is_a_sugar_rush() {
+    fn coffee_is_a_pick_me_up_without_sugar() {
         let mut s = pet();
         s.energy = pct(60) as u16;
         sip(&mut s, DrinkKind::Coffee);
@@ -1650,8 +1688,89 @@ mod doses_food_drink {
         assert_eq!(s.fullness as i32, pct(52));
         assert_eq!(s.energy as i32, pct(68));
         assert_eq!(s.mood as i32, pct(53));
-        assert_eq!(s.weight as i32, pct(51));
+        assert_eq!(s.weight as i32, pct(50), "black coffee adds no weight");
         assert_eq!(s.booze, 0);
+        assert_eq!(s.caffeine_min, COFFEE_WINDOW_MIN());
+    }
+
+    #[test]
+    fn coffee_cures_a_groggy_morning() {
+        let mut s = pet();
+        s.energy = pct(60) as u16;
+        s.groggy_min = 100;
+        sip(&mut s, DrinkKind::Coffee);
+        assert_eq!(s.groggy_min, 0, "the grogginess ends");
+        assert_eq!(
+            s.energy as i32,
+            pct(68 + GROGGY_ENERGY_PCT() as i32),
+            "the cup's energy plus what the grogginess took"
+        );
+        assert!(s.take_causes().iter().any(|&c| c == Cause::PerkedUp));
+    }
+
+    #[test]
+    fn coffee_without_grogginess_perks_nothing() {
+        let mut s = pet();
+        s.energy = pct(60) as u16;
+        sip(&mut s, DrinkKind::Coffee);
+        assert_eq!(s.energy as i32, pct(68));
+        assert!(!s.take_causes().iter().any(|&c| c == Cause::PerkedUp));
+    }
+
+    /// Minutes of engine time, in whole minutes from a minute boundary.
+    fn wait_min(s: &mut GameState, minutes: u32) {
+        let now = s.last_update_tick + minutes * TICKS_PER_MINUTE;
+        s.update(now);
+    }
+
+    #[test]
+    fn three_cups_in_the_window_wire_the_pet_two_do_not() {
+        let mut s = pet();
+        s.money_enabled = false;
+        sip(&mut s, DrinkKind::Coffee);
+        sip(&mut s, DrinkKind::Coffee);
+        assert!(s.fun as i32 <= fun_hi(), "two cups: not wired");
+        assert!(!s.take_causes().iter().any(|&c| c == Cause::CoffeeWired));
+        s.hydration = pct(50) as u16; // not waterlogged: "wired" is the word
+        sip(&mut s, DrinkKind::Coffee);
+        assert!(s.fun as i32 > fun_hi(), "the third cup wires the pet");
+        assert_eq!(
+            s.fun as i32,
+            fun_hi() + COFFEE_WIRED_MIN() as i32 * FUN_DRAIN_PM() as i32,
+            "wired for COFFEE_WIRED_MIN minutes of fun drain"
+        );
+        assert_eq!(status(&s).0, StatusWord::Wired);
+        assert!(s.take_causes().iter().any(|&c| c == Cause::CoffeeWired));
+        // The wired spell ends as the fun drains, after COFFEE_WIRED_MIN.
+        wait_min(&mut s, COFFEE_WIRED_MIN() as u32 - 1);
+        assert!(s.fun as i32 > fun_hi());
+        wait_min(&mut s, 1);
+        assert!(s.fun as i32 <= fun_hi());
+    }
+
+    #[test]
+    fn three_cups_spread_past_the_window_do_not_wire() {
+        let mut s = pet();
+        s.money_enabled = false;
+        let gap = COFFEE_WINDOW_MIN() as u32 / 2 + 5;
+        sip(&mut s, DrinkKind::Coffee);
+        wait_min(&mut s, gap);
+        sip(&mut s, DrinkKind::Coffee);
+        wait_min(&mut s, gap);
+        s.fun = pct(50) as u16;
+        sip(&mut s, DrinkKind::Coffee);
+        assert!(s.fun as i32 <= fun_hi(), "first to last cup over the window");
+        assert!(!s.take_causes().iter().any(|&c| c == Cause::CoffeeWired));
+    }
+
+    #[test]
+    fn caffeine_wears_off_a_minute_a_minute() {
+        let mut s = pet();
+        s.caffeine_min = 300;
+        wait_min(&mut s, 100);
+        assert_eq!(s.caffeine_min, 200);
+        wait_min(&mut s, 250);
+        assert_eq!(s.caffeine_min, 0);
     }
 
     #[test]
@@ -4674,12 +4793,12 @@ mod causes {
             assert!(!c.what().is_empty() && !c.why().is_empty());
             assert_eq!(Cause::unpack(c.pack()), Some(c));
         }
-        assert_eq!(n, 38, "every variant once");
-        assert_eq!(Cause::all().count(), 38);
+        assert_eq!(n, 40, "every variant once");
+        assert_eq!(Cause::all().count(), 40);
         let mut codes: Vec<u8> = Cause::all().map(|c| c.pack()).collect();
         codes.sort();
         codes.dedup();
-        assert_eq!(codes.len(), 38, "every code is distinct");
+        assert_eq!(codes.len(), 40, "every code is distinct");
         assert_eq!(Cause::unpack(255), None);
         assert_eq!(Cause::TornMuscle(StrainWhy::WornOut).why(), "sport: worn out");
         assert_eq!(Cause::Strained(StrainWhy::Overdone).why(), "sport: too much");

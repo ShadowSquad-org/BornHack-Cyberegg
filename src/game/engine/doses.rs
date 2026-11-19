@@ -719,4 +719,49 @@ fn pour_drink(s: &mut GameState, drink: DrinkKind) {
         bump(&mut s.mood, lvl(p.mood));
         bump(&mut s.energy, lvl(p.energy));
     }
+    if drink == DrinkKind::Coffee {
+        coffee(s);
+    }
+}
+
+/// Most caffeine (minutes) at which one more cup does not wire the pet:
+/// `COFFEE_WIRED_CUPS - 1` cups' worth less the cup itself. Negative when
+/// every cup wires (`COFFEE_WIRED_CUPS` 0 or 1).
+pub fn caffeine_safe_min() -> i32 {
+    let cup = t::COFFEE_WINDOW_MIN() as i32;
+    (t::COFFEE_WIRED_CUPS() as i32 - 1).max(0) * cup - cup
+}
+
+/// Whether a cup of coffee now would wire the pet. With cups adding
+/// `COFFEE_WINDOW_MIN` each and wearing off one a minute, the
+/// `COFFEE_WIRED_CUPS`-th cup within `COFFEE_WINDOW_MIN` of the first is the
+/// one; older cups still count for what is left of them.
+pub fn coffee_would_wire(s: &GameState) -> bool {
+    s.caffeine_min as i32 > caffeine_safe_min()
+}
+
+/// Minutes until a cup stops wiring the pet, for the segment solver; `None`
+/// when that never changes by itself (already safe, or every cup wires).
+pub fn caffeine_to_safe(s: &GameState) -> Option<u32> {
+    let safe = caffeine_safe_min();
+    (safe >= 0 && s.caffeine_min as i32 > safe).then(|| (s.caffeine_min as i32 - safe) as u32)
+}
+
+/// What coffee does on top of its pour: it ends grogginess and gives back
+/// the energy the grogginess took, and a cup over the caffeine line wires
+/// the pet: fun goes past the wired line by `COFFEE_WIRED_MIN` minutes of
+/// fun drain, so the existing wired state runs for that long.
+fn coffee(s: &mut GameState) {
+    if s.groggy_min > 0 {
+        s.groggy_min = 0;
+        bump(&mut s.energy, lvl(t::GROGGY_ENERGY_PCT()));
+        s.causes.push(Cause::PerkedUp);
+    }
+    if coffee_would_wire(s) {
+        let spell = (t::COFFEE_WIRED_MIN() as i32).saturating_mul(t::FUN_DRAIN_PM() as i32);
+        let wired = needs::fun_hi().saturating_add(spell);
+        s.fun = s.fun.max(needs::clamp_level(wired) as u16);
+        s.causes.push(Cause::CoffeeWired);
+    }
+    s.caffeine_min = s.caffeine_min.saturating_add(t::COFFEE_WINDOW_MIN());
 }

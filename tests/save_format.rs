@@ -221,6 +221,24 @@ fn old_cola_drink_byte_loads_as_coffee() {
     assert_eq!(DrinkKind::ALL[1], DrinkKind::Coffee);
 }
 
+/// Caffeine sits in the reserved tail right after the demo block (bytes
+/// 160..162): it comes back from a save, and an older save (zeros there)
+/// reads as no caffeine.
+#[test]
+fn caffeine_round_trips_in_the_reserved_tail() {
+    let mut s = v3_state();
+    s.caffeine_min = 0x1234;
+    let bytes = s.to_bytes();
+    assert_eq!(&bytes[160..162], &0x1234u16.to_le_bytes());
+    assert_eq!(&bytes[162..177], &[0u8; 15], "the rest stays reserved");
+    let back = GameState::from_bytes(&bytes).unwrap();
+    assert_eq!(back.caffeine_min, 0x1234);
+    assert_eq!(back, s);
+
+    let old = GameState::from_bytes(&V3_GOLDEN).unwrap();
+    assert_eq!(old.caffeine_min, 0);
+}
+
 #[test]
 fn action_bytes_round_trip_and_2_is_unused() {
     let all = [

@@ -255,7 +255,10 @@ Known keys (everything else is silently ignored, so you don't have to keep your 
 | `DOSE_COFFEE_FULL_PCT` | 2 | 2 |
 | `DOSE_COFFEE_ENERGY_PCT` | 8 | 8 |
 | `DOSE_COFFEE_MOOD_PCT` | 3 | 3 |
-| `DOSE_COFFEE_WEIGHT_PCT` | 1 | 1 |
+| `DOSE_COFFEE_WEIGHT_PCT` | 0 | 0 |
+| `COFFEE_WINDOW_MIN` | 240 | 240 |
+| `COFFEE_WIRED_CUPS` | 3 | 3 |
+| `COFFEE_WIRED_MIN` | 120 | 120 |
 | `DOSE_BEER_WATER_PCT` | 20 | 20 |
 | `DOSE_BEER_BELLY_PCT` | 2 | 2 |
 | `DOSE_BEER_BOOZE_PCT` | 15 | 15 |

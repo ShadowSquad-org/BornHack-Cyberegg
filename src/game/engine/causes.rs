@@ -104,10 +104,14 @@ pub enum Cause {
     WellRested,
     /// Demo mode: the player's care helped the pet.
     Thanks,
+    /// Coffee ended the grogginess.
+    PerkedUp,
+    /// One coffee too many: the pet is wired.
+    CoffeeWired,
 }
 
 /// The causes without a payload.
-const PLAIN: [Cause; 16] = [
+const PLAIN: [Cause; 18] = [
     Cause::FoodComa,
     Cause::TreatTooSoon,
     Cause::NoTreatBuzz,
@@ -124,6 +128,8 @@ const PLAIN: [Cause; 16] = [
     Cause::OverRelaxed,
     Cause::WellRested,
     Cause::Thanks,
+    Cause::PerkedUp,
+    Cause::CoffeeWired,
 ];
 
 impl Cause {
@@ -148,6 +154,8 @@ impl Cause {
             Cause::OverRelaxed => "bored",
             Cause::WellRested => "well rested",
             Cause::Thanks => "thanks!",
+            Cause::PerkedUp => "perked up",
+            Cause::CoffeeWired => "wired",
         }
     }
 
@@ -172,12 +180,14 @@ impl Cause {
             Cause::OverRelaxed => "too much relax",
             Cause::WellRested => "good sleep",
             Cause::Thanks => "that helped",
+            Cause::PerkedUp => "had a coffee",
+            Cause::CoffeeWired => "too much coffee",
         }
     }
 
-    /// Everything but a good night and a thank-you is a warning.
+    /// Everything but a good night, a thank-you and a perk is a warning.
     pub fn is_warning(self) -> bool {
-        !matches!(self, Cause::WellRested | Cause::Thanks)
+        !matches!(self, Cause::WellRested | Cause::Thanks | Cause::PerkedUp)
     }
 
     /// Every variant, payloads included, once.
@@ -209,6 +219,8 @@ impl Cause {
             Cause::OverRelaxed => 13,
             Cause::WellRested => 14,
             Cause::Thanks => 15,
+            Cause::PerkedUp => 16,
+            Cause::CoffeeWired => 17,
             Cause::TornMuscle(w) => TORN_BASE + w as u8,
             Cause::Strained(w) => STRAINED_BASE + w as u8,
             Cause::BadNight(u) => BAD_NIGHT_BASE + u as u8,
@@ -219,7 +231,7 @@ impl Cause {
     pub fn unpack(v: u8) -> Option<Cause> {
         let at = |base: u8| v.checked_sub(base).map(usize::from);
         match v {
-            0..=15 => PLAIN.get(v as usize).copied(),
+            0..TORN_BASE => PLAIN.get(v as usize).copied(),
             TORN_BASE..STRAINED_BASE => StrainWhy::ALL
                 .get(at(TORN_BASE)?)
                 .map(|w| Cause::TornMuscle(*w)),
@@ -233,7 +245,9 @@ impl Cause {
     }
 }
 
-const TORN_BASE: u8 = 16;
+/// Room for plain causes below it; the codes never leave RAM, so the bases
+/// may move.
+const TORN_BASE: u8 = 24;
 const STRAINED_BASE: u8 = 32;
 const BAD_NIGHT_BASE: u8 = 48;
 

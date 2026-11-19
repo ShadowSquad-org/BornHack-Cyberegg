@@ -182,6 +182,7 @@ pub fn advance(s: &mut GameState, dt: u32) {
         &mut s.insulin_min,
         &mut s.ozempic_min,
         &mut s.ozempic_cd_min,
+        &mut s.caffeine_min,
     ] {
         sub_min(timer, dt);
     }

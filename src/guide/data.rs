@@ -68,6 +68,8 @@ const UNIT_OVERRIDES: &[(&str, Unit)] = &[
     // advance.rs: `dt * HANGOVER_ASLEEP_MULT`, a whole-number factor the
     // prose can say ("twice as fast"); beats the `_MULT` rule.
     ("HANGOVER_ASLEEP_MULT", Unit::Count),
+    // doses.rs: a number of cups of coffee.
+    ("COFFEE_WIRED_CUPS", Unit::Count),
 ];
 
 /// The unit of a `Thresholds` field. An override wins over a suffix rule;
@@ -320,7 +322,7 @@ pub fn doses() -> Vec<(&'static str, Result<Fields, String>)> {
         ("mood", |s| s.mood as i32),
         ("health", |s| s.health as i32),
     ];
-    let timers: [Timer; 7] = [
+    let timers: [Timer; 8] = [
         ("injured_min", |s| s.injured_min as i32),
         ("hangover_min", |s| s.hangover_min as i32),
         ("groggy_min", |s| s.groggy_min as i32),
@@ -328,6 +330,7 @@ pub fn doses() -> Vec<(&'static str, Result<Fields, String>)> {
         ("rehab_min", |s| s.rehab_min as i32),
         ("ozempic_cd_min", |s| s.ozempic_cd_min as i32),
         ("med_cd_min", |s| s.med_cd_min as i32),
+        ("caffeine_min", |s| s.caffeine_min as i32),
     ];
     let mut out = Vec::new();
     for (key, a, food, drink) in item_list() {

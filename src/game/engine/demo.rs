@@ -338,6 +338,8 @@ fn food_draw(s: &GameState) -> FoodKind {
     food
 }
 
+/// The pet's drink. It never takes the coffee that would wire it: water
+/// instead.
 fn drink_draw(s: &GameState) -> DrinkKind {
     let v = roll(s);
     let water = t::DEMO_PICK_WATER_PCT() as u32;
@@ -345,10 +347,20 @@ fn drink_draw(s: &GameState) -> DrinkKind {
     if v < water {
         DrinkKind::Water
     } else if v < coffee || s.booze as i32 > lines(s).whim_lo {
-        DrinkKind::Coffee
+        if coffee_ok(s) {
+            DrinkKind::Coffee
+        } else {
+            DrinkKind::Water
+        }
     } else {
         DrinkKind::Beer
     }
+}
+
+/// A coffee now would not wire the pet. The solver stops where this flips
+/// (`doses::caffeine_to_safe`).
+fn coffee_ok(s: &GameState) -> bool {
+    !super::doses::coffee_would_wire(s)
 }
 
 /// A mini-game (the first one not cooling down, from the dice's pick) or
@@ -518,6 +530,11 @@ fn decide_row(s: &GameState) -> Option<(Choice, Row)> {
     }
     if delay_done && let Some(c) = soft_pick(s) {
         return Some((c, Row::Soft));
+    }
+    // A groggy morning: a coffee perks the pet up, unless it would wire it.
+    let coffee = Choice::Drink(DrinkKind::Coffee);
+    if s.groggy_min > 0 && coffee_ok(s) && allowed(s, coffee) {
+        return Some((coffee, Row::Urgent));
     }
     if d.whim_min == 0 {
         return whim_pick(s).map(|c| (c, Row::Whim));

@@ -213,6 +213,11 @@ fn timer_bound(s: &GameState) -> u32 {
     ] {
         plain(m as i64);
     }
+    // Caffeine wearing down to the line where a cup stops wiring the pet
+    // (what the demo pet and the drink preview read); below it nothing does.
+    if let Some(m) = super::doses::caffeine_to_safe(s) {
+        plain(m as i64);
+    }
     if s.health != 0 || s.demo.on {
         // Counting down (a demo pet never leaves, so health 0 counts down
         // too); reaching 0 returns a Leaving pet to Active.
