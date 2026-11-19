@@ -13,6 +13,11 @@
 //! │  [Feed]  [Heal]  [Play]  [Rest]       │  y = 111–152 bottom icon row
 //! └───────────────────────────────────────┘  y = 152
 //! ```
+//!
+//! The status line (and the demo note / help line) straddles the bottom
+//! separator: its last line is a 13-row white backing on rows 105–117, the
+//! separator row 111 in the middle, so the text interrupts the line. Extra
+//! lines stack upward. The bottom icon cells start at row 118, clear of it.
 
 pub mod background;
 pub mod battle;
@@ -644,9 +649,10 @@ const SEP_TOP: i32 = 34;
 const SEP_BOT: i32 = 111;
 /// Status line: x of the centre of every line (panel is 152 px wide).
 const STATUS_CENTER_X: i32 = 76;
-/// Status line: y of the bottom row of the last line, two px above the
-/// separator.
-const STATUS_BASE_Y: i32 = SEP_BOT - 2;
+/// Status line: y of the bottom row of the last line. The last line is
+/// centred on the bottom separator (6 rows above it, 6 below), so its white
+/// backing interrupts the separator under the text.
+const STATUS_BASE_Y: i32 = SEP_BOT + 6;
 /// Status line: height of one text line (FONT_7X13_BOLD).
 const STATUS_LINE_H: i32 = 13;
 /// Status line: width of one column (FONT_7X13_BOLD).
@@ -704,7 +710,7 @@ where
     }
 }
 
-/// Draw the status line at the bottom of the pet area: bottom-centred, bold
+/// Draw the status line centred on the bottom separator: bold
 /// black (bold red in danger), each line on a white backing of its own width
 /// plus [`STATUS_BACKING_PAD`] so it reads over the sprite. A second line sits
 /// above the first.
@@ -1668,14 +1674,39 @@ mod tests {
     }
 
     #[test]
-    fn status_line_draws_at_the_pets_feet() {
+    fn status_line_draws_on_the_bottom_separator() {
         assert_backing(Word::Hungry, false, BLACK);
         let mut c = Canvas::new();
         draw_status_line(&mut c, &line_of(Word::Hungry, false)).unwrap();
-        assert!(c.any(rows(97, 109), BLACK));
-        assert!(!c.any(rows(0, 96), BLACK));
+        assert!(c.any(rows(105, 117), BLACK));
+        assert!(!c.any(rows(0, 104), BLACK));
         assert!(!c.any(rows(0, 151), RED));
-        assert!(!c.any(rows(SEP_BOT - 1, 151), BLACK));
+        assert!(!c.any(rows(118, 151), BLACK), "nothing over the icons");
+    }
+
+    #[test]
+    fn status_line_straddles_the_bottom_separator() {
+        use embedded_graphics::primitives::PrimitiveStyle;
+        let mut c = Canvas::new();
+        c.fill(WHITE);
+        Rectangle::new(Point::new(0, SEP_BOT), Size::new(152, 1))
+            .into_styled(PrimitiveStyle::with_fill(BLACK))
+            .draw(&mut c)
+            .unwrap();
+        draw_status_line(&mut c, &line_of(Word::Hungry, false)).unwrap();
+        let w = Word::Hungry.text().len() as i32 * super::STATUS_CHAR_W + super::STATUS_BACKING_PAD;
+        let x0 = super::STATUS_CENTER_X - w / 2;
+        assert_eq!(super::STATUS_BASE_Y - (super::STATUS_LINE_H - 1), 105);
+        assert_eq!(super::STATUS_BASE_Y, 117);
+        assert_eq!(c.get(x0 - 1, SEP_BOT), BLACK, "separator left of the text");
+        assert_eq!(c.get(x0 + w, SEP_BOT), BLACK, "separator right of the text");
+        assert_eq!(c.get(0, SEP_BOT), BLACK);
+        assert_eq!(c.get(151, SEP_BOT), BLACK);
+        // The backing's pad columns are white across the separator row.
+        assert_eq!(c.get(x0, SEP_BOT), WHITE, "backing interrupts the line");
+        assert_eq!(c.get(x0 + w - 1, SEP_BOT), WHITE);
+        let icon_top = super::BOT_CY - 13;
+        assert!(super::STATUS_BASE_Y < icon_top, "backing clear of the icons");
     }
 
     #[test]
@@ -1683,14 +1714,14 @@ mod tests {
         assert_backing(Word::Starving, true, BLACK);
         let mut c = Canvas::new();
         draw_status_line(&mut c, &line_of(Word::Starving, true)).unwrap();
-        assert!(c.any(rows(97, 109), RED));
-        assert!(!c.any(rows(0, 96), RED));
-        assert!(!c.any(rows(SEP_BOT - 1, 151), RED));
+        assert!(c.any(rows(105, 117), RED));
+        assert!(!c.any(rows(0, 104), RED));
+        assert!(!c.any(rows(118, 151), RED));
         assert!(!c.any(rows(0, 151), BLACK));
     }
 
     #[test]
-    fn two_long_words_take_two_lines_inside_the_pet_area() {
+    fn two_long_words_stack_up_from_the_separator() {
         let mut c = Canvas::new();
         let line = StatusLine {
             first: Word::Waterlogged,
@@ -1699,10 +1730,10 @@ mod tests {
         };
         assert_eq!(line.text().as_str(), "waterlogged\nunderweight");
         draw_status_line(&mut c, &line).unwrap();
-        assert!(c.any(rows(84, 96), BLACK));
-        assert!(c.any(rows(97, 109), BLACK));
-        assert!(!c.any(rows(0, 83), BLACK));
-        assert!(!c.any(rows(SEP_BOT - 1, 151), BLACK));
+        assert!(c.any(rows(92, 104), BLACK));
+        assert!(c.any(rows(105, 117), BLACK));
+        assert!(!c.any(rows(0, 91), BLACK));
+        assert!(!c.any(rows(118, 151), BLACK));
     }
 
     #[test]
@@ -1995,11 +2026,11 @@ mod tests {
     fn help_line_is_red() {
         let mut c = Canvas::new();
         draw_pet_line(&mut c, &PetLine::Help).unwrap();
-        assert!(c.any(rows(96, 110), RED));
+        assert!(c.any(rows(105, 117), RED));
         let mut n = Canvas::new();
         let note = crate::game::engine::demo::Note::Washing;
         draw_pet_line(&mut n, &PetLine::Note(note)).unwrap();
-        assert!(n.any(rows(96, 110), BLACK));
+        assert!(n.any(rows(105, 117), BLACK));
         assert!(!n.any(rows(0, 151), RED), "a note is black");
     }
 
