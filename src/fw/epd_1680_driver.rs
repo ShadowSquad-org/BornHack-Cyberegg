@@ -93,10 +93,12 @@ pub struct Driver<'a, const N: usize> {
     /// ledger only on a completed drive, so they are re-driven to the latest
     /// target instead.
     delta: DeltaState,
-    /// Signed per-pixel V·t ledger; schedules short opposite-rail correction
-    /// pulses for pixels carrying excess charge. See `ssd1680::ledger`.
+    /// Signed per-pixel V·t ledger (4 bits/pixel); schedules short
+    /// opposite-rail correction pulses for pixels carrying excess charge. See
+    /// `ssd1680::ledger`.
     ledger: ChargeLedger,
-    /// Preview-vs-delta decision and the previewed-but-unsettled bitmap.
+    /// Preview-vs-delta decision (run counter only: previewed pixels stay in
+    /// `delta`'s dirty bitmap until settled).
     preview: PreviewScheduler,
     /// Runtime knobs (from `EPD.CFG`), already clamped by the driver crate.
     tuning: EpdTuning,
@@ -124,9 +126,8 @@ impl<'a, const N: usize> Driver<'a, N> {
     ///   also `N` bytes. Zeroed here: nothing has been driven yet.
     /// * `code_bw`/`code_red`    - Delta code-plane scratch, each `N` bytes.
     ///   Reused for the correction planes once the update has run.
-    /// * `charge`                - Charge ledger, one `i8` per panel pixel
+    /// * `charge`                - Charge ledger, 4 bits per panel pixel
     ///   ([`ChargeLedger::bytes_for`]); zeroed here.
-    /// * `unsettled`             - Previewed-pixel bitmap, `N` bytes; zeroed.
     /// * `scale_fill`            - Upscale to fill (true) or centre 1:1 (false).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -142,8 +143,7 @@ impl<'a, const N: usize> Driver<'a, N> {
         dirty: &'static mut [u8; N],
         code_bw: &'a mut [u8; N],
         code_red: &'a mut [u8; N],
-        charge: &'static mut [i8],
-        unsettled: &'static mut [u8; N],
+        charge: &'static mut [u8],
         scale_fill: bool,
     ) -> Self {
         canvas_bw.fill(0xFF);
@@ -153,9 +153,11 @@ impl<'a, const N: usize> Driver<'a, N> {
         shadow_bw.fill(0xFF);
         shadow_red.fill(0x00);
         dirty.fill(0x00);
+        code_bw.fill(0xFF);
+        code_red.fill(0xFF);
         let delta = DeltaState::new(shadow_bw, shadow_red, dirty, width, height);
         let ledger = ChargeLedger::new(charge, width, height, LedgerConfig::default());
-        let preview = PreviewScheduler::new(unsettled, width, height);
+        let preview = PreviewScheduler::new();
         // Keep the analog rails up between back-to-back updates (a delta and
         // its correction pulse, or a burst of button presses). The display loop calls
         // `deep_sleep` once updates stop, which drops them.
@@ -330,55 +332,57 @@ impl<'a, const N: usize> Driver<'a, N> {
                     .await?;
                 // Past the await, so the waveform ran to completion. A full
                 // drives every pixel unconditionally: the shadow advances to
-                // the live frame, the damage and unsettled sets clear, and the
-                // charge ledger restarts from zero (the full is the backstop).
+                // the live frame, the damage set (incl. previewed pixels)
+                // clears, and the charge ledger restarts from zero (the full
+                // is the backstop).
                 self.delta
                     .commit_full(&self.panel_bw[..n], &self.panel_red[..n]);
-                self.preview.on_full();
+                self.preview.on_delta();
                 self.ledger.reset();
             }
             RefreshMode::Fast => {
-                // `build` drives the union of (changed vs shadow) and (still
-                // damaged from an interrupted drive), and ORs that union into
-                // the damage bitmap. `None` = nothing to drive.
-                if self
+                // Decide on what changed vs the shadow (dirty-only pixels
+                // never preview: they get the full delta or the settle).
+                let stats = self
                     .delta
-                    .build(
-                        &self.panel_bw[..n],
-                        &self.panel_red[..n],
-                        &mut self.code_bw[..n],
-                        &mut self.code_red[..n],
-                    )
-                    .is_none()
-                {
-                    return Ok(());
-                }
+                    .changed_stats(&self.panel_bw[..n], &self.panel_red[..n]);
                 let kind = if allow_preview {
-                    self.preview.choose(
-                        &self.tuning,
-                        self.delta.last_driven_px(),
-                        self.delta.last_red_involved(),
-                    )
+                    self.preview.choose(&self.tuning, stats)
                 } else {
                     UpdateKind::Delta
                 };
-                match kind {
+                let drove = match kind {
                     UpdateKind::Preview => self.run_preview().await?,
                     UpdateKind::Delta => self.run_delta().await?,
+                };
+                if drove {
+                    self.run_correction().await?;
                 }
-                self.run_correction().await?;
             }
         }
         Ok(())
     }
 
-    /// Short B/W preview over the code planes `build` just wrote. The pixels
-    /// are marked unsettled *before* the await, so a cancelled preview still
-    /// gets its settle.
-    async fn run_preview(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+    /// Short B/W preview of the changed pixels. `build_preview` ORs them
+    /// into the dirty bitmap *before* the await, so a cancelled preview is
+    /// re-driven like any interrupted drive; a completed one advances the
+    /// shadow but keeps them dirty for the settle. `Ok(false)` = nothing to
+    /// drive.
+    async fn run_preview(&mut self) -> Result<bool, <Iface<'a> as DisplayInterface>::Error> {
         let n = self.plane_len();
-        self.preview
-            .on_preview(&self.code_bw[..n], &self.code_red[..n]);
+        if self
+            .delta
+            .build_preview(
+                &self.panel_bw[..n],
+                &self.panel_red[..n],
+                &mut self.code_bw[..n],
+                &mut self.code_red[..n],
+            )
+            .is_none()
+        {
+            return Ok(false);
+        }
+        self.preview.on_preview();
         defmt::info!(
             "1680 preview: {} px, run {}",
             self.delta.last_driven_px(),
@@ -387,28 +391,44 @@ impl<'a, const N: usize> Driver<'a, N> {
         self.display
             .update_preview(&self.code_bw[..n], &self.code_red[..n])
             .await?;
-        // Completed: the shadow advances (the image is on glass, if not fully
-        // saturated); the unsettled bitmap keeps these pixels for the settle.
-        self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
+        self.delta
+            .commit_preview(&self.panel_bw[..n], &self.panel_red[..n]);
         let w = self.display.weights(Waveform::Preview);
         self.ledger
             .after_update(&self.code_bw[..n], &self.code_red[..n], w);
-        Ok(())
+        Ok(true)
     }
 
-    /// Normal delta. Every unsettled (previewed) pixel is folded into the
-    /// drive set first, so this delta settles them too.
-    async fn run_delta(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+    /// Normal delta over (changed vs shadow) ∪ dirty, so it also settles
+    /// every previewed pixel and re-drives any left by a cancelled drive.
+    /// `Ok(false)` = nothing to drive.
+    async fn run_delta(&mut self) -> Result<bool, <Iface<'a> as DisplayInterface>::Error> {
         let n = self.plane_len();
-        if self.preview.pending() {
-            self.delta.mark_dirty(self.preview.unsettled());
-            let _ = self.delta.build(
+        if self
+            .delta
+            .build(
                 &self.panel_bw[..n],
                 &self.panel_red[..n],
                 &mut self.code_bw[..n],
                 &mut self.code_red[..n],
-            );
+            )
+            .is_none()
+        {
+            return Ok(false);
         }
+        self.drive_delta().await?;
+        // Only reached when the waveform completed. If the refresh future is
+        // dropped mid-drive the commit never runs, so the shadow stays stale
+        // and every pixel this build touched stays in the damage bitmap for
+        // the next one.
+        self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
+        Ok(true)
+    }
+
+    /// Run the normal delta waveform over the code planes the last build
+    /// wrote, end the preview run and book the charge. The caller commits.
+    async fn drive_delta(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        let n = self.plane_len();
         // The delta path never windows — the box is log-only.
         let bbox = BoundingBox {
             x0: 0,
@@ -425,13 +445,7 @@ impl<'a, const N: usize> Driver<'a, N> {
         self.display
             .update_delta(&self.code_bw[..n], &self.code_red[..n], bbox, skip_red)
             .await?;
-        // Only reached when the waveform completed. If the refresh future is
-        // dropped mid-drive the commit never runs, so the shadow stays stale
-        // and every pixel this build touched stays in the damage bitmap (and
-        // the unsettled ones stay unsettled) for the next one.
-        self.delta.commit(&self.panel_bw[..n], &self.panel_red[..n]);
-        self.preview
-            .on_delta(&self.code_bw[..n], &self.code_red[..n]);
+        self.preview.on_delta();
         let w = self.display.weights(if skip_red {
             Waveform::DeltaBw
         } else {
@@ -474,20 +488,18 @@ impl<'a, const N: usize> Driver<'a, N> {
         Ok(())
     }
 
-    /// Settle every previewed pixel with the normal delta. Uses the panel
-    /// planes of the last refresh (not the canvas), so only unsettled pixels
-    /// (and any damage left by a cancelled drive) are driven. No-op when
-    /// nothing is pending.
-    async fn settle_unsettled(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
-        if !self.preview.pending() {
+    /// Settle every dirty pixel (previewed, or left by a cancelled drive)
+    /// with the normal delta, toward the panel planes of the last refresh.
+    /// Changed-but-clean pixels are not touched (they wait for the next
+    /// refresh). No-op when nothing is dirty.
+    async fn settle_dirty(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
+        if !self.delta.has_dirty() {
             return Ok(());
         }
         let n = self.plane_len();
-        defmt::info!("1680 settle: {} px", self.preview.unsettled_px());
-        self.delta.mark_dirty(self.preview.unsettled());
         if self
             .delta
-            .build(
+            .build_settle(
                 &self.panel_bw[..n],
                 &self.panel_red[..n],
                 &mut self.code_bw[..n],
@@ -497,7 +509,10 @@ impl<'a, const N: usize> Driver<'a, N> {
         {
             return Ok(());
         }
-        self.run_delta().await?;
+        defmt::info!("1680 settle: {} px", self.delta.last_driven_px());
+        self.drive_delta().await?;
+        self.delta
+            .commit_settle(&self.panel_bw[..n], &self.panel_red[..n]);
         self.run_correction().await
     }
 }
@@ -569,16 +584,16 @@ impl<'a, const N: usize> EpdDriver for Driver<'a, N> {
     /// they are already off.
     async fn deep_sleep(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
         // Never park with previewed pixels short of saturation.
-        self.settle_unsettled().await?;
+        self.settle_dirty().await?;
         self.display.power_off().await
     }
 
     fn settle_due_in_ms(&self) -> Option<u32> {
-        self.preview.settle_due_in_ms(&self.tuning)
+        PreviewScheduler::settle_due_in_ms(&self.tuning, self.delta.has_dirty())
     }
 
     async fn settle(&mut self) -> Result<(), <Self as EpdDriver>::Error> {
-        self.settle_unsettled().await
+        self.settle_dirty().await
     }
 }
 

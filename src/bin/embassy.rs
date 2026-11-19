@@ -307,29 +307,43 @@ async fn main(spawner: Spawner) {
         use embedded_hal_bus::spi::ExclusiveDevice;
 
         // 152×152 badge panel: 152/8 * 152 = 2888 bytes per plane.
+        //
+        // Every buffer is a zero-initialised `ConstStaticCell` taken in place:
+        // it lives in `.bss` and no copy of the array is ever built on the
+        // stack. (`StaticCell::init([..; N])` materialises its argument in
+        // `main`'s poll frame first; with ~34 KiB of planes that frame alone
+        // grew past 40 KiB and, with flip-link putting the stack under
+        // `.bss`, overflowed the boot stack → HardFault → WDT reset loop, the
+        // flashing white LED.) `Driver::new` fills each plane with its real
+        // starting value.
+        use static_cell::ConstStaticCell;
         const PLANE_N: usize = 2888;
-        static BLACK_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static BLACK_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static RED_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
         // Damage bitmap: 1 bit per panel pixel, so the same PLANE_N bytes.
-        // Records every pixel a waveform has touched but not confirmed, and is
-        // cleared only when a drive completes — this is what lets an
-        // interrupted refresh be resumed instead of diffed away.
-        static DIRTY_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_BW_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        // Charge ledger: one signed byte of V·t per panel pixel (152·152 =
-        // 23104 bytes). Schedules short opposite-rail correction pulses for
-        // pixels carrying excess charge; see `ssd1680::ledger`.
+        // Records every pixel a waveform has touched but not confirmed (an
+        // interrupted drive, or a preview awaiting its settle), and is
+        // cleared only when a full-length drive completes — this is what
+        // lets an interrupted refresh be resumed instead of diffed away.
+        static DIRTY_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_BW_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
+        // Charge ledger: a signed 4-bit V·t value per panel pixel (152·152/2
+        // = 11552 bytes, the size of the old top-up counter). Schedules short
+        // opposite-rail correction pulses for pixels carrying excess charge;
+        // see `ssd1680::ledger`.
         const LEDGER_N: usize = ssd1680::ChargeLedger::bytes_for(152, 152);
-        static LEDGER_1680: StaticCell<[i8; LEDGER_N]> = StaticCell::new();
-        // Previewed-but-not-settled pixels, 1 bit per panel pixel.
-        static UNSETTLED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static LEDGER_1680: ConstStaticCell<[u8; LEDGER_N]> = ConstStaticCell::new([0; LEDGER_N]);
         // 152×152 UI canvas planes (the driver scales these into the panel).
         use bornhack_aegg::fw::epd_1680_driver::CANVAS_BYTES;
-        static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
-        static CANVAS_RED_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
+        static CANVAS_BW_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
+        static CANVAS_RED_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
 
         // Read the panel's OWN OTP full waveform back over cmd 0x33 and halve
         // its shake repeats. Runs BEFORE the display Spim is built (it borrows
@@ -365,17 +379,16 @@ async fn main(spawner: Spawner) {
             display,
             152,
             152,
-            CANVAS_BW_1680.init([0xFF; CANVAS_BYTES]),
-            CANVAS_RED_1680.init([0x00; CANVAS_BYTES]),
-            BLACK_1680.init([0xFF; PLANE_N]),
-            RED_1680.init([0x00; PLANE_N]),
-            PREV_1680.init([0xFF; PLANE_N]),
-            PREV_RED_1680.init([0x00; PLANE_N]),
-            DIRTY_1680.init([0x00; PLANE_N]),
-            CODE_BW_1680.init([0xFF; PLANE_N]),
-            CODE_RED_1680.init([0xFF; PLANE_N]),
-            LEDGER_1680.init([0; LEDGER_N]),
-            UNSETTLED_1680.init([0x00; PLANE_N]),
+            CANVAS_BW_1680.take(),
+            CANVAS_RED_1680.take(),
+            BLACK_1680.take(),
+            RED_1680.take(),
+            PREV_1680.take(),
+            PREV_RED_1680.take(),
+            DIRTY_1680.take(),
+            CODE_BW_1680.take(),
+            CODE_RED_1680.take(),
+            LEDGER_1680.take(),
             false, // scale_fill: canvas matches the 152×152 panel 1:1
         )
     };
@@ -1244,7 +1257,7 @@ async fn display_loop_1680<D>(
             // pending, the settle pass runs first, after `SETTLE_MS` of idle
             // (rails still up), then the usual power-off delay follows. An
             // event during the settle cancels it like any refresh; the pixels
-            // stay unsettled and the next refresh or idle settles them.
+            // stay dirty and the next refresh or idle settles them.
             Either::First(_) => {
                 const ANALOG_IDLE_MS: u64 = 1000;
                 let idle_power_off = async {
