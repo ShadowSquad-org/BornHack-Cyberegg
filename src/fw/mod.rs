@@ -14,8 +14,8 @@ pub mod epd_1675_driver;
 /// 200×200 panel, custom delta LUT for non-flashing partial updates.
 #[cfg(feature = "ssd1680-driver")]
 pub mod epd_1680_driver;
-/// `EPD.CFG` waveform tuning loader for the SSD1680 driver.
-#[cfg(feature = "ssd1680-driver")]
+/// `EPD.CFG` waveform tuning loader (SSD1680 and SSD1675 drivers).
+#[cfg(any(feature = "ssd1680-driver", feature = "ssd1675-driver"))]
 pub mod epd_cfg;
 pub mod factory_test;
 pub mod fat12;

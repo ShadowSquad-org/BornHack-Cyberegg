@@ -225,6 +225,17 @@ async fn main(spawner: Spawner) {
     let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
     #[cfg(feature = "ssd1675-driver")]
     partial_state.clear_to(ssd1675::graphics::Color::White);
+    // Charge-ledger / halo-kick tuning from `EPD.CFG` (FAT12 is formatted at
+    // the top of `main`); no file = the variant's defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1675-driver")]
+    {
+        let tuning = bornhack_aegg::fw::epd_cfg::load(ssd1675::EpdTuning::for_variant(
+            display.variant(),
+        ))
+        .await;
+        partial_state.set_tuning(tuning);
+    }
 
     // Boot breadcrumb #2 — switch from orange to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
@@ -247,6 +258,9 @@ async fn main(spawner: Spawner) {
         if panel_c10 != i16::MIN {
             display.set_active_temperature(panel_c10);
         }
+        // Frame period of the active band (sets the halo / correction
+        // pulse length: HALO_FRAMES x this).
+        defmt::info!("EPD: frame {=u32} ns", display.frame_ns());
 
         display.clear(Color::White);
         let _ = display.reset().await;
@@ -894,8 +908,9 @@ async fn display_loop(
                 }
                 let _ = bornhack_aegg::game::battle_view::draw_queued_pre(driver);
                 {
-                    let (display, _ps) = driver.staged_parts_mut();
+                    let (display, ps) = driver.staged_parts_mut();
                     let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
                     let _ = display.deep_sleep().await;
                 }
                 Timer::after_millis(2_000).await;
@@ -917,8 +932,9 @@ async fn display_loop(
                 }
                 bornhack_aegg::game::battle_view::render_anim(driver, stage).await;
                 {
-                    let (display, _ps) = driver.staged_parts_mut();
+                    let (display, ps) = driver.staged_parts_mut();
                     let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
                     let _ = display.deep_sleep().await;
                 }
                 Timer::after_millis(5_000).await;
@@ -934,13 +950,14 @@ async fn display_loop(
             let _deghost_boost = bornhack_aegg::fw::power::boost(
                 bornhack_aegg::fw::power::Source::Epd,
             );
-            let (display, _ps) = driver.staged_parts_mut();
+            let (display, ps) = driver.staged_parts_mut();
             display.clear(Color::Black);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
             display.clear(Color::White);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
+            ps.reset_ledger();
             let _ = display.deep_sleep().await;
             drop(_deghost_boost);
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
@@ -1096,6 +1113,9 @@ async fn display_loop(
                             )
                             .await;
                             partial_state.commit_refresh();
+                            // A full tri-colour drive: start the charge
+                            // ledger from zero, as update_partial's own full does.
+                            partial_state.reset_ledger();
                         } else {
                             let _ = bornhack_aegg::fw::power::boosted(
                                 bornhack_aegg::fw::power::Source::Epd,
