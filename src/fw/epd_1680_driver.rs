@@ -22,8 +22,10 @@
 //! or, once the screen is idle for `SETTLE_MS`, by [`EpdDriver::settle`]
 //! (also run before [`EpdDriver::deep_sleep`]). After every update the signed
 //! [`ChargeLedger`] books the waveform's V·t per pixel and pulses pixels that
-//! carry clearly more than one image's worth with the opposite rail. All of it
-//! is tunable from `EPD.CFG` (see `fw::epd_cfg`).
+//! carry clearly more than one image's worth with the opposite rail. The same
+//! post-drive pass gives white pixels next to freshly driven black a short
+//! VSL halo kick (`HALO_FRAMES`) against black ink bleeding sideways. All of
+//! it is tunable from `EPD.CFG` (see `fw::epd_cfg`).
 //!
 //! ## Upscaling
 //!
@@ -37,8 +39,8 @@ use crate::color::EpdColor;
 use crate::epd_driver::{EpdDriver, PlaneAccess, RefreshMode};
 use ssd1680::display::Waveform;
 use ssd1680::{
-    BoundingBox, ChargeLedger, DeltaState, Display, EpdTuning, Interface, LedgerConfig,
-    PreviewScheduler, UpdateKind,
+    BoundingBox, ChargeLedger, CorrectionOpts, DeltaState, Display, EpdTuning, Interface,
+    LedgerConfig, PreviewScheduler, UpdateKind,
 };
 use ssd1680::interface::DisplayInterface;
 use embassy_nrf::gpio::{Input, Output};
@@ -463,30 +465,37 @@ impl<'a, const N: usize> Driver<'a, N> {
         Ok(())
     }
 
-    /// Opposite-rail correction pulse for pixels the ledger flags, on the
-    /// still-powered rails. Must run straight after a completed delta/settle:
-    /// the code planes still hold that drive's codes, and only the pixels it
-    /// drove are candidates (at most one pulse per drive, so a held pixel is
-    /// never kicked over and over). Rewrites the code planes in place. If cancelled,
-    /// nothing is lost: the image is committed, the ledger is only debited
-    /// after the pulse ran, and the next refresh resets the controller.
+    /// Post-drive pass on the still-powered rails: opposite-rail correction
+    /// pulses for pixels the ledger flags (`LEDGER`) plus the halo kick on
+    /// white pixels next to fresh black (`HALO_FRAMES`), one LUT. Must run
+    /// straight after a completed delta/settle: the code planes still hold
+    /// that drive's codes; only the pixels it drove are correction candidates
+    /// (at most one pulse per drive, so a held pixel is never kicked over and
+    /// over) and only the pixels it drove black seed the halo. Rewrites the
+    /// code planes in place. If cancelled, nothing is lost: the image is
+    /// committed, the ledger is only debited after the pulse ran, and the
+    /// next refresh resets the controller.
     async fn run_correction(&mut self) -> Result<(), <Iface<'a> as DisplayInterface>::Error> {
-        if !self.tuning.ledger {
+        let opts = CorrectionOpts::after(UpdateKind::Delta, &self.tuning);
+        if opts.is_off() {
             return Ok(());
         }
         let n = self.plane_len();
         let plan = self.ledger.plan_correction(
+            &self.panel_bw[..n],
             &self.panel_red[..n],
             &mut self.code_bw[..n],
             &mut self.code_red[..n],
+            opts,
         );
         if plan.is_empty() {
             return Ok(());
         }
         defmt::info!(
-            "1680 correct: vsl={} vsh1={} max|c|={}",
+            "1680 correct: vsl={} vsh1={} halo={} max|c|={}",
             plan.vsl,
             plan.vsh1,
+            plan.halo,
             self.ledger.max_abs()
         );
         self.display

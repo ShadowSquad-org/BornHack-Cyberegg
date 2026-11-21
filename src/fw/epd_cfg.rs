@@ -16,8 +16,13 @@
 //! Keys (defaults): `PREVIEW=1`, `PREVIEW_FRAMES=20`, `PREVIEW_MAX_PX=4000`,
 //! `PREVIEW_MAX_RUN=8`, `SETTLE_MS=1500`, `SHORT_DELTA=0`, `VCOM=0x40`,
 //! `LEDGER=0`, `LEDGER_POS=72`, `LEDGER_NEG=65`, `LEDGER_DECAY=3`,
-//! `CORR_FRAMES=1`. `LEDGER` only gates the correction pulses (the charge
-//! booking always runs); set `LEDGER=1` to try them.
+//! `CORR_FRAMES=1`, `HALO_FRAMES=4`. `LEDGER` only gates the correction
+//! pulses (the charge booking always runs); set `LEDGER=1` to try them.
+//! `HALO_FRAMES` is the halo kick after a full drive: white pixels next to
+//! freshly driven black get that many frames (5 ms each) of VSL to pull back
+//! the black ink bleeding into them; `0` = off, else clamped to 1..20. It runs
+//! whether `LEDGER` is on or not (each kick is still booked in the ledger and
+//! skipped for pixels already at `-LEDGER_NEG`).
 
 use ssd1680::{EpdTuning, KvResult};
 
@@ -85,7 +90,7 @@ pub async fn load() -> EpdTuning {
     }
     let t = t.clamped();
     defmt::info!(
-        "EPD.CFG: preview={} frames={} max_px={} run={} settle_ms={} short={} vcom={=u8:#x} ledger={} pos={} neg={} decay={} corr={}",
+        "EPD.CFG: preview={} frames={} max_px={} run={} settle_ms={} short={} vcom={=u8:#x} ledger={} pos={} neg={} decay={} corr={} halo={}",
         t.preview,
         t.preview_frames,
         t.preview_max_px,
@@ -97,7 +102,8 @@ pub async fn load() -> EpdTuning {
         t.ledger_pos,
         t.ledger_neg,
         t.ledger_decay,
-        t.corr_frames
+        t.corr_frames,
+        t.halo_frames
     );
     t
 }
