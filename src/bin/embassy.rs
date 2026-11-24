@@ -225,6 +225,17 @@ async fn main(spawner: Spawner) {
     let mut partial_state = bornhack_aegg::fw::epd::partial_state_take(dims.rows, dims.cols);
     #[cfg(feature = "ssd1675-driver")]
     partial_state.clear_to(ssd1675::graphics::Color::White);
+    // Charge-ledger / halo-kick tuning from `EPD.CFG` (FAT12 is formatted at
+    // the top of `main`); no file = the variant's defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1675-driver")]
+    {
+        let tuning = bornhack_aegg::fw::epd_cfg::load(ssd1675::EpdTuning::for_variant(
+            display.variant(),
+        ))
+        .await;
+        partial_state.set_tuning(tuning);
+    }
 
     // Boot breadcrumb #2 — switch from orange to blue while the boot
     // tri-color refresh + remaining task spawns finish.  This is the
@@ -247,6 +258,9 @@ async fn main(spawner: Spawner) {
         if panel_c10 != i16::MIN {
             display.set_active_temperature(panel_c10);
         }
+        // Frame period of the active band (sets the halo / correction
+        // pulse length: HALO_FRAMES x this).
+        defmt::info!("EPD: frame {=u32} ns", display.frame_ns());
 
         display.clear(Color::White);
         let _ = display.reset().await;
@@ -307,27 +321,43 @@ async fn main(spawner: Spawner) {
         use embedded_hal_bus::spi::ExclusiveDevice;
 
         // 152×152 badge panel: 152/8 * 152 = 2888 bytes per plane.
+        //
+        // Every buffer is a zero-initialised `ConstStaticCell` taken in place:
+        // it lives in `.bss` and no copy of the array is ever built on the
+        // stack. (`StaticCell::init([..; N])` materialises its argument in
+        // `main`'s poll frame first; with ~34 KiB of planes that frame alone
+        // grew past 40 KiB and, with flip-link putting the stack under
+        // `.bss`, overflowed the boot stack → HardFault → WDT reset loop, the
+        // flashing white LED.) `Driver::new` fills each plane with its real
+        // starting value.
+        use static_cell::ConstStaticCell;
         const PLANE_N: usize = 2888;
-        static BLACK_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static PREV_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
+        static BLACK_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static RED_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static PREV_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
         // Damage bitmap: 1 bit per panel pixel, so the same PLANE_N bytes.
-        // Records every pixel a waveform has touched but not confirmed, and is
-        // cleared only when a drive completes — this is what lets an
-        // interrupted refresh be resumed instead of diffed away.
-        static DIRTY_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_BW_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        static CODE_RED_1680: StaticCell<[u8; PLANE_N]> = StaticCell::new();
-        // Top-up ledger: a 4-bit hold counter per panel pixel (152·152/2 =
-        // 11552 bytes). Schedules short re-saturation pulses for pixels that
-        // stay unchanged across deltas; see `ssd1680::topup`.
-        const TOPUP_N: usize = ssd1680::TopUpLedger::bytes_for(152, 152);
-        static TOPUP_1680: StaticCell<[u8; TOPUP_N]> = StaticCell::new();
+        // Records every pixel a waveform has touched but not confirmed (an
+        // interrupted drive, or a preview awaiting its settle), and is
+        // cleared only when a full-length drive completes — this is what
+        // lets an interrupted refresh be resumed instead of diffed away.
+        static DIRTY_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_BW_1680: ConstStaticCell<[u8; PLANE_N]> = ConstStaticCell::new([0; PLANE_N]);
+        static CODE_RED_1680: ConstStaticCell<[u8; PLANE_N]> =
+            ConstStaticCell::new([0; PLANE_N]);
+        // Charge ledger: a signed 4-bit V·t value per panel pixel (152·152/2
+        // = 11552 bytes, the size of the old top-up counter). Schedules short
+        // opposite-rail correction pulses for pixels carrying excess charge;
+        // see `ssd1680::ledger`.
+        const LEDGER_N: usize = ssd1680::ChargeLedger::bytes_for(152, 152);
+        static LEDGER_1680: ConstStaticCell<[u8; LEDGER_N]> = ConstStaticCell::new([0; LEDGER_N]);
         // 152×152 UI canvas planes (the driver scales these into the panel).
         use bornhack_aegg::fw::epd_1680_driver::CANVAS_BYTES;
-        static CANVAS_BW_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
-        static CANVAS_RED_1680: StaticCell<[u8; CANVAS_BYTES]> = StaticCell::new();
+        static CANVAS_BW_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
+        static CANVAS_RED_1680: ConstStaticCell<[u8; CANVAS_BYTES]> =
+            ConstStaticCell::new([0; CANVAS_BYTES]);
 
         // Read the panel's OWN OTP full waveform back over cmd 0x33 and halve
         // its shake repeats. Runs BEFORE the display Spim is built (it borrows
@@ -363,19 +393,25 @@ async fn main(spawner: Spawner) {
             display,
             152,
             152,
-            CANVAS_BW_1680.init([0xFF; CANVAS_BYTES]),
-            CANVAS_RED_1680.init([0x00; CANVAS_BYTES]),
-            BLACK_1680.init([0xFF; PLANE_N]),
-            RED_1680.init([0x00; PLANE_N]),
-            PREV_1680.init([0xFF; PLANE_N]),
-            PREV_RED_1680.init([0x00; PLANE_N]),
-            DIRTY_1680.init([0x00; PLANE_N]),
-            CODE_BW_1680.init([0xFF; PLANE_N]),
-            CODE_RED_1680.init([0xFF; PLANE_N]),
-            TOPUP_1680.init([0x00; TOPUP_N]),
+            CANVAS_BW_1680.take(),
+            CANVAS_RED_1680.take(),
+            BLACK_1680.take(),
+            RED_1680.take(),
+            PREV_1680.take(),
+            PREV_RED_1680.take(),
+            DIRTY_1680.take(),
+            CODE_BW_1680.take(),
+            CODE_RED_1680.take(),
+            LEDGER_1680.take(),
             false, // scale_fill: canvas matches the 152×152 panel 1:1
         )
     };
+
+    // Waveform tuning from `EPD.CFG` on the badge volume (FAT12 is formatted
+    // at the top of `main`); no file = built-in defaults. Clamped by the
+    // driver crate, so a bad file cannot harm the panel.
+    #[cfg(feature = "ssd1680-driver")]
+    driver.set_tuning(bornhack_aegg::fw::epd_cfg::load().await);
 
     // Boot paint on the unified driver (SSD1680 only — the SSD1675 boot clear
     // already ran on the raw panel above so the factory-test forensic trail and
@@ -872,8 +908,9 @@ async fn display_loop(
                 }
                 let _ = bornhack_aegg::game::battle_view::draw_queued_pre(driver);
                 {
-                    let (display, _ps) = driver.staged_parts_mut();
+                    let (display, ps) = driver.staged_parts_mut();
                     let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
                     let _ = display.deep_sleep().await;
                 }
                 Timer::after_millis(2_000).await;
@@ -895,8 +932,9 @@ async fn display_loop(
                 }
                 bornhack_aegg::game::battle_view::render_anim(driver, stage).await;
                 {
-                    let (display, _ps) = driver.staged_parts_mut();
+                    let (display, ps) = driver.staged_parts_mut();
                     let _ = display.update_tc(anim_speed).await;
+                    ps.reset_ledger();
                     let _ = display.deep_sleep().await;
                 }
                 Timer::after_millis(5_000).await;
@@ -912,13 +950,14 @@ async fn display_loop(
             let _deghost_boost = bornhack_aegg::fw::power::boost(
                 bornhack_aegg::fw::power::Source::Epd,
             );
-            let (display, _ps) = driver.staged_parts_mut();
+            let (display, ps) = driver.staged_parts_mut();
             display.clear(Color::Black);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
             display.clear(Color::White);
             let _ = display.reset().await;
             let _ = display.update_tc(speed).await;
+            ps.reset_ledger();
             let _ = display.deep_sleep().await;
             drop(_deghost_boost);
             bornhack_aegg::FULL_REFRESH_PENDING.store(true, core::sync::atomic::Ordering::Relaxed);
@@ -1074,6 +1113,9 @@ async fn display_loop(
                             )
                             .await;
                             partial_state.commit_refresh();
+                            // A full tri-colour drive: start the charge
+                            // ledger from zero, as update_partial's own full does.
+                            partial_state.reset_ledger();
                         } else {
                             let _ = bornhack_aegg::fw::power::boosted(
                                 bornhack_aegg::fw::power::Source::Epd,
@@ -1230,9 +1272,19 @@ async fn display_loop_1680<D>(
             // it) so the sprite timer inside `wait_display_event` keeps its
             // original deadline. An event during the power-off drops it
             // mid-command; the next refresh then resets the controller.
+            //
+            // A preview leaves pixels short of saturation: when one is
+            // pending, the settle pass runs first, after `SETTLE_MS` of idle
+            // (rails still up), then the usual power-off delay follows. An
+            // event during the settle cancels it like any refresh; the pixels
+            // stay dirty and the next refresh or idle settles them.
             Either::First(_) => {
                 const ANALOG_IDLE_MS: u64 = 1000;
                 let idle_power_off = async {
+                    if let Some(ms) = display.settle_due_in_ms() {
+                        Timer::after_millis(ms as u64).await;
+                        let _ = display.settle().await;
+                    }
                     Timer::after_millis(ANALOG_IDLE_MS).await;
                     let _ = display.deep_sleep().await;
                     core::future::pending::<core::convert::Infallible>().await

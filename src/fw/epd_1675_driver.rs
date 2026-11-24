@@ -139,6 +139,7 @@ impl EpdDriver for Ssd1675Driver<'_> {
         match mode {
             RefreshMode::Full => {
                 let _ = self.gfx.update_tc(speed).await;
+                self.partial_state.reset_ledger();
             }
             RefreshMode::Fast => {
                 let _ = self.gfx.update_partial(&mut self.partial_state, speed).await;
