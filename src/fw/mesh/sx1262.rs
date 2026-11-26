@@ -7,6 +7,7 @@ use embassy_nrf::gpio::{AnyPin, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::spim::{self, Frequency, InterruptHandler, Spim};
 use embassy_nrf::{Peri, bind_interrupts, peripherals};
 use embassy_time::{Delay, Duration, Instant, Timer, with_deadline, with_timeout};
+use embedded_hal::spi::{Operation, SpiDevice};
 use embedded_hal_bus::spi::ExclusiveDevice;
 use panic_probe as _;
 use sx126x::SX126x;
@@ -22,6 +23,9 @@ use sx126x::op::status::ChipMode;
 use sx126x::op::tcxo::{TcxoDelay, TcxoVoltage};
 use sx126x::op::*;
 use sx126x::reg::Register;
+
+pub use crate::lora_timing::preamble_length_for_sf;
+use crate::lora_timing::{RxDutyPeriods, rx_power_save_periods};
 
 // ---------------------------------------------------------------------------
 // MeshCore LoRa configuration
@@ -57,6 +61,9 @@ impl MeshCoreConfig {
     /// 869.618 MHz · BW 62.5 kHz · SF8 · CR 4/5 · sync word 0x1424 (private
     /// LoRa)
     ///
+    /// Preamble: 32 symbols, what stock MeshCore 1.16+ sends at SF8
+    /// ([`preamble_length_for_sf`]), so duty-cycling peers can hear us.
+    ///
     /// TCXO: 1.8 V / 5 ms startup — typical for eByte E22-900M22S and similar
     /// modules. If the board uses a plain crystal, set `tcxo: None`.
     ///
@@ -68,7 +75,7 @@ impl MeshCoreConfig {
         coding_rate: LoraCodingRate::CR4_5,
         sync_word: 0x1424, // RADIOLIB_SX126X_SYNC_WORD_PRIVATE
         tx_power_dbm: 22,
-        preamble_len: 8,
+        preamble_len: preamble_length_for_sf(8),
         tcxo: None, // External 32 MHz crystal on XTA/XTB — no DIO3 TCXO control needed
         sf_num: 8,
         bw_hz_num: 62_500,
@@ -78,9 +85,10 @@ impl MeshCoreConfig {
     /// Build a [`MeshCoreConfig`] from user-configurable
     /// [`super::settings::RadioParams`].
     ///
-    /// Hardware-fixed fields (`sync_word`, `preamble_len`, `tcxo`) are
-    /// inherited from [`Self::UK_NARROW_BAND`] and are never user-configurable
-    /// via the companion app.
+    /// Hardware-fixed fields (`sync_word`, `tcxo`) are inherited from
+    /// [`Self::UK_NARROW_BAND`] and are never user-configurable via the
+    /// companion app. `preamble_len` follows the SF the way stock MeshCore
+    /// 1.16+ does ([`preamble_length_for_sf`]: 32 symbols at SF ≤ 8, else 16).
     ///
     /// `settings::RadioParams.cr` uses **MeshCore protocol encoding** (5 = CR
     /// 4/5, 6 = CR 4/6, …).  The sx126x hardware encoding (CR4_5 = 1, …) is
@@ -118,7 +126,7 @@ impl MeshCoreConfig {
             },
             sync_word: Self::UK_NARROW_BAND.sync_word,
             tx_power_dbm: p.tx_power,
-            preamble_len: Self::UK_NARROW_BAND.preamble_len,
+            preamble_len: preamble_length_for_sf(p.sf),
             tcxo: Self::UK_NARROW_BAND.tcxo,
             sf_num: p.sf,
             bw_hz_num: p.bw_hz,
@@ -131,14 +139,101 @@ impl MeshCoreConfig {
 
 const F_XTAL: u32 = 32_000_000; // 32 MHz crystal
 
-/// The concrete SX126x driver type wired up on the badge.
-type Radio<'a> = SX126x<
-    ExclusiveDevice<Spim<'a>, Output<'a>, Delay>,
-    Output<'a>,
-    Input<'a>,
-    Output<'a>,
+/// The SX1262's SPI device (bus + NSS).
+type SpiDev<'a> = ExclusiveDevice<Spim<'a>, Output<'a>, Delay>;
+
+/// The sx126x driver as a short-lived view over [`RadioHw`]. The crate keeps
+/// its SPI device private and has no SetRxDutyCycle or raw register write,
+/// so `SimpleLoRa` owns the bus and pins itself and lends them out per call
+/// (`SX126x::new` only stores its arguments; embedded-hal 1.0 implements the
+/// SPI and pin traits for `&mut T`).
+type Radio<'r, 'a> = SX126x<
+    &'r mut SpiDev<'a>,
+    &'r mut Output<'a>,
+    &'r mut Input<'a>,
+    &'r mut Output<'a>,
     AlwaysHigh,
 >;
+
+/// RxGain retention list (datasheet §9.6): writing `[1, 0x08, 0xAC]` from
+/// 0x029F makes the chip restore RxGain (0x08AC) after each warm-start
+/// sleep, which SetRxDutyCycle needs to keep boosted gain.
+const RX_GAIN_RETENTION_REG: u16 = 0x029F;
+const RX_GAIN_RETENTION: [u8; 3] = [0x01, 0x08, 0xAC];
+
+/// StopTimerOnPreamble (datasheet §13.1.6) with `enable` = 0x01: after a
+/// preamble the chip stays in RX until the packet ends, instead of giving up
+/// after `2·rxPeriod + sleepPeriod` (§13.1.7), which is shorter than the
+/// rest of a preamble plus header with our duty-cycle periods.
+const STOP_TIMER_ON_PREAMBLE: [u8; 2] = [0x9F, 0x01];
+
+/// Waking from duty-cycle sleep: BUSY should drop within the warm-start time
+/// (340 µs, datasheet Table 8-1); give each NSS pulse this long.
+const WAKE_BUSY_TIMEOUT_US: u64 = 2_000;
+/// NSS pulses tried before giving up on BUSY (an edge during the ~500 µs
+/// context save is not guaranteed to wake the chip).
+const WAKE_TRIES: u8 = 3;
+
+/// The bus and pins behind [`Radio`].
+struct RadioHw<'a> {
+    spi: SpiDev<'a>,
+    nreset: Output<'a>,
+    busy: Input<'a>,
+    ant: Output<'a>,
+}
+
+impl<'a> RadioHw<'a> {
+    /// Borrow the sx126x driver for one or more calls.
+    fn sx(&mut self) -> Radio<'_, 'a> {
+        SX126x::new(
+            &mut self.spi,
+            (&mut self.nreset, &mut self.busy, &mut self.ant, AlwaysHigh),
+        )
+    }
+
+    /// Send a raw command (opcode + parameters) the crate does not wrap.
+    /// Callers wait on BUSY first, as for every other command.
+    fn command(&mut self, bytes: &[u8]) {
+        if self.spi.write(bytes).is_err() {
+            defmt::warn!("SX1262 command {=u8:#04x} failed", bytes[0]);
+        }
+    }
+
+    /// WriteRegister (0x0D) to an address outside the crate's `Register`
+    /// enum.
+    fn write_register_raw(&mut self, addr: u16, data: &[u8]) {
+        let addr = addr.to_be_bytes();
+        let mut ops = [
+            Operation::Write(&[0x0D]),
+            Operation::Write(&addr),
+            Operation::Write(data),
+        ];
+        if self.spi.transaction(&mut ops).is_err() {
+            defmt::warn!("SX1262 register write failed");
+        }
+    }
+
+    /// Spin until BUSY is low, for at most `timeout_us`. Unlike the crate's
+    /// `wait_on_busy()` this is bounded: BUSY stays high for the whole of a
+    /// duty-cycle sleep (§13.1.7 / §13.1.1).
+    fn wait_busy_low(&mut self, timeout_us: u64) -> bool {
+        let start = Instant::now();
+        while self.busy.is_high() {
+            if start.elapsed() > Duration::from_micros(timeout_us) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// An NSS falling edge with no command: wakes the chip from sleep
+    /// (§13.1.7 "must first be waken up by a falling edge of NSS").
+    fn nss_pulse(&mut self) {
+        self.spi
+            .transaction(&mut [Operation::DelayNs(1_000)])
+            .ok();
+    }
+}
 
 // Extension trait that adds RF-switch helpers directly to the SX126x type used
 // in this module, so callers don't need to remember which set_ant_enabled()
@@ -148,7 +243,7 @@ trait RfSwitch {
     fn rf_switch_tx(&mut self);
 }
 
-impl<'a> RfSwitch for Radio<'a> {
+impl RfSwitch for Radio<'_, '_> {
     fn rf_switch_rx(&mut self) {
         self.set_ant_enabled(true).ok();
     }
@@ -234,12 +329,6 @@ pub struct PacketMillis {
     pub preamble_ms: u32,
     /// HeaderValid → RxDone deadline.
     pub payload_ms: u32,
-}
-
-/// Preamble length stock MeshCore programs for `sf`
-/// (`RadioLibWrapper::preambleLengthForSF`): longer preambles at low SF.
-pub const fn preamble_length_for_sf(sf: u8) -> u16 {
-    if sf <= 8 { 32 } else { 16 }
 }
 
 /// Port of upstream `RadioLibWrapper::calcMaxPacketMillis()` (MeshCore
@@ -411,7 +500,7 @@ impl TxBudget {
 }
 
 pub struct SimpleLoRa<'a> {
-    pub(super) lora: Radio<'a>,
+    hw: RadioHw<'a>,
     pub(super) tx_timeout: RxTxTimeout,
     pub(super) crc_type: LoRaCrcType,
     pub(super) preamble_len: u16,
@@ -443,6 +532,14 @@ pub struct SimpleLoRa<'a> {
     /// shared data buffer, and handed out by the next receive_packet().
     stash: Option<(usize, i16, i8)>,
     stash_buf: [u8; MAX_TRANS_UNIT],
+    /// SetRxDutyCycle is armed: between windows the chip sleeps with BUSY
+    /// high, and any NSS edge wakes it and ends the cycle. Cleared whenever
+    /// the chip is brought back to STDBY_RC.
+    duty_armed: bool,
+    /// send_message() is listening before talk / transmitting, so re-arms go
+    /// to continuous RX. Reset by receive_packet() too, in case a caller
+    /// ever cancels send_message() midway.
+    duty_suspended: bool,
 }
 
 impl<'a> SimpleLoRa<'a> {
@@ -476,7 +573,13 @@ impl<'a> SimpleLoRa<'a> {
         let spi_dev = ExclusiveDevice::new(spim, nss, Delay).unwrap();
 
         let conf = build_lora_config(config);
-        let mut lora = SX126x::new(spi_dev, (nreset, busy, ant, AlwaysHigh));
+        let mut hw = RadioHw {
+            spi: spi_dev,
+            nreset,
+            busy,
+            ant,
+        };
+        let mut lora = hw.sx();
         lora.init(conf)
             .map_err(|_| LoraError::Spi("lora init failed"))?;
         match lora.set_dio2_as_rf_switch_ctrl(true) {
@@ -489,7 +592,7 @@ impl<'a> SimpleLoRa<'a> {
         lora.rf_switch_rx();
 
         let mut radio = SimpleLoRa {
-            lora,
+            hw,
             tx_timeout: 0.into(),
             crc_type: LoRaCrcType::CrcOn,
             preamble_len: config.preamble_len,
@@ -506,8 +609,13 @@ impl<'a> SimpleLoRa<'a> {
             rx_windows: rx_windows_for(config),
             stash: None,
             stash_buf: [0; MAX_TRANS_UNIT],
+            duty_armed: false,
+            duty_suspended: false,
         };
         radio.apply_rx_gain();
+        if radio.duty_periods().is_some() {
+            radio.rearm_rx();
+        }
         Ok(radio)
     }
 
@@ -529,34 +637,106 @@ impl<'a> SimpleLoRa<'a> {
         } else {
             0x94u8
         };
-        self.lora.write_register(Register::RxGain, &[value]).ok();
+        self.hw.sx().write_register(Register::RxGain, &[value]).ok();
     }
 
     /// Put the radio into standby mode (STDBY_RC, ~600 µA).
     pub fn standby(&mut self) {
-        self.lora.wait_on_busy().ok();
-        self.lora
-            .set_standby(sx126x::op::StandbyConfig::StbyRc)
-            .ok();
+        if self.duty_armed {
+            self.wake_to_standby();
+        } else {
+            self.hw.sx().wait_on_busy().ok();
+            self.hw.sx()
+                .set_standby(sx126x::op::StandbyConfig::StbyRc)
+                .ok();
+        }
         // Whatever was on air is gone from the receiver's point of view.
         self.rx_activity = RxActivity::Idle;
+    }
+
+    /// Bring a duty-cycling chip to STDBY_RC without spinning through its
+    /// sleep: pulse NSS to wake it, wait (bounded) for BUSY, then
+    /// SetStandby. A command clocked in during the wake-up is lost, hence the
+    /// bare pulse first.
+    fn wake_to_standby(&mut self) {
+        let mut awake = false;
+        for _ in 0..WAKE_TRIES {
+            self.hw.nss_pulse();
+            if self.hw.wait_busy_low(WAKE_BUSY_TIMEOUT_US) {
+                awake = true;
+                break;
+            }
+        }
+        if !awake {
+            defmt::warn!("SX1262: BUSY still high after wake pulses");
+        }
+        self.hw.sx()
+            .set_standby(sx126x::op::StandbyConfig::StbyRc)
+            .ok();
+        self.hw.wait_busy_low(WAKE_BUSY_TIMEOUT_US);
+        self.duty_armed = false;
+    }
+
+    /// Duty-cycle periods for the current setting and modulation, or `None`
+    /// for continuous RX (power save off, preamble too short, or
+    /// send_message() is listening / transmitting). Read on every re-arm, so
+    /// a setting or preset change takes effect at the next one.
+    fn duty_periods(&self) -> Option<RxDutyPeriods> {
+        if self.duty_suspended || !crate::RX_POWER_SAVE.load(Ordering::Relaxed) {
+            return None;
+        }
+        rx_power_save_periods(self.sf, self.bw_hz)
     }
 
     /// Resume continuous RX after standby.
     pub fn resume_rx(&mut self) {
         // Drop flags latched before standby so DIO1 starts low.
-        self.lora.wait_on_busy().ok();
-        self.lora.clear_irq_status(IrqMask::all()).ok();
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().clear_irq_status(IrqMask::all()).ok();
         self.rx_activity = RxActivity::Idle;
         self.rearm_rx();
     }
 
-    /// (Re-)enter continuous RX with the configured gain and RF path.
+    /// (Re-)enter RX with the configured gain and RF path: duty-cycled when
+    /// the power-save mode allows it, continuous otherwise.
     fn rearm_rx(&mut self) {
-        self.lora.wait_on_busy().ok();
-        self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
+        if let Some(periods) = self.duty_periods() {
+            self.arm_rx_duty_cycle(periods);
+            return;
+        }
+        if self.duty_armed {
+            self.wake_to_standby();
+        }
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().set_rx(RxTxTimeout::continuous_rx()).ok();
         self.apply_rx_gain();
-        self.lora.rf_switch_rx();
+        self.hw.sx().rf_switch_rx();
+    }
+
+    /// Arm SetRxDutyCycle (datasheet §13.1.7). The command must be sent from
+    /// STDBY_RC, and the chip's warm-start sleep drops RxGain unless it is on
+    /// the retention list (§9.6), so: standby, gain, retention list,
+    /// StopTimerOnPreamble, then 0x94. No BUSY wait afterwards: BUSY stays
+    /// high through every sleep.
+    fn arm_rx_duty_cycle(&mut self, periods: RxDutyPeriods) {
+        if self.duty_armed {
+            self.wake_to_standby();
+        } else {
+            self.hw.sx().wait_on_busy().ok();
+            self.hw.sx()
+                .set_standby(sx126x::op::StandbyConfig::StbyRc)
+                .ok();
+            self.hw.sx().wait_on_busy().ok();
+        }
+        self.apply_rx_gain();
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.write_register_raw(RX_GAIN_RETENTION_REG, &RX_GAIN_RETENTION);
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.command(&STOP_TIMER_ON_PREAMBLE);
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().rf_switch_rx();
+        self.hw.command(&periods.command());
+        self.duty_armed = true;
     }
 
     /// Reprogram the radio in-place with new frequency / modulation / TX
@@ -570,60 +750,88 @@ impl<'a> SimpleLoRa<'a> {
     /// alongside `set_tx_params` — TX power straddles both registers.
     pub fn reconfigure_radio(&mut self, config: &MeshCoreConfig) {
         self.standby();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().wait_on_busy().ok();
 
         let conf = build_lora_config(config);
 
-        self.lora.set_rf_frequency(conf.rf_freq).ok();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().set_rf_frequency(conf.rf_freq).ok();
+        self.hw.sx().wait_on_busy().ok();
 
-        self.lora
+        self.hw.sx()
             .calibrate_image(sx126x::op::CalibImageFreq::from_rf_frequency(
                 conf.rf_frequency,
             ))
             .ok();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().wait_on_busy().ok();
 
-        self.lora.set_pa_config(conf.pa_config).ok();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().set_pa_config(conf.pa_config).ok();
+        self.hw.sx().wait_on_busy().ok();
 
-        self.lora.set_tx_params(conf.tx_params).ok();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().set_tx_params(conf.tx_params).ok();
+        self.hw.sx().wait_on_busy().ok();
 
-        self.lora.set_mod_params(conf.mod_params).ok();
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().set_mod_params(conf.mod_params).ok();
+        self.hw.sx().wait_on_busy().ok();
+
+        // The preamble follows the SF (32 symbols at SF ≤ 8, else 16).
+        if let Some(packet_params) = conf.packet_params {
+            self.hw.sx().set_packet_params(packet_params).ok();
+            self.hw.sx().wait_on_busy().ok();
+        }
 
         // Update internal state used by airtime / path-len accounting.
         self.sf = config.sf_num;
         self.bw_hz = config.bw_hz_num;
         self.cr_proto = config.cr_num;
+        self.preamble_len = config.preamble_len;
         self.rx_windows = rx_windows_for(config);
         defmt::debug!(
             "SX1262 RX watchdog: preamble={=u32}ms payload={=u32}ms",
             self.rx_windows.preamble_ms,
             self.rx_windows.payload_ms
         );
+        match self.duty_periods() {
+            Some(p) => defmt::info!(
+                "SX1262 RX duty cycle: rx={=u32} sleep={=u32} (x15.625us)",
+                p.rx,
+                p.sleep
+            ),
+            None => defmt::info!("SX1262 RX: continuous"),
+        }
 
+        // Re-enters RX with the timings recomputed for the new params / mode.
         self.resume_rx();
     }
 
     /// Wait for the chip to enter RX mode, polling every 50 ms for up to 500
     /// ms. Returns true if RX mode is confirmed.
+    ///
+    /// The check runs in continuous RX (reading the status would wake a
+    /// duty-cycling chip anyway); duty cycling is armed afterwards when the
+    /// power-save mode is on.
     pub async fn ensure_rx(&mut self) -> bool {
-        self.lora.wait_on_busy().ok();
-        self.lora.set_rx(RxTxTimeout::continuous_rx()).ok();
+        if self.duty_armed {
+            self.wake_to_standby();
+        }
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().set_rx(RxTxTimeout::continuous_rx()).ok();
         self.apply_rx_gain();
-        self.lora.rf_switch_rx();
+        self.hw.sx().rf_switch_rx();
 
+        let mut in_rx = false;
         for _ in 0..10u8 {
             Timer::after_millis(50).await;
-            if let Ok(s) = self.lora.get_status()
+            if let Ok(s) = self.hw.sx().get_status()
                 && matches!(s.chip_mode(), Some(ChipMode::RX))
             {
-                return true;
+                in_rx = true;
+                break;
             }
         }
-        false
+        if in_rx && self.duty_periods().is_some() {
+            self.rearm_rx();
+        }
+        in_rx
     }
 
     /// Wait for the next LoRa packet in continuous RX mode.
@@ -647,6 +855,11 @@ impl<'a> SimpleLoRa<'a> {
     /// mid-packet, `send_message()` still sees the channel busy (CANL:
     /// collision avoidance by neighbour listening) — until the window runs
     /// out.  Returns `Ok(None)` on a CRC error.
+    ///
+    /// Duty-cycled RX: the chip sleeps between windows and any NSS edge
+    /// would wake it, so the IRQ status is only read once DIO1 is high, the
+    /// idle watchdog re-issues SetRxDutyCycle instead of reading the chip
+    /// mode, and a false preamble that times out re-arms the cycle.
     pub async fn receive_packet(
         &mut self,
         buf: &mut [u8],
@@ -664,6 +877,13 @@ impl<'a> SimpleLoRa<'a> {
             );
         }
 
+        // Duty cycling stays suspended only while send_message() runs; if
+        // that was ever cut short, pick the cycle back up here.
+        if self.duty_suspended {
+            self.duty_suspended = false;
+            self.rearm_rx();
+        }
+
         loop {
             if let RxPoll::Done(pkt) = self.poll_rx(Some(&mut *buf))? {
                 return Ok(pkt);
@@ -678,7 +898,13 @@ impl<'a> SimpleLoRa<'a> {
                 .is_err()
                 && self.rx_activity == RxActivity::Idle
             {
-                self.check_rx_mode();
+                if self.duty_armed {
+                    // Reading the chip mode would wake it: re-issue the duty
+                    // cycle instead, which also recovers a chip that lost it.
+                    self.rearm_rx();
+                } else {
+                    self.check_rx_mode();
+                }
             }
         }
     }
@@ -690,16 +916,24 @@ impl<'a> SimpleLoRa<'a> {
     /// event latched meanwhile.  A finished packet is read into `buf`, or
     /// into the stash when `buf` is `None` (the TX path, which is about to
     /// overwrite the chip's shared data buffer).
+    ///
+    /// While duty-cycling, the status is only read with DIO1 high (the chip
+    /// raised an IRQ, so it is awake); otherwise only the watchdog windows
+    /// below are applied, without touching SPI.
     fn poll_rx(&mut self, buf: Option<&mut [u8]>) -> Result<RxPoll, LoraError> {
-        self.lora.wait_on_busy().ok();
-        let irq = self
-            .lora
-            .get_irq_status()
-            .map_err(|_| LoraError::Spi("get_irq_status failed"))?;
+        let irq = if self.duty_armed && self.dio1.is_low() {
+            IrqStatus::from(0u16)
+        } else {
+            self.hw.sx().wait_on_busy().ok();
+            self.hw
+                .sx()
+                .get_irq_status()
+                .map_err(|_| LoraError::Spi("get_irq_status failed"))?
+        };
         let bits = irq_bits(irq);
         if bits != 0 {
-            self.lora.wait_on_busy().ok();
-            self.lora.clear_irq_status(IrqMask::from(bits)).ok();
+            self.hw.sx().wait_on_busy().ok();
+            self.hw.sx().clear_irq_status(IrqMask::from(bits)).ok();
         }
         let now = Instant::now();
 
@@ -709,7 +943,8 @@ impl<'a> SimpleLoRa<'a> {
             self.rx_activity = RxActivity::Idle;
             let pkt = if irq.crc_err() {
                 let rssi = self
-                    .lora
+                    .hw
+                    .sx()
                     .get_packet_status()
                     .map(|s| s.rssi_pkt() as i16)
                     .unwrap_or(0);
@@ -723,12 +958,12 @@ impl<'a> SimpleLoRa<'a> {
                 None
             } else if irq.rx_done() {
                 let pkt = match buf {
-                    Some(buf) => read_rx_packet(&mut self.lora, buf),
+                    Some(buf) => read_rx_packet(&mut self.hw, buf),
                     None => {
                         if self.stash.is_some() {
                             defmt::warn!("LoRa RX stash overwritten — earlier packet dropped");
                         }
-                        self.stash = read_rx_packet(&mut self.lora, &mut self.stash_buf);
+                        self.stash = read_rx_packet(&mut self.hw, &mut self.stash_buf);
                         self.stash
                     }
                 };
@@ -780,6 +1015,11 @@ impl<'a> SimpleLoRa<'a> {
                     self.rx_windows.preamble_ms
                 );
                 self.rx_activity = RxActivity::Idle;
+                if self.duty_armed {
+                    // StopTimerOnPreamble keeps the chip in RX after a
+                    // preamble; nothing else ends that on a false one.
+                    self.rearm_rx();
+                }
                 Ok(RxPoll::Clear)
             }
             RxActivity::Header(since)
@@ -812,24 +1052,81 @@ impl<'a> SimpleLoRa<'a> {
     /// but if a dropped SPI command or a brown-out leaves it elsewhere,
     /// nothing would ever raise DIO1 again.  Re-arm if so.
     fn check_rx_mode(&mut self) {
-        self.lora.wait_on_busy().ok();
+        self.hw.sx().wait_on_busy().ok();
         let in_rx = matches!(
-            self.lora.get_status().ok().and_then(|s| s.chip_mode()),
+            self.hw.sx().get_status().ok().and_then(|s| s.chip_mode()),
             Some(ChipMode::RX)
         );
         if !in_rx {
             defmt::warn!("SX1262 watchdog: radio not in RX — re-arming");
-            self.lora.wait_on_busy().ok();
-            self.lora.clear_irq_status(IrqMask::all()).ok();
+            self.hw.sx().wait_on_busy().ok();
+            self.hw.sx().clear_irq_status(IrqMask::all()).ok();
+            self.rearm_rx();
+        }
+    }
+
+    /// Listen before talk while duty-cycling. Asleep, the chip misses a
+    /// preamble that starts between windows, so the "channel busy" view
+    /// send_message() relies on would be stale. Switch to continuous RX and
+    /// listen for one full cycle plus one window: the sleep was sized so
+    /// every peer preamble is at least that long, so one already in progress
+    /// is still caught and flagged by poll_rx().
+    ///
+    /// A continuous listen rather than CAD: it keeps full receiver
+    /// sensitivity (CAD loses reliability beyond ~400 m, see send_message()),
+    /// feeds the same PreambleDetected → HeaderValid state machine the rest
+    /// of the LBT logic uses, and still catches a packet that completes
+    /// meanwhile (stashed for receive_packet()). A packet already past its
+    /// preamble cannot be missed either: by construction one duty window
+    /// fell inside that preamble, so rx_activity already says busy.
+    ///
+    /// Duty cycling stays suspended (re-arms go to continuous RX) until the
+    /// transmit has finished.
+    async fn listen_continuously_before_talk(&mut self) {
+        let Some(periods) = self.duty_periods() else {
+            return;
+        };
+        self.duty_suspended = true;
+        if !self.duty_armed {
+            // Already in continuous RX (e.g. the mode was just switched on
+            // and not applied yet): the busy view is current.
+            return;
+        }
+        // Anything already latched is serviced first (DIO1 high: awake). A
+        // finished packet is stashed and re-arms into continuous RX.
+        if self.dio1.is_high() {
+            let _ = self.poll_rx(None);
+        }
+        if self.rx_activity != RxActivity::Idle {
+            // Mid-reception the chip stays in RX (StopTimerOnPreamble);
+            // the LBT loop in send_message() waits it out.
+            return;
+        }
+        if self.duty_armed {
+            self.rearm_rx(); // suspended → wakes the chip, continuous RX
+        }
+        with_timeout(
+            Duration::from_micros(periods.lbt_listen_us()),
+            self.dio1.wait_for_high(),
+        )
+        .await
+        .ok();
+    }
+
+    /// Leave the send_message() suspension and re-arm duty-cycled RX.
+    fn resume_duty_cycle(&mut self) {
+        if self.duty_suspended {
+            self.duty_suspended = false;
             self.rearm_rx();
         }
     }
 
     pub async fn send_message(&mut self, message: &[u8]) -> Result<(), LoraError> {
         // ── Listen before talk (CANL) ─────────────────────────────────────────
-        // The radio is always in continuous RX, so it detects ongoing
-        // transmissions with full receiver sensitivity — strictly better than
-        // CAD which loses reliability beyond ~400 m.  poll_rx() is upstream's
+        // The radio is in continuous RX here (duty-cycled RX is switched to
+        // continuous first, see listen_continuously_before_talk()), so it
+        // detects ongoing transmissions with full receiver sensitivity —
+        // strictly better than CAD which loses reliability beyond ~400 m.  poll_rx() is upstream's
         // isReceiving(): busy from PreambleDetected until RxDone, bounded by
         // the PacketMillis windows, so a false preamble costs at most
         // `preamble_ms` instead of the full give-up time.  Retry cadence and
@@ -842,6 +1139,8 @@ impl<'a> SimpleLoRa<'a> {
         // Random pre-TX jitter: prevents all nodes transmitting simultaneously
         // after a shared event (e.g. all wanting to relay the same flood).
         Timer::after_millis(random_backoff_ms(INITIAL_WINDOW_MS)).await;
+
+        self.listen_continuously_before_talk().await;
 
         let lbt_start = Instant::now();
         let mut deferred = false;
@@ -901,6 +1200,7 @@ impl<'a> SimpleLoRa<'a> {
                 est_ms,
                 budget.budget_ms,
             );
+            self.resume_duty_cycle();
             return Err(LoraError::DutyCycle);
         }
 
@@ -911,24 +1211,25 @@ impl<'a> SimpleLoRa<'a> {
         // await since the last poll_rx(), so nothing finished needs stashing;
         // whatever was still in flight is lost to us either way.
         self.standby();
-        self.lora.wait_on_busy().ok();
-        self.lora.clear_irq_status(IrqMask::all()).ok();
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().clear_irq_status(IrqMask::all()).ok();
 
         // High-current PA window — hold buck/boost in boost until TxDone.
         let _tx_boost = crate::fw::power::boost(crate::fw::power::Source::Lora);
-        self.lora.rf_switch_tx();
+        self.hw.sx().rf_switch_tx();
 
-        self.lora.write_buffer(0x00, message).unwrap();
+        self.hw.sx().write_buffer(0x00, message).unwrap();
         let packet_params = LoRaPacketParams::default()
             .set_preamble_len(self.preamble_len)
             .set_payload_len(message.len() as u8)
             .set_crc_type(self.crc_type)
             .into();
-        self.lora.set_packet_params(packet_params).unwrap();
+        self.hw.sx().set_packet_params(packet_params).unwrap();
 
         let tx_start = Instant::now();
-        if self.lora.set_tx(self.tx_timeout).is_err() {
+        if self.hw.sx().set_tx(self.tx_timeout).is_err() {
             drop(_tx_boost);
+            self.duty_suspended = false;
             self.rearm_rx();
             return Err(LoraError::Timeout);
         }
@@ -955,8 +1256,8 @@ impl<'a> SimpleLoRa<'a> {
             );
             self.standby();
         }
-        self.lora.wait_on_busy().ok();
-        self.lora.clear_irq_status(IrqMask::all()).ok();
+        self.hw.sx().wait_on_busy().ok();
+        self.hw.sx().clear_irq_status(IrqMask::all()).ok();
 
         self.tx_air_ms = self.tx_air_ms.saturating_add(actual_ms);
 
@@ -970,7 +1271,9 @@ impl<'a> SimpleLoRa<'a> {
             );
         }
 
-        // Re-arm continuous RX so receive_packet() finds the chip in RX mode.
+        // Re-arm RX (duty-cycled again if enabled) so receive_packet() finds
+        // the chip receiving.
+        self.duty_suspended = false;
         self.rearm_rx();
 
         if tx_done {
@@ -1003,7 +1306,8 @@ fn random_backoff_ms(window_ms: u64) -> u64 {
 
 /// Pull the packet RxDone just flagged out of the chip's data buffer.
 /// Returns `(len, rssi_dBm, snr×4)`, or `None` if it doesn't fit / SPI fails.
-fn read_rx_packet(lora: &mut Radio<'_>, buf: &mut [u8]) -> Option<(usize, i16, i8)> {
+fn read_rx_packet(hw: &mut RadioHw<'_>, buf: &mut [u8]) -> Option<(usize, i16, i8)> {
+    let mut lora = hw.sx();
     lora.wait_on_busy().ok();
     let Ok(status) = lora.get_rx_buffer_status() else {
         defmt::warn!("LoRa RX: get_rx_buffer_status failed");

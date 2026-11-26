@@ -245,6 +245,17 @@ pub async fn run_meshcore_listener<'a>(
         config.sync_word,
         config.preamble_len,
     );
+    {
+        let on = crate::RX_POWER_SAVE.load(core::sync::atomic::Ordering::Relaxed);
+        match crate::lora_timing::rx_power_save_periods(radio.sf, radio.bw_hz).filter(|_| on) {
+            Some(p) => defmt::info!(
+                "MeshCore RX power save on: rx={=u32} sleep={=u32} (x15.625us)",
+                p.rx,
+                p.sleep
+            ),
+            None => defmt::info!("MeshCore RX power save {=bool}: continuous RX", on),
+        }
+    }
     defmt::info!(
         "MeshCore identity pub_key: {=[u8]:02x}",
         &identity.pub_key[..]

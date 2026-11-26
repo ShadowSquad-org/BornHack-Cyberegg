@@ -826,6 +826,18 @@ bool_toggle!(
     cfg = feature = "mesh"
 );
 
+// Duty-cycled receive, sized for MeshCore 1.16+ senders (32-symbol preamble
+// at SF ≤ 8); continuous receive when off or above SF8.
+bool_toggle!(
+    label_rx_power_save,
+    action_rx_power_save,
+    crate::RX_POWER_SAVE,
+    "RX save: ON",
+    "RX save: OFF",
+    signal = crate::RX_POWER_SAVE_CHANGED_SIGNAL,
+    cfg = feature = "mesh"
+);
+
 fn action_reset_channels() {
     #[cfg(feature = "mesh")]
     crate::CHANNEL_RESET_SIGNAL.signal(());
@@ -1750,7 +1762,7 @@ static ADVERTS_ITEMS: [MenuItem; 5] = [
     },
 ];
 
-static LORA_MENU_ITEMS: [MenuItem; 5] = [
+static LORA_MENU_ITEMS: [MenuItem; 6] = [
     MenuItem {
         label: || "< Back",
         kind: MenuItemKind::Back,
@@ -1762,6 +1774,10 @@ static LORA_MENU_ITEMS: [MenuItem; 5] = [
     MenuItem {
         label: label_boost_rx,
         kind: MenuItemKind::Action(action_boost_rx),
+    },
+    MenuItem {
+        label: label_rx_power_save,
+        kind: MenuItemKind::Action(action_rx_power_save),
     },
     MenuItem {
         label: || "Radio Presets",

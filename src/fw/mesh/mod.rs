@@ -199,6 +199,10 @@ pub static CHANNEL_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::n
 /// persist it.
 pub static BOOST_RX_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Fired by the menu when the RX power-save mode changes so the persister
+/// writes it and the listener re-arms receive with the new timings.
+pub static RX_POWER_SAVE_CHANGED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// Fired by the menu to request the BLE task to clear all stored contacts.
 pub static CONTACT_RESET_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 

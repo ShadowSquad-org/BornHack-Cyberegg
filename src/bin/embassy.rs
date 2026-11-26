@@ -505,6 +505,10 @@ async fn main(spawner: Spawner) {
             settings::get_boost_rx().await,
             core::sync::atomic::Ordering::Relaxed,
         );
+        bornhack_aegg::RX_POWER_SAVE.store(
+            settings::get_rx_power_save().await,
+            core::sync::atomic::Ordering::Relaxed,
+        );
 
         // Flood-scope key: load the MeshCore-1.15 `def_scope` slot
         // (CMD_SET_DEFAULT_FLOOD_SCOPE / 0x3F) if the phone has set one,

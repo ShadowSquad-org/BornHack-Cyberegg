@@ -34,6 +34,7 @@ use crate::fw::kv;
 enum Which {
     Tz,
     BoostRx,
+    RxPowerSave,
     LoraRadio,
     OtherParams,
     Advert,
@@ -78,10 +79,11 @@ async fn settings_dispatch_loop() -> ! {
         let group_a = select4(w_tz(), w_boost_rx(), w_lora_radio(), w_other_params());
         let group_b = select4(w_advert(), w_path_hash(), w_node_name(), w_lora_disabled());
         let group_c = select4(w_ble_disabled(), w_factory_reset(), w_contact_reset(), w_clear_bonds());
-        let which = match select(select(group_a, group_b), group_c).await {
+        let which = match select(select(group_a, group_b), select(group_c, w_rx_power_save())).await {
             Either::First(Either::First(e)) => flatten(e),
             Either::First(Either::Second(e)) => flatten(e),
-            Either::Second(e) => flatten(e),
+            Either::Second(Either::First(e)) => flatten(e),
+            Either::Second(Either::Second(w)) => w,
         };
         dispatch(which).await;
     }
@@ -104,6 +106,10 @@ async fn w_tz() -> Which {
 async fn w_boost_rx() -> Which {
     crate::BOOST_RX_CHANGED_SIGNAL.wait().await;
     Which::BoostRx
+}
+async fn w_rx_power_save() -> Which {
+    crate::RX_POWER_SAVE_CHANGED_SIGNAL.wait().await;
+    Which::RxPowerSave
 }
 async fn w_lora_radio() -> Which {
     crate::LORA_RADIO_CHANGED_SIGNAL.wait().await;
@@ -167,6 +173,16 @@ async fn dispatch(which: Which) {
             // The RxGain register is only rewritten when RX is re-armed, so
             // without this the toggle waited for the next TX. A live
             // reconfigure ends in `resume_rx`, which applies the new gain.
+            crate::LORA_RADIO_APPLY_SIGNAL.signal(());
+        }
+        Which::RxPowerSave => {
+            let on = crate::RX_POWER_SAVE.load(Relaxed);
+            match settings::set_rx_power_save(on).await {
+                Ok(()) => defmt::debug!("settings: rx_power_save={=bool} persisted", on),
+                Err(e) => defmt::warn!("settings: rx_power_save persist failed: {:?}", e),
+            }
+            // The live reconfigure ends in `resume_rx`, which re-arms RX
+            // duty-cycled or continuous to match.
             crate::LORA_RADIO_APPLY_SIGNAL.signal(());
         }
         Which::LoraRadio => {

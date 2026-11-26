@@ -20,6 +20,7 @@
 //! | `"other"`        | manual_add, telemetry, advert_loc, multi_acks  | 6     |
 //! | `"autoadd"`      | autoadd_config + autoadd_max_hops              | 2     |
 //! | `"path_hash"`    | path_hash_mode (0/1/2)                         | 1     |
+//! | `"rx_save"`      | RX power save on/off (duty-cycled receive)     | 1     |
 //! | `"epd_lut"`      | EPD LUT cycle-duration scale override          | 1     |
 //!
 //! # Companion protocol mapping
@@ -408,6 +409,21 @@ pub async fn get_boost_rx() -> bool {
 /// Persist the boost-RX flag to flash.
 pub async fn set_boost_rx(enabled: bool) -> Result<(), kv::KvError> {
     set_flag("boost_rx", enabled).await
+}
+
+// ---------------------------------------------------------------------------
+// RX power save  (menu toggle, persisted locally)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted receive power-save flag. Returns `false` (continuous
+/// RX) on first boot.
+pub async fn get_rx_power_save() -> bool {
+    get_flag("rx_save", false).await
+}
+
+/// Persist the receive power-save flag to flash.
+pub async fn set_rx_power_save(on: bool) -> Result<(), kv::KvError> {
+    set_flag("rx_save", on).await
 }
 
 // ---------------------------------------------------------------------------

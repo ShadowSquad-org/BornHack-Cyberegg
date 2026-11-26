@@ -108,6 +108,8 @@ pub mod guide;
 pub mod hex;
 pub mod menu;
 pub mod lut_file;
+/// LoRa preamble and duty-cycled receive timing (pure; host-tested).
+pub mod lora_timing;
 pub mod name_screen;
 pub mod nfc_ndef;
 pub mod platform;
@@ -180,6 +182,13 @@ pub const MINIGAME_WIN_INDEX: usize = 12;
 /// matching MeshCore 1.15.0 (upstream commit `ff5aad71`).  Boot path
 /// overwrites this from persisted KV via [`fw::mesh::settings::get_boost_rx`].
 pub static BOOSTED_RX_GAIN: AtomicBool = AtomicBool::new(true);
+
+/// Receive power save: duty-cycled RX sized for MeshCore 1.16+ preambles
+/// ([`lora_timing::rx_power_save_periods`]). Default: off (continuous RX).
+/// Boot path overwrites this from persisted KV via
+/// [`fw::mesh::settings::get_rx_power_save`]; the SX1262 driver reads it every
+/// time it re-arms receive.
+pub static RX_POWER_SAVE: AtomicBool = AtomicBool::new(false);
 
 /// UTC offset in whole hours (-12..=+14).  Default: +2 (Europe/Copenhagen
 /// summer time / CEST) — matches Bornhack's typical July/August venue.
