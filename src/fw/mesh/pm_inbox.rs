@@ -658,7 +658,13 @@ where
     draw_header(display, "Messages", bat_prc)?;
     let summary = peer_list();
     if summary.is_empty() {
-        ui::draw_centered_message(display, "No messages yet", Point::new(76, 80))?;
+        ui::draw_text(
+            display,
+            "No messages yet",
+            Point::new(76, 80),
+            ui::TEXT_BOLD_BLACK,
+            ui::CENTERED,
+        )?;
         return Ok(());
     }
 
