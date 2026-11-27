@@ -219,34 +219,34 @@ read `git log`.
 
 Features and bug fixes in this repository were partly written with A.I.
 
----
+______________________________________________________________________
 
 ## First use (badge holders)
 
 If you just got a badge, start here:
 
-| Document | Description |
-| -------- | ----------- |
-| **[QUICKSTART.md](QUICKSTART.md)** | Power on, pair, set the time, charge, recover, USB drag-drop |
-| **[POCKET_CARD.md](POCKET_CARD.md)** | One-page printable reference — buttons, LEDs, combos |
-| **[FAQ.md](FAQ.md)** | Why the red LED blinks, which screen saves battery, inverted/ghosted screen, DFU |
-| **[USER_WATCH.md](USER_WATCH.md)** | Watch face, alarms, calendar, time sync |
-| **[USER_GAMES.md](USER_GAMES.md)** | BornPets virtual pet + four mini-games |
-| **[USER_MESH.md](USER_MESH.md)** | LoRa mesh: adverts, PMs, channels, identity QR |
-| **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking |
-| **[USER_NFC.md](USER_NFC.md)** | NFC station taps via the BadgeCtl app |
+| Document                                 | Description                                                                      |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| **[QUICKSTART.md](QUICKSTART.md)**       | Power on, pair, set the time, charge, recover, USB drag-drop                     |
+| **[POCKET_CARD.md](POCKET_CARD.md)**     | One-page printable reference — buttons, LEDs, combos                             |
+| **[FAQ.md](FAQ.md)**                     | Why the red LED blinks, which screen saves battery, inverted/ghosted screen, DFU |
+| **[USER_WATCH.md](USER_WATCH.md)**       | Watch face, alarms, calendar, time sync                                          |
+| **[USER_GAMES.md](USER_GAMES.md)**       | BornPets virtual pet + four mini-games                                           |
+| **[USER_MESH.md](USER_MESH.md)**         | LoRa mesh: adverts, PMs, channels, identity QR                                   |
+| **[USER_CONTACTS.md](USER_CONTACTS.md)** | Contacts list, filters, saving, blocking                                         |
+| **[USER_NFC.md](USER_NFC.md)**           | NFC station taps via the BadgeCtl app                                            |
 
 **Playing BornPets? Read the [player's guide (PDF)](guide/bornpets-guide.pdf).**
 The rest of this README is developer-facing.
 
 ## Hardware
 
-| Component  | Part              | Interface      |
-| ---------- | ----------------- | -------------- |
-| MCU        | nRF52840          | —              |
-| Display    | SSD1675 or SSD1680 e-paper, 152x152 | SPI3 |
-| LoRa radio | SX1262            | SPI2           |
-| BLE        | nRF52840 built-in | nrf-sdc / MPSL |
+| Component  | Part                                | Interface      |
+| ---------- | ----------------------------------- | -------------- |
+| MCU        | nRF52840                            | —              |
+| Display    | SSD1675 or SSD1680 e-paper, 152x152 | SPI3           |
+| LoRa radio | SX1262                              | SPI2           |
+| BLE        | nRF52840 built-in                   | nrf-sdc / MPSL |
 
 ## Default LoRa radio settings
 
@@ -274,22 +274,22 @@ and both the boot-time defaults and the persisted-settings fallback follow.
 
 Project documentation is in markdown files at the repository root, in `scripts/`, in `bootloader/` and in `vendor/` subdirectories:
 
-| Document | Description |
-| -------- | ----------- |
-| **[README.md](README.md)** | This file — project overview, hardware, build instructions, known issues |
-| **[GAME.md](GAME.md)** | BornPets rules in markdown: controls, needs, actions, conditions, HAX, friends, battles, debug cheats |
-| **[USER_GAMES.md](USER_GAMES.md)** | BornPets for badge holders, including `BPETS_V3.CFG` and `PETS.CFG` |
-| **[GAMES.md](GAMES.md)** | Developer reference for the mini-games, controls, scoring |
-| **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)** | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache |
-| **[CLOCK.md](CLOCK.md)** | Watch faces, alarm system (32 slots), calendar browser, ICS parser |
-| **[NFC_README.md](NFC_README.md)** | NFC signed channel protocol spec, reader implementation guide |
-| **[HWTEST.md](HWTEST.md)** | Hardware test firmware — factory diagnostics, beep codes |
-| **[LUT.md](LUT.md)** | Custom e-paper waveform override with `LUT.CFG` |
-| **[scripts/README.md](scripts/README.md)** | Factory and dev tooling: bootloader, DFU and asset stations, PCX conversion and checks |
-| **[bootloader/README.md](bootloader/README.md)** | The USB DFU bootloader |
-| **[SUBMODULES.md](SUBMODULES.md)** | How `vendor/` git submodules work — cloning, updating pins, hacking on vendor libs, sibling read-only checkouts |
-| **[MACOS_SETUP.md](MACOS_SETUP.md)** | macOS dev notes |
-| **[License.md](License.md)** | Apache 2.0 + Empty File License |
+| Document                                         | Description                                                                                                     |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **[README.md](README.md)**                       | This file — project overview, hardware, build instructions, known issues                                        |
+| **[GAME.md](GAME.md)**                           | BornPets rules in markdown: controls, needs, actions, conditions, HAX, friends, battles, debug cheats           |
+| **[USER_GAMES.md](USER_GAMES.md)**               | BornPets for badge holders, including `BPETS_V3.CFG` and `PETS.CFG`                                             |
+| **[GAMES.md](GAMES.md)**                         | Developer reference for the mini-games, controls, scoring                                                       |
+| **[CONTACTS_SCREEN.md](CONTACTS_SCREEN.md)**     | On-device meshcore chat: contacts list, popup actions, PM inbox + threads, discovery cache                      |
+| **[CLOCK.md](CLOCK.md)**                         | Watch faces, alarm system (32 slots), calendar browser, ICS parser                                              |
+| **[NFC_README.md](NFC_README.md)**               | NFC signed channel protocol spec, reader implementation guide                                                   |
+| **[HWTEST.md](HWTEST.md)**                       | Hardware test firmware — factory diagnostics, beep codes                                                        |
+| **[LUT.md](LUT.md)**                             | Custom e-paper waveform override with `LUT.CFG`                                                                 |
+| **[scripts/README.md](scripts/README.md)**       | Factory and dev tooling: bootloader, DFU and asset stations, PCX conversion and checks                          |
+| **[bootloader/README.md](bootloader/README.md)** | The USB DFU bootloader                                                                                          |
+| **[SUBMODULES.md](SUBMODULES.md)**               | How `vendor/` git submodules work — cloning, updating pins, hacking on vendor libs, sibling read-only checkouts |
+| **[MACOS_SETUP.md](MACOS_SETUP.md)**             | macOS dev notes                                                                                                 |
+| **[License.md](License.md)**                     | Apache 2.0 + Empty File License                                                                                 |
 
 BornPets v3 design and planning notes (for developers, not players):
 [BORNPETS_V3_DESIGN.md](BORNPETS_V3_DESIGN.md),
@@ -324,11 +324,11 @@ that alters one of the screens shown.
 
 Vendor library documentation (the `vendor/` submodules must be checked out, see [Clone](#clone)):
 
-| Document | Description |
-| -------- | ----------- |
-| **[vendor/ssd1675/README.md](vendor/ssd1675/README.md)** | SSD1675/SSD1675B ePaper display driver |
-| **[vendor/ssd1680/README.md](vendor/ssd1680/README.md)** | SSD1680 ePaper display driver |
-| **[vendor/meshcore/README.md](vendor/meshcore/README.md)** | MeshCore LoRa packet protocol — `no_std` Rust port |
+| Document                                                                       | Description                                              |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| **[vendor/ssd1675/README.md](vendor/ssd1675/README.md)**                       | SSD1675/SSD1675B ePaper display driver                   |
+| **[vendor/ssd1680/README.md](vendor/ssd1680/README.md)**                       | SSD1680 ePaper display driver                            |
+| **[vendor/meshcore/README.md](vendor/meshcore/README.md)**                     | MeshCore LoRa packet protocol — `no_std` Rust port       |
 | **[vendor/meshcore-companion/README.md](vendor/meshcore-companion/README.md)** | MeshCore companion protocol — BLE NUS commands/responses |
 
 ## Architecture
@@ -413,38 +413,38 @@ reporting `FIRMWARE_VER_CODE` 14 / `v1.18.0` (MeshCore 1.18).
 
 ### Commands handled (companion → device)
 
-| Code   | Name                   | Description                                     |
-| ------ | ---------------------- | ----------------------------------------------- |
-| `0x01` | `APP_START`            | Returns `SELF_INFO`                             |
-| `0x02` | `SEND_TXT_MSG`         | Send private message to contact                 |
-| `0x03` | `SEND_CHANNEL_MSG`     | Send message to a channel                       |
-| `0x04` | `GET_CONTACTS`         | Stream all contacts (`CONTACT_START/.../END`)   |
-| `0x06` | `SET_DEVICE_TIME`      | Set RTC clock                                   |
-| `0x07` | `SEND_SELF_ADVERT`     | Flood or zero-hop self-advertisement            |
-| `0x08` | `SET_ADVERT_NAME`      | Set advertised node name                        |
-| `0x09` | `ADD_UPDATE_CONTACT`   | Add or update a contact                         |
-| `0x0A` | `SYNC_NEXT_MESSAGE`    | Dequeue next pending message                    |
-| `0x0B` | `SET_RADIO_PARAMS`     | Change LoRa frequency/BW/SF/CR                  |
-| `0x0C` | `SET_RADIO_TX_POWER`   | Change TX power                                 |
-| `0x0D` | `RESET_PATH`           | Clear routing path for a contact (set to flood) |
-| `0x0E` | `SET_ADVERT_LATLON`    | Set advertised GPS position                     |
-| `0x0F` | `REMOVE_CONTACT`       | Delete a contact                                |
-| `0x13` | `REBOOT`               | Reboot device                                   |
-| `0x14` | `GET_BATT_AND_STORAGE` | Returns battery voltage and storage stats       |
-| `0x16` | `DEVICE_QUERY`         | Returns `DEVICE_INFO`                           |
-| `0x1A` | `SEND_LOGIN`           | Login to a room/repeater server                 |
-| `0x1E` | `GET_CONTACT_BY_KEY`   | Fetch full contact record by public key         |
-| `0x1F` | `GET_CHANNEL`          | Fetch stored channel name and key               |
-| `0x20` | `SET_CHANNEL`          | Store a channel name and key                    |
-| `0x24` | `SEND_TRACE_PATH`      | Send trace packet (ping); returns `0x89` async  |
-| `0x26` | `SET_OTHER_PARAMS`     | Set telemetry mode, location policy, etc.       |
-| `0x2A` | `GET_ADVERT_PATH`      | Return last-seen advert path for a contact      |
-| `0x36` | `SET_FLOOD_SCOPE`      | `0x00 [key]`: set or drop the runtime scope override (no key → default scope); `0x01`: send un-scoped |
-| `0x39` | `SEND_ANON_REQ`        | Anonymous request (e.g. Discover Regions); non-contacts go zero-hop direct; reply as `0x8C` |
-| `0x3F` | `SET_DEFAULT_FLOOD_SCOPE` | Persist the default scope; applies at once unless a `0x36` override is active |
-| `0x40` | `GET_DEFAULT_FLOOD_SCOPE` | Return the persisted default scope             |
-| `0x41` | `SEND_RAW_PACKET`      | Validate and transmit a raw MeshCore frame (priority ignored) |
-| `0x42` | `RUN_CLI_COMMAND`      | Run a text CLI command, reply `0x1D CLI_REPLY` — see below |
+| Code   | Name                      | Description                                                                                           |
+| ------ | ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `0x01` | `APP_START`               | Returns `SELF_INFO`                                                                                   |
+| `0x02` | `SEND_TXT_MSG`            | Send private message to contact                                                                       |
+| `0x03` | `SEND_CHANNEL_MSG`        | Send message to a channel                                                                             |
+| `0x04` | `GET_CONTACTS`            | Stream all contacts (`CONTACT_START/.../END`)                                                         |
+| `0x06` | `SET_DEVICE_TIME`         | Set RTC clock                                                                                         |
+| `0x07` | `SEND_SELF_ADVERT`        | Flood or zero-hop self-advertisement                                                                  |
+| `0x08` | `SET_ADVERT_NAME`         | Set advertised node name                                                                              |
+| `0x09` | `ADD_UPDATE_CONTACT`      | Add or update a contact                                                                               |
+| `0x0A` | `SYNC_NEXT_MESSAGE`       | Dequeue next pending message                                                                          |
+| `0x0B` | `SET_RADIO_PARAMS`        | Change LoRa frequency/BW/SF/CR                                                                        |
+| `0x0C` | `SET_RADIO_TX_POWER`      | Change TX power                                                                                       |
+| `0x0D` | `RESET_PATH`              | Clear routing path for a contact (set to flood)                                                       |
+| `0x0E` | `SET_ADVERT_LATLON`       | Set advertised GPS position                                                                           |
+| `0x0F` | `REMOVE_CONTACT`          | Delete a contact                                                                                      |
+| `0x13` | `REBOOT`                  | Reboot device                                                                                         |
+| `0x14` | `GET_BATT_AND_STORAGE`    | Returns battery voltage and storage stats                                                             |
+| `0x16` | `DEVICE_QUERY`            | Returns `DEVICE_INFO`                                                                                 |
+| `0x1A` | `SEND_LOGIN`              | Login to a room/repeater server                                                                       |
+| `0x1E` | `GET_CONTACT_BY_KEY`      | Fetch full contact record by public key                                                               |
+| `0x1F` | `GET_CHANNEL`             | Fetch stored channel name and key                                                                     |
+| `0x20` | `SET_CHANNEL`             | Store a channel name and key                                                                          |
+| `0x24` | `SEND_TRACE_PATH`         | Send trace packet (ping); returns `0x89` async                                                        |
+| `0x26` | `SET_OTHER_PARAMS`        | Set telemetry mode, location policy, etc.                                                             |
+| `0x2A` | `GET_ADVERT_PATH`         | Return last-seen advert path for a contact                                                            |
+| `0x36` | `SET_FLOOD_SCOPE`         | `0x00 [key]`: set or drop the runtime scope override (no key → default scope); `0x01`: send un-scoped |
+| `0x39` | `SEND_ANON_REQ`           | Anonymous request (e.g. Discover Regions); non-contacts go zero-hop direct; reply as `0x8C`           |
+| `0x3F` | `SET_DEFAULT_FLOOD_SCOPE` | Persist the default scope; applies at once unless a `0x36` override is active                         |
+| `0x40` | `GET_DEFAULT_FLOOD_SCOPE` | Return the persisted default scope                                                                    |
+| `0x41` | `SEND_RAW_PACKET`         | Validate and transmit a raw MeshCore frame (priority ignored)                                         |
+| `0x42` | `RUN_CLI_COMMAND`         | Run a text CLI command, reply `0x1D CLI_REPLY` — see below                                            |
 
 #### Companion CLI (`0x42`)
 
@@ -498,11 +498,11 @@ The watch reads `unix_now()` (set via the MeshCore companion `SET_DEVICE_TIME` 0
 
 In normal viewing mode:
 
-| Button         | Action                                            |
-| -------------- | ------------------------------------------------- |
-| Up / Down      | Toggle between digital and analog face            |
-| Fire / Execute | Enter alarm-edit mode (see below)                 |
-| Left / Right   | Navigate to adjacent screens                      |
+| Button         | Action                                 |
+| -------------- | -------------------------------------- |
+| Up / Down      | Toggle between digital and analog face |
+| Fire / Execute | Enter alarm-edit mode (see below)      |
+| Left / Right   | Navigate to adjacent screens           |
 
 The current face survives reboots — it's persisted to the `"watch"` kv namespace alongside the alarm settings.
 
@@ -514,13 +514,13 @@ There are two ways to set it:
 
 1. **On the watch screen** — press Fire/Execute to enter edit mode. The header changes to `Edit Alarm`, the digits show the alarm time (not the wall clock), and a `[ On ]` / `[ Off ]` indicator + tone label appear below. A thick black bar marks the active field. The edit screen has two layers — row-nav (default) and field-active (after Fire on a steppable field):
 
-   | Button         | Row-nav (default)                                                          | Field active (after Fire)                  |
-   | -------------- | -------------------------------------------------------------------------- | ------------------------------------------ |
-   | Up / Down      | Move field cursor: Hour → Minute → Days → Tone → Enabled                   | Increment / decrement the active value     |
-   | Fire / Execute | Drill into the selected field (or just toggle the `Enabled` field inline) | Exit field editing, back to row-nav        |
-   | Cancel         | Exit edit mode entirely (changes are live, no save needed)                 | Exit field editing, back to row-nav        |
+   | Button         | Row-nav (default)                                                         | Field active (after Fire)              |
+   | -------------- | ------------------------------------------------------------------------- | -------------------------------------- |
+   | Up / Down      | Move field cursor: Hour → Minute → Days → Tone → Enabled                  | Increment / decrement the active value |
+   | Fire / Execute | Drill into the selected field (or just toggle the `Enabled` field inline) | Exit field editing, back to row-nav    |
+   | Cancel         | Exit edit mode entirely (changes are live, no save needed)                | Exit field editing, back to row-nav    |
 
-2. **From Settings** — Main → Settings → Alarm. The submenu has Hour and Minute steppers, a Days submenu, a Tone stepper, and an Enabled toggle. The Days submenu lets you toggle individual weekdays; the parent label summarises the mask as `Daily`, `Weekdays`, `Weekends`, `Custom`, or `None`. The Tone stepper cycles through a curated subset of `MELODIES` (Beep, Imp. March, Rickroll, Pink Pant., Sandstorm, Startup, Trololo).
+1. **From Settings** — Main → Settings → Alarm. The submenu has Hour and Minute steppers, a Days submenu, a Tone stepper, and an Enabled toggle. The Days submenu lets you toggle individual weekdays; the parent label summarises the mask as `Daily`, `Weekdays`, `Weekends`, `Custom`, or `None`. The Tone stepper cycles through a curated subset of `MELODIES` (Beep, Imp. March, Rickroll, Pink Pant., Sandstorm, Startup, Trololo).
 
 When the wall clock matches the armed time on a selected day, the buzzer plays a short "beep beep" pattern and repeats up to 4 times every 8 s. **Pressing any button anywhere in the menu silences the buzzer** (and consumes that button — a second press is needed to actually navigate). After 5 s an un-dismissed alarm auto-clears so it stops eating button presses.
 
@@ -774,12 +774,12 @@ in the [`Makefile`](Makefile). The feature sets are in `Cargo.toml`.
 
 Each panel can be built in these configurations:
 
-| Variant        | SSD1675        | SSD1680             | Game | Mesh (LoRa/BLE) | Watch | Use case                                             |
-| -------------- | -------------- | ------------------- | ---- | --------------- | ----- | ---------------------------------------------------- |
-| Full           | `make fw`      | `make fw-1680`      | yes  | yes             | yes   | Production — everything enabled                      |
-| Game only      | `make fw-game` | `make fw-1680-game` | yes  | no              | yes   | Game development when full build exceeds flash       |
-| Mesh only      | `make fw-mesh` | `make fw-1680-mesh` | no   | yes             | yes   | Mesh/radio development when full build exceeds flash |
-| Watch only     | `make fw-watch` | —                  | no   | no              | yes   | Minimal build for watch-face / clock work only       |
+| Variant    | SSD1675         | SSD1680             | Game | Mesh (LoRa/BLE) | Watch | Use case                                             |
+| ---------- | --------------- | ------------------- | ---- | --------------- | ----- | ---------------------------------------------------- |
+| Full       | `make fw`       | `make fw-1680`      | yes  | yes             | yes   | Production — everything enabled                      |
+| Game only  | `make fw-game`  | `make fw-1680-game` | yes  | no              | yes   | Game development when full build exceeds flash       |
+| Mesh only  | `make fw-mesh`  | `make fw-1680-mesh` | no   | yes             | yes   | Mesh/radio development when full build exceeds flash |
+| Watch only | `make fw-watch` | —                   | no   | no              | yes   | Minimal build for watch-face / clock work only       |
 
 The watch face is part of `embassy-base` and is therefore present in every variant. The watch-only build (`embassy-watch` feature) is the smallest configuration that still drives the EPD. Release builds: `make fw-release`, `make fw-game-release`, `make fw-mesh-release`, `make fw-1680-release` and `make fw-1680-game-release`. (The watch-only and SSD1680 mesh-only variants have no release `make` target; use `cargo fw-watch-release` or `cargo fw-1680-mesh-release`.)
 
@@ -842,13 +842,13 @@ The simulator renders the full badge UI in a desktop window using SDL2, mirrorin
 
 #### Key bindings
 
-| Key        | Badge button   | Action                         |
-| ---------- | -------------- | ------------------------------ |
-| Arrow keys | Joystick       | Navigate menus and icon grid   |
-| Space or Enter | Joystick fire | Fire / select highlighted item |
-| E          | Execute button | Execute / confirm action       |
-| Backspace  | Cancel button  | Cancel / close modal           |
-| F12        | —              | Save a screenshot to `guide/build/screens/` |
+| Key            | Badge button   | Action                                      |
+| -------------- | -------------- | ------------------------------------------- |
+| Arrow keys     | Joystick       | Navigate menus and icon grid                |
+| Space or Enter | Joystick fire  | Fire / select highlighted item              |
+| E              | Execute button | Execute / confirm action                    |
+| Backspace      | Cancel button  | Cancel / close modal                        |
+| F12            | —              | Save a screenshot to `guide/build/screens/` |
 
 Close the window to quit.
 
@@ -856,22 +856,22 @@ Close the window to quit.
 
 Read the [`Makefile`](Makefile) for the full list. The main ones:
 
-| Command                  | Description                                          |
-| ------------------------ | ---------------------------------------------------- |
-| `make fw` / `make fw-release`        | Full debug / release firmware (SSD1675)  |
-| `make fw-game` / `make fw-mesh` / `make fw-watch` | Game-only / mesh-only / watch-only debug firmware (SSD1675) |
-| `make fw-game-release` / `make fw-mesh-release` | Game-only / mesh-only release firmware (SSD1675) |
-| `make fw-1680` / `make fw-1680-release` | Full debug / release firmware (SSD1680) |
-| `make fw-1680-game` / `make fw-1680-mesh` | SSD1680 game-only / mesh-only          |
-| `make flash*`            | Build + flash over SWD with probe-rs (`flash`, `flash-release`, `flash-game`, `flash-mesh`, `flash-watch`, `flash-1680`, `flash-1680-release`, ...) |
-| `make dfu-flash*`        | Build + flash over USB DFU (`dfu-flash`, `dfu-flash-release`, `dfu-flash-1680`, `dfu-flash-1680-release`) |
-| `make sim`               | Build and run the SDL2 simulator                     |
-| `make simulate-game`     | Run the BornPets balance simulation                  |
-| `make guide`             | Build the player's guide PDF                         |
-| `make monitor`           | Attach RTT log monitor to running device             |
-| `make bl`                | Build bootloader                                     |
-| `make flash-bl`          | Full-chip erase + flash bootloader                   |
-| `make fw-hwtest`         | Build the factory hardware-test firmware             |
+| Command                                           | Description                                                                                                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make fw` / `make fw-release`                     | Full debug / release firmware (SSD1675)                                                                                                             |
+| `make fw-game` / `make fw-mesh` / `make fw-watch` | Game-only / mesh-only / watch-only debug firmware (SSD1675)                                                                                         |
+| `make fw-game-release` / `make fw-mesh-release`   | Game-only / mesh-only release firmware (SSD1675)                                                                                                    |
+| `make fw-1680` / `make fw-1680-release`           | Full debug / release firmware (SSD1680)                                                                                                             |
+| `make fw-1680-game` / `make fw-1680-mesh`         | SSD1680 game-only / mesh-only                                                                                                                       |
+| `make flash*`                                     | Build + flash over SWD with probe-rs (`flash`, `flash-release`, `flash-game`, `flash-mesh`, `flash-watch`, `flash-1680`, `flash-1680-release`, ...) |
+| `make dfu-flash*`                                 | Build + flash over USB DFU (`dfu-flash`, `dfu-flash-release`, `dfu-flash-1680`, `dfu-flash-1680-release`)                                           |
+| `make sim`                                        | Build and run the SDL2 simulator                                                                                                                    |
+| `make simulate-game`                              | Run the BornPets balance simulation                                                                                                                 |
+| `make guide`                                      | Build the player's guide PDF                                                                                                                        |
+| `make monitor`                                    | Attach RTT log monitor to running device                                                                                                            |
+| `make bl`                                         | Build bootloader                                                                                                                                    |
+| `make flash-bl`                                   | Full-chip erase + flash bootloader                                                                                                                  |
+| `make fw-hwtest`                                  | Build the factory hardware-test firmware                                                                                                            |
 
 ## Game engine
 
@@ -945,16 +945,16 @@ This reads the source PNGs referenced in each JSON5 config, slices them into ind
 
 Each JSON5 file contributes a separate `PP` prefix range:
 
-| Config | Prefix | Purpose |
-| --- | --- | --- |
-| `bornpets-bartholomeus.json5` | `00xx` | Bartholomeus pet animations (formerly "Snail") + shared icons / placeholders |
-| `bornpets-sponsors-cat.json5` | `01xx` | Cat pet animations |
-| `bornpets-sponsors-slug.json5` | `02xx` | Slug pet animations |
-| `sponsors.json5` | `03xx` | Reserved sponsor images (the slideshow is gone, nothing shows them) |
-| `bornpets-menu-icons.json5` | `04xx` | On-screen menu icons (top + bottom rows, normal + selected) |
-| `bornpets-sponsors-panda.json5` | `05xx` | Panda pet animations |
-| `bornpets-sponsors-badger.json5` | `06xx` | Badger pet animations |
-| `bornpets-sponsors-seastar.json5` | `07xx` | Sea star pet animations |
+| Config                            | Prefix | Purpose                                                                      |
+| --------------------------------- | ------ | ---------------------------------------------------------------------------- |
+| `bornpets-bartholomeus.json5`     | `00xx` | Bartholomeus pet animations (formerly "Snail") + shared icons / placeholders |
+| `bornpets-sponsors-cat.json5`     | `01xx` | Cat pet animations                                                           |
+| `bornpets-sponsors-slug.json5`    | `02xx` | Slug pet animations                                                          |
+| `sponsors.json5`                  | `03xx` | Reserved sponsor images (the slideshow is gone, nothing shows them)          |
+| `bornpets-menu-icons.json5`       | `04xx` | On-screen menu icons (top + bottom rows, normal + selected)                  |
+| `bornpets-sponsors-panda.json5`   | `05xx` | Panda pet animations                                                         |
+| `bornpets-sponsors-badger.json5`  | `06xx` | Badger pet animations                                                        |
+| `bornpets-sponsors-seastar.json5` | `07xx` | Sea star pet animations                                                      |
 
 The Jellyfish pet (`08xx`) was removed.
 
@@ -980,13 +980,13 @@ After generating, copy the files in `assets/to-badge/` to the badge's USB drive.
 
 The firmware maps animation states to filenames in code. If you add new animations or reorder assets, the following source files must be updated to match. A new pet needs no code: its sprites and one `PETS.CFG` line are enough.
 
-| What changed               | File to update                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------ |
-| Frame counts per animation | nothing: the firmware counts the PCX files present (see above)                       |
-| New pet                    | a line in `PETS.CFG` on the badge ([`assets/PETS.CFG.example`](assets/PETS.CFG.example), [USER_GAMES.md](USER_GAMES.md)); no code change |
-| Animation ID assignment    | [`anim_files.rs`](src/game/engine/anim_files.rs) — `anim_id()` function              |
-| Start screen filename      | [`anim_files.rs`](src/game/engine/anim_files.rs) — `start_screen_filename()`         |
-| Menu icons (top/bottom row)| [`anim_files.rs`](src/game/engine/anim_files.rs) — `menu_icon_filename()`, `MENU_ICON_COUNT` |
+| What changed                | File to update                                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Frame counts per animation  | nothing: the firmware counts the PCX files present (see above)                                                                           |
+| New pet                     | a line in `PETS.CFG` on the badge ([`assets/PETS.CFG.example`](assets/PETS.CFG.example), [USER_GAMES.md](USER_GAMES.md)); no code change |
+| Animation ID assignment     | [`anim_files.rs`](src/game/engine/anim_files.rs) — `anim_id()` function                                                                  |
+| Start screen filename       | [`anim_files.rs`](src/game/engine/anim_files.rs) — `start_screen_filename()`                                                             |
+| Menu icons (top/bottom row) | [`anim_files.rs`](src/game/engine/anim_files.rs) — `menu_icon_filename()`, `MENU_ICON_COUNT`                                             |
 
 The filename convention is `PPAAFF.PCX` where `PP` = pet prefix (hex), `AA` = animation ID (hex), `FF` = frame number (hex). This is encoded in `anim_files.rs::build_filename()`.
 
